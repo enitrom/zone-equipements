@@ -1,0 +1,84 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Information about the registered user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["client", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Industrial product.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "image": { "type": "string" }
+      },
+      "required": ["id", "name", "price"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Product supplier.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "SiteSettings": {
+      "title": "Site Settings",
+      "description": "Global application configuration.",
+      "type": "object",
+      "properties": {
+        "sectors": { "type": "array", "items": { "type": "object" } },
+        "categories": { "type": "array", "items": { "type": "object" } },
+        "brands": { "type": "array", "items": { "type": "object" } }
+      },
+      "required": ["sectors", "categories", "brands"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A completed purchase order.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "processing", "shipped", "delivered"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "total", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents."
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Product catalog."
+    },
+    "/suppliers/{supplierId}": {
+      "schema": "Supplier",
+      "description": "Supplier information."
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Global orders collection."
+    },
+    "/settings/config": {
+      "schema": "SiteSettings",
+      "description": "Global site configuration settings."
+    }
+  }
+}

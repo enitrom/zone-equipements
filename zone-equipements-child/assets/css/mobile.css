@@ -1,0 +1,145 @@
+/* Responsive & Mobile-First Overrides for ZONE EQUIPEMENTS */
+
+/* Big tablet & Laptop breakpoint */
+@media (max-width: 1024px) {
+    .ze-features-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 20px !important;
+    }
+    .ze-regions-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 20px !important;
+    }
+    .ze-sectors-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 20px !important;
+    }
+    .ze-faq-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 20px !important;
+    }
+    
+    .ze-hero-title {
+        font-size: 2.75rem !important;
+    }
+}
+
+/* Medium & Small Smartphones breakpoint */
+@media (max-width: 768px) {
+    /* Main Layout wrappers */
+    .alignwide {
+        padding-left: 15px !important;
+        padding-right: 15px !important;
+    }
+    
+    /* Hero section */
+    .ze-hero {
+        padding: 70px 15px !important;
+        min-height: auto !important;
+    }
+    
+    .ze-hero-title {
+        font-size: 2.25rem !important;
+        margin-bottom: 18px !important;
+    }
+    
+    .ze-hero-subtitle {
+        font-size: 1.05rem !important;
+        margin-bottom: 30px !important;
+        line-height: 1.5 !important;
+    }
+
+    .ze-hero-buttons {
+        flex-direction: column !important;
+        width: 100% !important;
+        gap: 12px !important;
+    }
+
+    .ze-hero-buttons .ze-btn {
+        width: 100% !important;
+    }
+    
+    /* Reassurance section */
+    .ze-features {
+        padding-top: 30px !important;
+        padding-bottom: 30px !important;
+    }
+    
+    .ze-features-grid {
+        grid-template-columns: 1fr !important;
+        gap: 15px !important;
+    }
+    
+    .ze-feature-card {
+        padding: 18px !important;
+    }
+    
+    /* Logistics block */
+    .ze-logistics {
+        padding: 60px 15px !important;
+    }
+    
+    .ze-logistics-header {
+        margin-bottom: 40px !important;
+    }
+    
+    .ze-logistics-header h2 {
+        font-size: 1.85rem !important;
+    }
+    
+    .ze-regions-grid {
+        grid-template-columns: 1fr !important;
+        gap: 15px !important;
+    }
+    
+    .ze-region-card, .ze-region-blue-card {
+        padding: 22px !important;
+    }
+    
+    .ze-partners-bar {
+        flex-direction: column !important;
+        padding: 24px !important;
+        text-align: center !important;
+    }
+    
+    .ze-partners-logos {
+        gap: 20px !important;
+    }
+    
+    /* Sector cards */
+    .ze-sectors {
+        padding: 60px 15px !important;
+    }
+    
+    .ze-section-title h2 {
+        font-size: 1.85rem !important;
+    }
+    
+    .ze-sectors-grid {
+        grid-template-columns: 1fr !important;
+        gap: 20px !important;
+    }
+    
+    /* Brands scroller stacking */
+    .ze-brands {
+        padding: 40px 15px !important;
+    }
+    
+    .ze-brands-scroller {
+        gap: 20px 25px !important;
+    }
+    
+    /* Helpdesk & FAQ panel */
+    .ze-faq {
+        padding: 60px 15px !important;
+    }
+    
+    .ze-faq-grid {
+        grid-template-columns: 1fr !important;
+        gap: 15px !important;
+    }
+    
+    .ze-faq-item {
+        padding: 20px !important;
+    }
+}

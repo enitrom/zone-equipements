@@ -1,0 +1,1688 @@
+/* Professional WooCommerce Core Styling for ZONE EQUIPEMENTS */
+
+/* Product Grid Item */
+.woocommerce ul.products li.product,
+.woocommerce-page ul.products li.product {
+    background: #ffffff !important;
+    border: 1px solid var(--ze-border) !important;
+    border-radius: 12px !important;
+    padding: 18px !important;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    box-sizing: border-box !important;
+}
+
+.woocommerce ul.products li.product:hover,
+.woocommerce-page ul.products li.product:hover {
+    transform: translateY(-4px) !important;
+    box-shadow: 0 16px 32px rgba(0, 51, 102, 0.08) !important;
+    border-color: rgba(0, 51, 102, 0.15) !important;
+}
+
+/* Product title in shop grid */
+.woocommerce ul.products li.product .woocommerce-loop-product__title,
+.woocommerce-page ul.products li.product .woocommerce-loop-product__title {
+    font-size: 0.95rem !important;
+    font-weight: 800 !important;
+    color: var(--ze-primary) !important;
+    line-height: 1.4 !important;
+    margin: 12px 0 8px 0 !important;
+    min-height: 42px;
+}
+
+/* Product Price in shop */
+.woocommerce ul.products li.product .price,
+.woocommerce-page ul.products li.product .price {
+    color: var(--ze-secondary) !important;
+    font-weight: 900 !important;
+    font-size: 1.15rem !important;
+    margin-bottom: 12px !important;
+}
+
+.woocommerce ul.products li.product .price del,
+.woocommerce-page ul.products li.product .price del {
+    color: var(--ze-text-muted) !important;
+    font-weight: 400 !important;
+    font-size: 0.85rem !important;
+}
+
+/* Add to Cart Loop buttons */
+.woocommerce ul.products li.product .button,
+.woocommerce-page ul.products li.product .button {
+    background-color: var(--ze-secondary) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 6px !important;
+    padding: 12px 18px !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    font-size: 0.75rem !important;
+    letter-spacing: 0.05em !important;
+    transition: all 0.2s ease !important;
+    text-align: center !important;
+    margin-top: auto !important;
+}
+
+.woocommerce ul.products li.product .button:hover,
+.woocommerce-page ul.products li.product .button:hover {
+    background-color: #e05a00 !important;
+    box-shadow: 0 6px 15px rgba(255, 102, 0, 0.2) !important;
+}
+
+/* Default Woo Buttons across all pages (cart, login, checkout) */
+.woocommerce #respond input#submit,
+.woocommerce a.button,
+.woocommerce button.button,
+.woocommerce input.button {
+    background-color: var(--ze-secondary) !important;
+    color: #ffffff !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    border-radius: 6px !important;
+    padding: 14px 28px !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.05em !important;
+    transition: all 0.2s ease !important;
+    border: none !important;
+}
+
+.woocommerce #respond input#submit:hover,
+.woocommerce a.button:hover,
+.woocommerce button.button:hover,
+.woocommerce input.button:hover {
+    background-color: #e05a00 !important;
+    color: #ffffff !important;
+}
+
+/* On Sale Badge */
+.woocommerce span.onsale,
+.woocommerce-page span.onsale {
+    background-color: var(--ze-secondary) !important;
+    color: #ffffff !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    font-size: 0.7rem !important;
+    padding: 4px 10px !important;
+    border-radius: 4px !important;
+    line-height: 1.5 !important;
+}
+
+/* STAR RATING SYSTEM */
+.woocommerce .star-rating,
+.woocommerce-page .star-rating {
+    color: var(--ze-secondary) !important;
+}
+
+/* SINGLE PRODUCT PAGE GENERAL STYLING */
+.woocommerce #content div.product .product_title,
+.woocommerce div.product .product_title,
+.woocommerce-page #content div.product .product_title,
+.woocommerce-page div.product .product_title {
+    font-size: 2.25rem !important;
+    font-weight: 900 !important;
+    color: var(--ze-primary) !important;
+    letter-spacing: -0.01em !important;
+}
+
+.woocommerce div.product p.price,
+.woocommerce div.product span.price {
+    color: var(--ze-secondary) !important;
+    font-weight: 900 !important;
+    font-size: 1.75rem !important;
+}
+
+/* Tabs Panel under single product */
+.woocommerce div.product .woocommerce-tabs ul.tabs,
+.woocommerce_page div.product .woocommerce-tabs ul.tabs {
+    border-bottom: 2px solid var(--ze-border) !important;
+}
+
+.woocommerce div.product .woocommerce-tabs ul.tabs li,
+.woocommerce_page div.product .woocommerce-tabs ul.tabs li {
+    background-color: transparent !important;
+    border: none !important;
+}
+
+.woocommerce div.product .woocommerce-tabs ul.tabs li a,
+.woocommerce_page div.product .woocommerce-tabs ul.tabs li a {
+    color: #666 !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    text-transform: uppercase !important;
+    padding: 12px 20px !important;
+    border-bottom: 3px solid transparent !important;
+}
+
+.woocommerce div.product .woocommerce-tabs ul.tabs li.active a,
+.woocommerce_page div.product .woocommerce-tabs ul.tabs li.active a {
+    color: var(--ze-primary) !important;
+    border-bottom: 3px solid var(--ze-secondary) !important;
+}
+
+/* CART & CHECKOUT PAGE WRAPPERS */
+.woocommerce-cart .wc-proceed-to-checkout a.checkout-button {
+    background-color: var(--ze-secondary) !important;
+    font-size: 1rem !important;
+}
+
+.woocommerce-cart table.cart td.actions .coupon .input-text {
+    border-radius: 4px !important;
+    border-color: var(--ze-border) !important;
+    padding: 10px !important;
+}
+
+/* ==========================================================================
+   ELITE HIGH-TREND INDUSTRIAL SIDEBAR FILTERS (GRAINGER & RAPTOR PRO STYLE)
+   ========================================================================== */
+.ze-woo-sidebar-filters {
+    background: #ffffff !important;
+    border: 1px solid var(--ze-border) !important;
+    border-radius: 10px !important;
+    padding: 20px !important;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02) !important;
+    box-sizing: border-box !important;
+}
+
+.ze-filter-main-header {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    border-bottom: 1.5px solid #eaeaea !important;
+    padding-bottom: 12px !important;
+    margin-bottom: 20px !important;
+}
+
+.ze-filter-main-title {
+    font-size: 0.85rem !important;
+    font-weight: 800 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    letter-spacing: 0.05em !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    text-transform: uppercase !important;
+}
+
+.ze-funnel-icon {
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+.ze-filter-reset-link {
+    font-size: 0.72rem !important;
+    font-weight: 800 !important;
+    color: var(--ze-secondary, #ff6600) !important;
+    text-decoration: none !important;
+    transition: opacity 0.2s !important;
+    letter-spacing: 0.03em !important;
+}
+
+.ze-filter-reset-link:hover {
+    opacity: 0.8 !important;
+    text-decoration: underline !important;
+}
+
+.ze-filter-sidebar-box {
+    margin-bottom: 22px !important;
+}
+
+.ze-filter-box-label {
+    font-size: 0.72rem !important;
+    font-weight: 800 !important;
+    color: #64748b !important; /* Elegant slate grey */
+    text-transform: uppercase !important;
+    letter-spacing: 0.06em !important;
+    margin: 0 0 10px 0 !important;
+}
+
+/* Rounded search outer wrapper */
+.ze-sidebar-search-outer {
+    position: relative !important;
+    width: 100% !important;
+}
+
+.ze-sidebar-search {
+    width: 100% !important;
+    padding: 10px 35px 10px 14px !important;
+    font-size: 0.8rem !important;
+    border: 1px solid #dcdcdc !important;
+    border-radius: 6px !important;
+    font-family: inherit !important;
+    background: #ffffff !important;
+    color: #1e293b !important;
+    box-sizing: border-box !important;
+    transition: all 0.2s ease !important;
+}
+
+.ze-sidebar-search:focus {
+    border-color: var(--ze-secondary, #ff6600) !important;
+    box-shadow: 0 0 0 3px rgba(255, 102, 0, 0.1) !important;
+    outline: none !important;
+}
+
+.ze-search-input-action-icon {
+    position: absolute !important;
+    right: 12px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+    color: #94a3b8 !important;
+    display: flex !important;
+    align-items: center !important;
+    pointer-events: none !important;
+}
+
+/* Category structure custom titles */
+.ze-filter-title-row {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    margin-bottom: 10px !important;
+}
+
+.ze-orange-square-accent {
+    width: 7px !important;
+    height: 7px !important;
+    background-color: var(--ze-secondary, #ff6600) !important;
+    display: inline-block !important;
+}
+
+/* Beautiful categories layout */
+.ze-filter-list {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 4px !important;
+}
+
+.ze-filter-item {
+    font-size: 0.82rem !important;
+    color: #334155 !important;
+    text-decoration: none !important;
+    padding: 8px 10px !important;
+    border-radius: 5px !important;
+    transition: all 0.15s ease !important;
+    display: flex !important;
+    align-items: center !important;
+    background: transparent !important;
+    box-sizing: border-box !important;
+}
+
+.ze-filter-item:hover {
+    background: #f8fafc !important;
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+.ze-filter-item.active {
+    background: #f1f5f9 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    font-weight: 700 !important;
+    border-left: 3.5px solid var(--ze-secondary, #ff6600) !important;
+    padding-left: 8px !important;
+}
+
+.ze-cat-icon-wrapper {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin-right: 10px !important;
+    color: #64748b !important;
+    width: 14px !important;
+    height: 14px !important;
+}
+
+.ze-filter-item.active .ze-cat-icon-wrapper {
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+.ze-cat-name-span {
+    flex-grow: 1 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+.ze-cat-count-badge {
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    color: #94a3b8 !important;
+    background: #f1f5f9 !important;
+    padding: 2px 7px !important;
+    border-radius: 20px !important;
+    margin-left: 8px !important;
+}
+
+.ze-filter-item.active .ze-cat-count-badge {
+    background: #ffffff !important;
+    color: #475569 !important;
+}
+
+/* Dropdown indented box layout for subcategories */
+.ze-subcategory-filter-box {
+    margin-top: -12px !important;
+    margin-bottom: 22px !important;
+    padding-left: 0px !important;
+}
+
+.ze-subcategory-list {
+    background: #f8fafc !important;
+    border-radius: 6px !important;
+    border: 1px solid #edf2f7 !important;
+    padding: 12px 14px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 7px !important;
+}
+
+.ze-filter-box-inner-title {
+    font-size: 0.72rem !important;
+    font-weight: 850 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.04em !important;
+    margin: 5px 0 8px 0 !important;
+}
+
+.ze-subcat-item {
+    font-size: 0.75rem !important;
+    color: #475569 !important;
+    text-decoration: none !important;
+    transition: all 0.15s ease !important;
+    display: inline-block !important;
+}
+
+.ze-subcat-item:hover {
+    color: var(--ze-secondary, #ff6600) !important;
+    padding-left: 3px !important;
+}
+
+.ze-subcat-item-all {
+    font-weight: 800 !important;
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+.ze-subcat-count {
+    color: #94a3b8 !important;
+    font-size: 0.7rem !important;
+    margin-left: 4px !important;
+}
+
+/* Brands container rules with limited heights & custom scrolling */
+.ze-filter-brand-container {
+    background: #ffffff !important;
+    border: 1px solid #eef2f6 !important;
+    border-radius: 8px !important;
+    padding: 12px !important;
+}
+
+.ze-filter-brand-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 7px !important;
+    max-height: 190px !important;
+    overflow-y: auto !important;
+    padding-right: 4px !important;
+}
+
+.ze-brand-label {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    font-size: 0.78rem !important;
+    color: #334155 !important;
+    cursor: pointer !important;
+    transition: color 0.12s ease !important;
+    padding: 2px 0 !important;
+}
+
+.ze-brand-label:hover {
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+.ze-brand-cb {
+    width: 14px !important;
+    height: 14px !important;
+    cursor: pointer !important;
+    border: 1.5px solid #94a3b8 !important;
+    border-radius: 3px !important;
+}
+
+.ze-brand-name {
+    flex-grow: 1 !important;
+}
+
+.ze-brand-count-indicator {
+    font-size: 0.7rem !important;
+    color: #94a3b8 !important;
+}
+
+.ze-show-more-brands-btn {
+    display: block !important;
+    width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    color: var(--ze-secondary, #ff6600) !important;
+    font-size: 0.72rem !important;
+    font-weight: 800 !important;
+    text-align: left !important;
+    padding: 8px 0 0 0 !important;
+    cursor: pointer !important;
+    text-decoration: underline !important;
+}
+
+/* Radio button budget lists */
+.ze-budget-radio-list {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 7px !important;
+}
+
+.ze-budget-radio-item {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    font-size: 0.78rem !important;
+    color: #334155 !important;
+    cursor: pointer !important;
+}
+
+.ze-budget-rb {
+    width: 14px !important;
+    height: 14px !important;
+    cursor: pointer !important;
+}
+
+.ze-custom-radio-label-text {
+    flex-grow: 1 !important;
+}
+
+/* Target Sectors list */
+.ze-sector-checkbox-list {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 7px !important;
+}
+
+.ze-sector-cb-item {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    font-size: 0.78rem !important;
+    color: #334155 !important;
+    cursor: pointer !important;
+}
+
+.ze-sector-cb {
+    width: 14px !important;
+    height: 14px !important;
+    cursor: pointer;
+}
+
+.ze-custom-cb-label-text {
+    flex-grow: 1 !important;
+}
+
+/* Direct Stock highlight badge card box */
+.ze-stock-direct-box {
+    background: #f8fafc !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 8px !important;
+    padding: 10px 12px !important;
+    margin-top: 10px !important;
+}
+
+.ze-stock-toggle-label {
+    display: flex !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+    cursor: pointer !important;
+}
+
+.ze-stock-cb {
+    width: 16px !important;
+    height: 16px !important;
+    margin-top: 3px !important;
+}
+
+.ze-stock-lbl-text-col {
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+.ze-stock-bold-title {
+    font-size: 0.78rem !important;
+    font-weight: 800 !important;
+    color: #0f172a !important;
+}
+
+.ze-stock-sub-desc {
+    font-size: 0.7rem !important;
+    color: #64748b !important;
+}
+
+/* Sidebar RFQ block */
+.ze-rfq-sidebar-card {
+    background: #0f1c2c !important;
+    color: #ffffff !important;
+    border-radius: 10px !important;
+    padding: 18px !important;
+    margin-top: 10px !important;
+}
+
+.ze-rfq-sidebar-card h4 {
+    font-size: 0.95rem !important;
+    font-weight: 800 !important;
+    color: #ffffff !important;
+    margin: 0 0 8px 0 !important;
+}
+
+.ze-rfq-sidebar-card p {
+    font-size: 0.78rem !important;
+    line-height: 1.4 !important;
+    color: #cbd5e1 !important;
+    margin: 0 0 14px 0 !important;
+}
+
+.ze-rfq-sidebar-btn {
+    display: block !important;
+    background: var(--ze-secondary) !important;
+    color: #ffffff !important;
+    font-size: 0.78rem !important;
+    font-weight: 800 !important;
+    text-align: center !important;
+    padding: 10px 14px !important;
+    border-radius: 6px !important;
+    text-transform: uppercase !important;
+    text-decoration: none !important;
+    transition: all 0.2s ease !important;
+}
+
+.ze-rfq-sidebar-btn:hover {
+    background: #e05a00 !important;
+    transform: translateY(-1px) !important;
+}
+
+.ze-rfq-phone {
+    font-family: var(--wp--preset--font-family--monospace, monospace) !important;
+    font-size: 0.78rem !important;
+    color: #94a3b8 !important;
+    text-align: center !important;
+    margin-top: 10px !important;
+}
+
+/* ==========================================================================
+   SINGLE PRODUCT PREMIUM EXPERT ADDONS (GRAINGER / RAPTOR STYLE)
+   ========================================================================== */
+.ze-single-product-expert-addons {
+    margin: 24px 0 !important;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+}
+
+/* 1. Trust Badges */
+.ze-badges-grid {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+    margin-bottom: 24px !important;
+}
+
+@media (min-width: 600px) {
+    .ze-badges-grid {
+        grid-template-columns: 1fr 1fr 1fr !important;
+    }
+}
+
+.ze-badge-card {
+    display: flex !important;
+    gap: 12px !important;
+    background: #f8fafc !important;
+    border: 1px solid var(--ze-border) !important;
+    border-radius: 8px !important;
+    padding: 12px 14px !important;
+    align-items: flex-start !important;
+}
+
+.ze-badge-icon {
+    font-size: 1.35rem !important;
+    line-height: 1.2 !important;
+}
+
+.ze-badge-card div strong {
+    display: block !important;
+    font-size: 0.78rem !important;
+    font-weight: 800 !important;
+    color: var(--ze-primary) !important;
+    margin-bottom: 2px !important;
+}
+
+.ze-badge-card div span {
+    display: block !important;
+    font-size: 0.72rem !important;
+    color: #555555 !important;
+    line-height: 1.3 !important;
+}
+
+/* 2. Specs table */
+.ze-tech-spec-section {
+    background: #ffffff !important;
+    border: 1px solid var(--ze-border) !important;
+    border-radius: 10px !important;
+    padding: 20px !important;
+    margin-bottom: 24px !important;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.01) !important;
+}
+
+.ze-section-header-title {
+    font-size: 0.95rem !important;
+    font-weight: 800 !important;
+    color: var(--ze-primary) !important;
+    margin: 0 0 14px 0 !important;
+    padding-bottom: 8px !important;
+    border-bottom: 2px solid #f1f5f9 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.02em !important;
+}
+
+.ze-spec-table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 0.82rem !important;
+}
+
+.ze-spec-table tr {
+    border-bottom: 1px solid #f1f5f9 !important;
+}
+
+.ze-spec-table tr:last-child {
+    border-bottom: none !important;
+}
+
+.ze-spec-table th {
+    text-align: left !important;
+    font-weight: 700 !important;
+    color: #555555 !important;
+    padding: 8px 10px 8px 0 !important;
+    width: 200px !important;
+}
+
+.ze-spec-table td {
+    color: #1a1a1a !important;
+    padding: 8px 0 8px 10px !important;
+}
+
+.ze-spec-table td code {
+    background: #f1f5f9 !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    font-size: 0.78rem !important;
+    font-weight: bold !important;
+    color: #0f172a !important;
+}
+
+/* 3. RFQ Live Form Builder */
+.ze-rfq-builder-container {
+    background: #fbfcfe !important;
+    border: 2px solid #eaeff5 !important;
+    border-radius: 12px !important;
+    padding: 22px !important;
+    box-shadow: 0 6px 18px rgba(0, 40, 80, 0.04) !important;
+}
+
+.ze-rfq-builder-header h4 {
+    font-size: 1rem !important;
+    font-weight: 800 !important;
+    color: var(--ze-primary) !important;
+    margin: 0 0 4px 0 !important;
+}
+
+.ze-rfq-builder-header p {
+    font-size: 0.78rem !important;
+    color: #555555 !important;
+    line-height: 1.4 !important;
+    margin: 0 0 16px 0 !important;
+}
+
+.ze-rfq-submit-form input:focus,
+.ze-rfq-submit-form textarea:focus {
+    border-color: var(--ze-secondary) !important;
+    outline: none !important;
+    box-shadow: 0 0 0 3px rgba(255, 102, 0, 0.15) !important;
+}
+
+/* ==========================================================================
+   DYNAMIC SHOP LAYOUT SYSTEM (REPLACING CLASSIC SIDEBARS WITH ELITE MRO SIDEBAR)
+   ========================================================================== */
+.post-type-archive-product #secondary,
+.tax-product_cat #secondary,
+.tax-product_tag #secondary,
+.tax-pwb-brand #secondary,
+.tax-product_brand #secondary {
+    display: none !important;
+}
+
+.post-type-archive-product #primary,
+.tax-product_cat #primary,
+.tax-product_tag #primary,
+.tax-pwb-brand #primary,
+.tax-product_brand #primary {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 0 0 100% !important;
+}
+
+.ze-custom-shop-grid-wrapper {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 30px !important;
+    width: 100% !important;
+    margin: 30px 0 !important;
+    box-sizing: border-box !important;
+}
+
+.ze-custom-shop-sidebar {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.ze-custom-shop-content {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+@media (min-width: 992px) {
+    .ze-custom-shop-grid-wrapper {
+        display: grid !important;
+        grid-template-columns: 290px 1fr !important;
+        gap: 36px !important;
+        align-items: start !important;
+    }
+}
+
+/* ==========================================================================
+   POLISHED RESPONSIVE SINGLE PRODUCT LAYOUTS (GRAINGER & MCMASTER STYLE)
+   ========================================================================== */
+.ze-single-product-container {
+    max-width: 1200px !important;
+    margin: 40px auto !important;
+    padding: 0 20px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.ze-single-product-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 40px !important;
+    margin-bottom: 40px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    align-items: start !important;
+}
+
+@media (min-width: 992px) {
+    .ze-single-product-grid {
+        display: grid !important;
+        grid-template-columns: 44% 56% !important;
+        gap: 48px !important;
+        align-items: start !important;
+    }
+}
+
+.ze-single-product-images-col {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.ze-single-product-details-col {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+/* Bypass Astra/WooCommerce double squishing bugs */
+.ze-single-product-images-col .images,
+.ze-single-product-images-col .woocommerce-product-gallery {
+    width: 100% !important;
+    max-width: 100% !important;
+    float: none !important;
+    margin: 0 !important;
+    display: block !important;
+}
+
+.ze-single-product-details-col .summary.entry-summary {
+    width: 100% !important;
+    max-width: 100% !important;
+    float: none !important;
+    margin: 0 !important;
+    display: block !important;
+}
+
+/* Premium Product Image Showcase Frame */
+.ze-product-showcase-frame {
+    border: 1px solid var(--ze-border) !important;
+    border-radius: 12px !important;
+    background: #ffffff !important;
+    padding: 24px !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02) !important;
+    position: relative !important;
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 16px !important;
+    box-sizing: border-box !important;
+    margin-bottom: 24px !important;
+}
+
+.ze-product-badge-mro {
+    position: absolute !important;
+    top: 16px !important;
+    left: 16px !important;
+    background: var(--ze-primary) !important;
+    color: #ffffff !important;
+    font-size: 0.68rem !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    padding: 4px 10px !important;
+    border-radius: 4px !important;
+    letter-spacing: 0.05em !important;
+    z-index: 5 !important;
+}
+
+.ze-product-image-container {
+    width: 100% !important;
+    height: 380px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: #fbfcfe !important;
+    border-radius: 8px !important;
+    border: 1px dashed #e2e8f0 !important;
+    overflow: hidden !important;
+    padding: 10px !important;
+    box-sizing: border-box !important;
+}
+
+.ze-product-showcase-img {
+    max-width: 100% !important;
+    max-height: 340px !important;
+    object-fit: contain !important;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.ze-product-showcase-frame:hover .ze-product-showcase-img {
+    transform: scale(1.03) !important;
+}
+
+.ze-showcase-footer {
+    display: flex !important;
+    justify-content: space-between !important;
+    gap: 10px !important;
+    border-top: 1px solid #f1f5f9 !important;
+    padding-top: 14px !important;
+    flex-wrap: wrap !important;
+}
+
+.ze-showcase-footer span {
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    color: #555555 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+}
+
+/* ==========================================================================
+   PREMIUM B2B WIDESCREEN RECTANGULAR PRODUCT LISTING ROWS (GRAINGER STYLED)
+   ========================================================================== */
+.woocommerce ul.products,
+.woocommerce-page ul.products {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 20px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    list-style: none !important;
+}
+
+.woocommerce ul.products li.ze-product-row-card,
+.woocommerce-page ul.products li.ze-product-row-card {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 10px !important;
+    padding: 20px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    float: none !important;
+    margin: 0 0 20px 0 !important;
+    transition: all 0.25s ease !important;
+    position: relative !important;
+    gap: 20px !important;
+}
+
+.woocommerce ul.products li.ze-product-row-card::before,
+.woocommerce-page ul.products li.ze-product-row-card::before {
+    display: none !important; /* Hide WooCommerce float clearing pseudo-elements */
+}
+
+.woocommerce ul.products li.ze-product-row-card:hover,
+.woocommerce-page ul.products li.ze-product-row-card:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 10px 25px rgba(0, 40, 80, 0.05) !important;
+    border-color: #cbd5e1 !important;
+}
+
+/* Image Column styles (24%) */
+.ze-row-image-col {
+    position: relative !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 10px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.ze-row-brand-badge {
+    position: absolute !important;
+    top: 0;
+    left: 0;
+    background: var(--ze-primary, #001f3f) !important;
+    color: #ffffff !important;
+    font-size: 0.62rem !important;
+    font-weight: 800 !important;
+    text-transform: uppercase !important;
+    padding: 3px 8px !important;
+    border-radius: 3px !important;
+    letter-spacing: 0.05em !important;
+    z-index: 2 !important;
+}
+
+.ze-row-img-box {
+    width: 100% !important;
+    height: 180px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: #ffffff !important;
+    border: 1px solid #f1f5f9 !important;
+    border-radius: 6px !important;
+    overflow: hidden !important;
+    box-sizing: border-box !important;
+}
+
+.ze-row-product-img {
+    max-width: 90% !important;
+    max-height: 90% !important;
+    object-fit: contain !important;
+    transition: transform 0.2s ease !important;
+}
+
+.ze-product-row-card:hover .ze-row-product-img {
+    transform: scale(1.02) !important;
+}
+
+.ze-row-trust-indicators {
+    display: flex !important;
+    gap: 12px !important;
+    justify-content: center !important;
+    width: 100% !important;
+}
+
+.ze-row-trust-indicators span {
+    font-size: 0.65rem !important;
+    font-weight: 700 !important;
+    color: #64748b !important;
+    white-space: nowrap !important;
+}
+
+/* Info Column styles (51%) */
+.ze-row-info-col {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.ze-row-breadcrumb {
+    font-size: 0.65rem !important;
+    font-weight: 850 !important;
+    color: #94a3b8 !important;
+    text-transform: uppercase !important;
+    margin-bottom: 6px !important;
+}
+
+.ze-row-model-ref {
+    display: flex !important;
+    gap: 14px !important;
+    flex-wrap: wrap !important;
+    margin-bottom: 8px !important;
+}
+
+.ze-row-model {
+    font-size: 0.72rem !important;
+    color: #475569 !important;
+}
+
+.ze-row-ref {
+    font-size: 0.72rem !important;
+    color: #64748b !important;
+}
+
+.ze-row-title {
+    font-size: 1.05rem !important;
+    font-weight: 900 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    margin: 0 0 12px 0 !important;
+    line-height: 1.35 !important;
+}
+
+.ze-row-title a {
+    color: inherit !important;
+    text-decoration: none !important;
+    transition: color 0.15s ease !important;
+}
+
+.ze-row-title a:hover {
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+/* Small spec grid */
+.ze-row-specs-table-grid {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px 16px !important;
+    background: #f8fafc !important;
+    border: 1px solid #edf2f7 !important;
+    border-radius: 6px !important;
+    padding: 10px 14px !important;
+    margin-bottom: 12px !important;
+    box-sizing: border-box !important;
+}
+
+.ze-row-spec-item {
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+.ze-row-spec-lbl {
+    font-size: 0.62rem !important;
+    font-weight: 700 !important;
+    color: #94a3b8 !important;
+    text-transform: uppercase !important;
+}
+
+.ze-row-spec-val {
+    font-size: 0.74rem !important;
+    font-weight: 800 !important;
+    color: #334155 !important;
+}
+
+.ze-row-excerpt {
+    font-size: 0.76rem !important;
+    line-height: 1.4 !important;
+    color: #475569 !important;
+    margin-bottom: 12px !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+}
+
+.ze-row-spec-toggle-link {
+    font-size: 0.72rem !important;
+    font-weight: 800 !important;
+    color: var(--ze-secondary, #ff6600) !important;
+    text-decoration: none !important;
+    letter-spacing: 0.02em !important;
+}
+
+.ze-row-spec-toggle-link:hover {
+    text-decoration: underline !important;
+}
+
+/* Actions Column styles (25%) */
+.ze-row-actions-col {
+    display: flex !important;
+    flex-direction: column !important;
+    border-top: 1px solid #f1f5f9 !important;
+    padding-top: 16px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.ze-row-price-lbl {
+    font-size: 0.65rem !important;
+    font-weight: 800 !important;
+    color: #94a3b8 !important;
+    letter-spacing: 0.05em !important;
+    margin-bottom: 4px !important;
+}
+
+.ze-row-price-box {
+    display: flex !important;
+    flex-direction: column !important;
+    margin-bottom: 12px !important;
+}
+
+.ze-row-price-main {
+    font-size: 1.35rem !important;
+    font-weight: 900 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    white-space: nowrap !important;
+}
+
+.ze-row-currency {
+    font-size: 0.75rem !important;
+    font-weight: 700 !important;
+}
+
+.ze-row-price-sub {
+    font-size: 0.75rem !important;
+    color: #64748b !important;
+}
+
+.ze-row-packing-info {
+    display: flex !important;
+    justify-content: space-between !important;
+    font-size: 0.7rem !important;
+    color: #475569 !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+    padding-bottom: 10px !important;
+    margin-bottom: 12px !important;
+}
+
+.ze-row-action-btn-group {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 8px !important;
+    width: 100% !important;
+}
+
+.ze-row-btn-primary {
+    background: var(--ze-primary, #001f3f) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 5px !important;
+    padding: 10px 14px !important;
+    font-size: 0.75rem !important;
+    font-weight: 800 !important;
+    text-align: center !important;
+    text-transform: uppercase !important;
+    text-decoration: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    transition: all 0.2s ease !important;
+    cursor: pointer !important;
+}
+
+.ze-row-btn-primary:hover {
+    background: var(--ze-secondary, #ff6600) !important;
+    box-shadow: 0 4px 12px rgba(255, 102, 0, 0.15) !important;
+}
+
+.ze-row-btn-secondary {
+    background: #ffffff !important;
+    color: var(--ze-secondary, #ff6600) !important;
+    border: 1.5px solid var(--ze-secondary, #ff6600) !important;
+    border-radius: 5px !important;
+    padding: 8px 14px !important;
+    font-size: 0.75rem !important;
+    font-weight: 800 !important;
+    text-align: center !important;
+    text-transform: uppercase !important;
+    text-decoration: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    transition: all 0.2s ease !important;
+    cursor: pointer !important;
+}
+
+.ze-row-btn-secondary:hover {
+    background: rgba(255, 102, 0, 0.02) !important;
+}
+
+.ze-row-whatsapp-sourcing {
+    display: flex !important;
+    justify-content: center !important;
+    margin-top: 10px !important;
+}
+
+.ze-row-whatsapp-sourcing a {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    font-size: 0.7rem !important;
+    color: #128c7e !important;
+    font-weight: 700 !important;
+    text-decoration: none !important;
+    transition: opacity 0.2s !important;
+}
+
+.ze-row-whatsapp-sourcing a:hover {
+    opacity: 0.8 !important;
+}
+
+/* WhatsApp dot pulse */
+.ze-whatsapp-dot-glow {
+    width: 6px !important;
+    height: 6px !important;
+    background-color: #25d366 !important;
+    border-radius: 50% !important;
+    box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7) !important;
+    animation: ze-pulse-wa 1.6s infinite !important;
+}
+
+@keyframes ze-pulse-wa {
+    0% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.7);
+    }
+    70% {
+        transform: scale(1);
+        box-shadow: 0 0 0 6px rgba(37, 211, 102, 0);
+    }
+    100% {
+        transform: scale(0.95);
+        box-shadow: 0 0 0 0 rgba(37, 211, 102, 0);
+    }
+}
+
+/* Desktop and Tablet layouts for the widescreen row cards */
+@media (min-width: 992px) {
+    .woocommerce ul.products li.ze-product-row-card,
+    .woocommerce-page ul.products li.ze-product-row-card {
+        flex-direction: row !important;
+        align-items: stretch !important;
+        flex-wrap: wrap !important;
+        gap: 22px !important;
+    }
+    
+    .ze-row-image-col {
+        width: calc(24% - 15px) !important;
+        flex-shrink: 0 !important;
+    }
+    
+    .ze-row-info-col {
+        width: calc(51% - 14px) !important;
+        border-right: 1.5px solid #edf2f7 !important;
+        padding-right: 24px !important;
+        flex-grow: 1 !important;
+    }
+    
+    .ze-row-actions-col {
+        width: calc(25% - 15px) !important;
+        border-top: none !important;
+        padding-top: 0 !important;
+        padding-left: 4px !important;
+        flex-shrink: 0 !important;
+    }
+
+    /* Elegant Grainger-style Sticky Scroll filter sidebar */
+    .ze-custom-shop-sidebar {
+        position: sticky !important;
+        top: 110px !important;
+        max-height: calc(100vh - 140px) !important;
+        overflow-y: auto !important;
+        padding-right: 6px !important;
+    }
+
+    .ze-custom-shop-sidebar::-webkit-scrollbar {
+        width: 5px !important;
+    }
+    .ze-custom-shop-sidebar::-webkit-scrollbar-track {
+        background: transparent !important;
+    }
+    .ze-custom-shop-sidebar::-webkit-scrollbar-thumb {
+        background: #cbd5e1 !important;
+        border-radius: 4px !important;
+    }
+}
+
+/* ==========================================================================
+   PRODUCTION DOUBLE-DECK HEADER BAR & VIEW SWITCHER STYLES
+   ========================================================================== */
+.ze-archive-breadcrumbs-row {
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    margin-bottom: 12px !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+}
+
+.ze-bc-link {
+    font-size: 0.68rem !important;
+    font-weight: 700 !important;
+    color: #94a3b8 !important;
+    text-transform: uppercase !important;
+    text-decoration: none !important;
+    letter-spacing: 0.05em !important;
+    transition: color 0.15s ease !important;
+}
+
+.ze-bc-link:hover {
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+.ze-bc-link.ze-bc-active {
+    color: #1e293b !important;
+}
+
+.ze-bc-separator {
+    font-size: 0.75rem !important;
+    color: #cbd5e1 !important;
+    font-weight: normal !important;
+}
+
+/* Elite Actions Bar container */
+.ze-archive-actions-bar {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 10px !important;
+    padding: 14px 20px !important;
+    margin-bottom: 25px !important;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02) !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+    gap: 20px !important;
+    flex-wrap: wrap !important;
+}
+
+.ze-bar-left {
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+}
+
+.ze-bar-title {
+    font-size: 1.15rem !important;
+    font-weight: 850 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    margin: 0 !important;
+    letter-spacing: -0.01em !important;
+}
+
+.ze-matched-count {
+    font-size: 0.7rem !important;
+    font-weight: 800 !important;
+    color: #64748b !important;
+    background: #f1f5f9 !important;
+    padding: 4px 10px !important;
+    border-radius: 20px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.03em !important;
+}
+
+.ze-bar-right {
+    display: flex !important;
+    align-items: center !important;
+    gap: 16px !important;
+    flex-wrap: wrap !important;
+}
+
+/* Switch controller with active/hover indicator */
+.ze-view-mode-toggle {
+    display: flex !important;
+    background: #f1f5f9 !important;
+    padding: 4px !important;
+    border-radius: 8px !important;
+    border: 1px solid #edf2f7 !important;
+}
+
+.ze-view-mode-btn {
+    background: transparent !important;
+    border: none !important;
+    color: #64748b !important;
+    font-size: 0.65rem !important;
+    font-weight: 800 !important;
+    padding: 6px 14px !important;
+    border-radius: 6px !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    transition: all 0.2s ease !important;
+}
+
+.ze-view-mode-btn:hover {
+    color: var(--ze-primary, #001f3f) !important;
+}
+
+.ze-view-mode-btn.active {
+    background: #ffffff !important;
+    color: var(--ze-secondary, #ff6600) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06) !important;
+}
+
+/* Sorting WooCommerce selector styler */
+.ze-sorting-wrapper .woocommerce-ordering {
+    margin: 0 !important;
+    float: none !important;
+}
+
+.ze-sorting-wrapper .woocommerce-ordering select {
+    border: 1px solid #cbd5e1 !important;
+    border-radius: 8px !important;
+    padding: 8px 30px 8px 12px !important;
+    font-size: 0.78rem !important;
+    font-weight: 800 !important;
+    color: #334155 !important;
+    background-color: #ffffff !important;
+    outline: none !important;
+    cursor: pointer !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
+    transition: border-color 0.15s ease !important;
+}
+
+.ze-sorting-wrapper .woocommerce-ordering select:focus {
+    border-color: var(--ze-secondary, #ff6600) !important;
+}
+
+/* ==========================================================================
+   DYNAMIC GRID MODE CLASS SWITCHERS
+   ========================================================================== */
+.woocommerce ul.products.ze-grid-layout-active {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)) !important;
+    gap: 20px !important;
+}
+
+.woocommerce ul.products.ze-grid-layout-active li.ze-product-row-card {
+    flex-direction: column !important;
+    height: 100% !important;
+}
+
+.woocommerce ul.products.ze-grid-layout-active li.ze-product-row-card .ze-row-image-col {
+    width: 100% !important;
+    height: auto !important;
+}
+
+.woocommerce ul.products.ze-grid-layout-active li.ze-product-row-card .ze-row-info-col {
+    width: 100% !important;
+    border-right: none !important;
+    padding-right: 0 !important;
+}
+
+.woocommerce ul.products.ze-grid-layout-active li.ze-product-row-card .ze-row-actions-col {
+    width: 100% !important;
+    border-top: 1px solid #edf2f7 !important;
+    padding-top: 15px !important;
+}
+
+.woocommerce ul.products.ze-grid-layout-active li.ze-product-row-card .ze-row-expanded-specs-drawer {
+    display: none !important; /* Hide technical drawers in grid mode to preserve compact vertical grids */
+}
+
+/* ==========================================================================
+   PRODUCTION SPECTACULAR HOVER SPECIFICATIONS DRAWER
+   ========================================================================== */
+.ze-row-expanded-specs-drawer {
+    background: #fafbfc !important;
+    border-top: 1.5px dashed #cbd5e1 !important;
+    padding: 22px 24px !important;
+    border-radius: 0 0 10px 10px !important;
+    margin: 10px -20px -20px -20px !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+}
+
+.ze-drawer-inner {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 16px !important;
+}
+
+.ze-drawer-main-title {
+    font-size: 0.72rem !important;
+    font-weight: 850 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
+    margin: 0 0 5px 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+}
+
+.ze-drawer-accent-icon {
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+/* 2-Column specification table */
+.ze-drawer-specs-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)) !important;
+    gap: 8px 24px !important;
+    background: #ffffff !important;
+    border: 1px solid #edf2f7 !important;
+    border-radius: 8px !important;
+    padding: 16px 20px !important;
+}
+
+.ze-drawer-spec-row {
+    display: flex !important;
+    justify-content: space-between !important;
+    border-bottom: 1px solid #f8fafc !important;
+    padding-bottom: 6px !important;
+    font-size: 0.78rem !important;
+}
+
+.ze-drawer-spec-key {
+    color: #64748b !important;
+    font-weight: 600 !important;
+}
+
+.ze-drawer-spec-value {
+    color: #1e293b !important;
+    font-weight: 800 !important;
+}
+
+/* Cards grids for guarantee, logistics and PDF manuals */
+.ze-drawer-cards-grid {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important;
+    gap: 12px !important;
+}
+
+.ze-drawer-box-card {
+    background: #ffffff !important;
+    border: 1px solid #edf2f7 !important;
+    border-radius: 8px !important;
+    padding: 12px 14px !important;
+    display: flex !important;
+    align-items: flex-start !important;
+    gap: 10px !important;
+}
+
+.ze-card-details {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 2px !important;
+}
+
+.ze-card-details strong {
+    font-size: 0.75rem !important;
+    font-weight: 800 !important;
+    color: #1e293b !important;
+}
+
+.ze-card-details span {
+    font-size: 0.65rem !important;
+    color: #64748b !important;
+    line-height: 1.35 !important;
+}
+
+.ze-card-icon-orange { color: #f97316 !important; margin-top: 1px !important; }
+.ze-card-icon-green  { color: #10b981 !important; margin-top: 1px !important; }
+.ze-card-icon-blue   { color: #3b82f6 !important; margin-top: 1px !important; }
+
+/* Complementary notice descriptor box */
+.ze-drawer-complementary-box {
+    background: #f1f5f9 !important;
+    border-left: 3.5px solid var(--ze-secondary, #ff6600) !important;
+    padding: 14px 18px !important;
+    border-radius: 4px !important;
+}
+
+.ze-drawer-complementary-box h5 {
+    font-size: 0.68rem !important;
+    font-weight: 850 !important;
+    color: var(--ze-primary, #001f3f) !important;
+    margin: 0 0 6px 0 !important;
+    letter-spacing: 0.04em !important;
+}
+
+.ze-drawer-complementary-box p {
+    font-size: 0.72rem !important;
+    color: #475569 !important;
+    margin: 0 !important;
+    line-height: 1.45 !important;
+}
+
+/* Collapsible sidebar arrow indicator animation and style */
+.ze-filter-collapsible-header .ze-filter-chevron {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: #94a3b8 !important;
+    transition: transform 0.2s ease !important;
+}
+
+.ze-filter-collapsible-header.collapsed .ze-filter-chevron {
+    transform: rotate(-90deg) !important;
+}
+
+.ze-filter-collapse-content {
+    transition: all 0.2s ease !important;
+}
+
+.ze-filter-collapsible-header:hover .ze-filter-chevron {
+    color: var(--ze-secondary, #ff6600) !important;
+}
+
+/* Foolproof CSS hiding override class to ensure products are completely hidden regardless of style rules */
+li.ze-product-row-card.ze-hidden-product,
+.woocommerce ul.products li.ze-product-row-card.ze-hidden-product,
+.woocommerce-page ul.products li.ze-product-row-card.ze-hidden-product,
+.woocommerce ul.products.ze-grid-layout-active li.ze-product-row-card.ze-hidden-product,
+.woocommerce-page ul.products.ze-grid-layout-active li.ze-product-row-card.ze-hidden-product,
+.wp-block-post.ze-hidden-product,
+li.product.ze-hidden-product,
+.ze-hidden-product {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+}
+
+
+

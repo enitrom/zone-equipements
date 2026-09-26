@@ -1,0 +1,17 @@
+/*
+Theme Name: ZONE EQUIPEMENTS Child
+Theme URI: https://zoneequipements.com
+Description: Child theme for ZONE EQUIPEMENTS. Modular, fast, industrial design for MRO sourcing.
+Author: Google AI Studio
+Author URI: https://ai.studio
+Template: astra
+Version: 1.2.0
+Text Domain: zone-equipements-child
+*/
+
+/* Minimal Overrides - Most logic moved to assets/css/ for modularity */
+
+::selection {
+    background: #FF6600;
+    color: #ffffff;
+}
