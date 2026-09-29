@@ -9,6 +9,8 @@ interface ImageUploadInputProps {
   placeholder?: string;
   id?: string;
   helperText?: string;
+  compact?: boolean;
+  previewClassName?: string;
 }
 
 export const ImageUploadInput: React.FC<ImageUploadInputProps> = ({
@@ -17,7 +19,9 @@ export const ImageUploadInput: React.FC<ImageUploadInputProps> = ({
   label,
   placeholder = "https://... ou téléversez un fichier depuis votre appareil",
   id,
-  helperText
+  helperText,
+  compact = false,
+  previewClassName
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string>('');
@@ -154,7 +158,92 @@ export const ImageUploadInput: React.FC<ImageUploadInputProps> = ({
     }
   };
 
-  const displayUrl = resolveImageUrl(value, '');
+  const safeValue = typeof value === 'string' ? value : '';
+  const displayUrl = resolveImageUrl(safeValue, '');
+
+  if (compact) {
+    return (
+      <div
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        className="space-y-1"
+      >
+        {label && (
+          <label htmlFor={id} className="block text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+            {label}
+          </label>
+        )}
+        <div className={`flex items-center gap-1.5 rounded-lg transition-all ${isDragOver ? 'ring-1 ring-[#FF6600]' : ''}`}>
+          {/* Mini Thumbnail or Placeholder */}
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            className={previewClassName || "w-8 h-8 rounded-lg bg-slate-950 border border-slate-700 overflow-hidden shrink-0 flex items-center justify-center cursor-pointer hover:border-[#FF6600] transition-colors"}
+            title={safeValue ? "Cliquer pour remplacer l'image" : "Cliquer pour téléverser une image"}
+          >
+            {safeValue ? (
+              <img
+                src={displayUrl || safeValue}
+                alt="Aperçu"
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+                onError={(e) => handleImageError(e)}
+              />
+            ) : (
+              <ImageIcon className="w-3.5 h-3.5 text-slate-500" />
+            )}
+          </div>
+
+          <div className="relative flex-1 min-w-0">
+            <input
+              id={id}
+              type="text"
+              value={safeValue.startsWith('data:') ? 'Image locale importée' : safeValue}
+              readOnly={safeValue.startsWith('data:')}
+              onChange={(e) => {
+                setError('');
+                onChange(e.target.value);
+              }}
+              placeholder={placeholder}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-2.5 pr-6 py-1.5 text-[11px] text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6600]"
+            />
+            {safeValue && (
+              <button
+                type="button"
+                onClick={handleClear}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-400 p-0.5 rounded cursor-pointer"
+                title="Effacer l'image"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleFileChange}
+          />
+
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isProcessing}
+            className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors shrink-0 border border-slate-700 cursor-pointer"
+            title="Parcourir vos fichiers locaux"
+          >
+            <Upload className="w-3 h-3 text-[#FF6600]" />
+            <span>{isProcessing ? '...' : 'Upload'}</span>
+          </button>
+        </div>
+        {error && (
+          <p className="text-[10px] text-rose-400">{error}</p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">

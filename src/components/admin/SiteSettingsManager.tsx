@@ -1,809 +1,1177 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Settings, Shield, CheckCircle2,
-  DollarSign, RefreshCw, FileText, Phone, Mail, MapPin, Globe, ShieldCheck, UserCheck,
-  Tag, Percent, Plus, Trash2, Calendar, AlertCircle, Clock
+import {
+  Save, Shield, DollarSign, Truck, Building2, Plus, Trash2,
+  Mail, Phone, FileText, Globe, Percent, Tag, CheckCircle2, XCircle, Edit, Users,
+  CreditCard, Key, Copy, Check, Eye, EyeOff
 } from 'lucide-react';
-import { siteSettingsService, SiteSettings, PromoCode } from '../../services/siteSettingsService';
-import { useAuth, ADMIN_EMAILS } from '../../AuthContext';
+import { siteSettingsService, SiteSettings, PromoCode, PaydunyaSettings } from '../../services/siteSettingsService';
 import { ImageUploadInput } from '../ImageUploadInput';
 
-interface Props {
-  onNotify?: (msg: string) => void;
+interface SiteSettingsManagerProps {
+  onNotify: (msg: string) => void;
 }
 
-export const SiteSettingsManager: React.FC<Props> = ({ onNotify }) => {
-  const { user } = useAuth();
-  const [settings, setSettings] = useState<SiteSettings>(() => siteSettingsService.getSettings());
-  const [promoCodes, setPromoCodes] = useState<PromoCode[]>(() => siteSettingsService.getPromoCodes());
-  const [saveMsg, setSaveMsg] = useState('');
+export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNotify }) => {
+  const [settings, setSettings] = useState<SiteSettings>(siteSettingsService.getSettings());
+  const [newAdminEmail, setNewAdminEmail] = useState('');
 
-  // Promo code creation form
-  const [newPromoCode, setNewPromoCode] = useState<Partial<PromoCode>>({
-    code: '',
-    discountType: 'percent',
-    discountValue: 10,
-    minOrderAmount: 0,
-    maxUses: 0,
-    isActive: true,
-    description: '',
-    startDate: new Date().toISOString().split('T')[0],
-    expiryDate: ''
-  });
-  const [promoMsg, setPromoMsg] = useState('');
+  // Promo code creation / edition state
+  const [editingPromoCode, setEditingPromoCode] = useState<string | null>(null);
+  const [newPromoCode, setNewPromoCode] = useState('');
+  const [newPromoPercent, setNewPromoPercent] = useState<number>(10);
+  const [newPromoMinOrder, setNewPromoMinOrder] = useState<number>(0);
+  const [newPromoDesc, setNewPromoDesc] = useState('');
+  const [newPromoExpires, setNewPromoExpires] = useState('');
+  const [newPromoMaxUsage, setNewPromoMaxUsage] = useState<number>(0);
+  const [newPromoMaxPerAccount, setNewPromoMaxPerAccount] = useState<number>(1);
+  const [showPaydunyaSecrets, setShowPaydunyaSecrets] = useState(false);
+  const [copiedIpn, setCopiedIpn] = useState(false);
+
+  const ipnEndpointUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}/api/paydunya/ipn`
+    : 'https://zoneequipements.sn/api/paydunya/ipn';
+
+  const updatePaydunya = (partial: Partial<PaydunyaSettings>) => {
+    const nextPaydunya: PaydunyaSettings = {
+      ...settings.paydunya,
+      ...partial
+    };
+    updateAndPersist({ paydunya: nextPaydunya });
+  };
 
   useEffect(() => {
-    const unsub = siteSettingsService.subscribe(() => {
+    const handleUpdate = () => {
       setSettings(siteSettingsService.getSettings());
-      setPromoCodes(siteSettingsService.getPromoCodes());
-    });
-    return () => unsub();
+    };
+    const unsub = siteSettingsService.subscribe(handleUpdate);
+    window.addEventListener('ze_settings_updated', handleUpdate);
+    return () => {
+      unsub();
+      window.removeEventListener('ze_settings_updated', handleUpdate);
+    };
   }, []);
 
-  // Local string representation for numeric inputs to avoid jumping/resetting during typing
-  const [formInputs, setFormInputs] = useState(() => {
-    const s = siteSettingsService.getSettings();
-    return {
-      usdExchangeRate: String(s.usdExchangeRate ?? 610),
-      eurExchangeRate: String(s.eurExchangeRate ?? 655.957),
-      cnyExchangeRate: String(s.cnyExchangeRate ?? 85),
-      airFreightPerKgXOF: String(s.airFreightPerKgXOF ?? 7500),
-      seaFreightPerKgXOF: String(s.seaFreightPerKgXOF ?? 1800),
-      seaFreightPerCbmXOF: String(s.seaFreightPerCbmXOF ?? 250000),
-      transitInsuranceRate: String(Math.round((s.transitInsuranceRate ?? 0.05) * 100)),
-      defaultMarginRate: String(Math.round((s.defaultMarginRate ?? 0.35) * 100)),
-      globalDiscountPercent: String(s.globalDiscountPercent ?? 5)
-    };
-  });
+  // Persistance immédiate à chaque modification pour qu'aucun ancien paramètre ne revienne
+  const updateAndPersist = (partial: Partial<SiteSettings>) => {
+    const updated = siteSettingsService.updateSettings(partial);
+    setSettings(updated);
+  };
 
-  const handleInputChange = (field: keyof typeof formInputs, value: string) => {
-    setFormInputs(prev => ({ ...prev, [field]: value }));
-    const num = parseFloat(value);
-    if (!isNaN(num)) {
-      if (field === 'transitInsuranceRate') {
-        setSettings(prev => ({ ...prev, transitInsuranceRate: num / 100 }));
-      } else if (field === 'defaultMarginRate') {
-        setSettings(prev => ({ ...prev, defaultMarginRate: num / 100 }));
-      } else if (field === 'globalDiscountPercent') {
-        setSettings(prev => ({ ...prev, globalDiscountPercent: num }));
-      } else {
-        setSettings(prev => ({ ...prev, [field]: num }));
-      }
+  const handleSave = (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated = siteSettingsService.updateSettings(settings);
+    setSettings(updated);
+    onNotify('Paramètres globaux, TVA, barèmes de fret et devises sauvegardés avec succès.');
+  };
+
+  const handleAddAdmin = () => {
+    const email = newAdminEmail.trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      onNotify('Veuillez saisir une adresse email valide.');
+      return;
     }
+    if (settings.adminEmails.includes(email)) {
+      onNotify('Cet email est déjà administrateur.');
+      return;
+    }
+    updateAndPersist({
+      adminEmails: [...settings.adminEmails, email]
+    });
+    setNewAdminEmail('');
+    onNotify(`Administrateur ${email} ajouté et sauvegardé.`);
   };
 
-  const handleSaveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanSettings: SiteSettings = {
-      ...settings,
-      usdExchangeRate: parseFloat(formInputs.usdExchangeRate) || 610,
-      eurExchangeRate: parseFloat(formInputs.eurExchangeRate) || 655.957,
-      cnyExchangeRate: parseFloat(formInputs.cnyExchangeRate) || 85,
-      airFreightPerKgXOF: parseFloat(formInputs.airFreightPerKgXOF) || 7500,
-      seaFreightPerKgXOF: parseFloat(formInputs.seaFreightPerKgXOF) || 1800,
-      seaFreightPerCbmXOF: parseFloat(formInputs.seaFreightPerCbmXOF) || 250000,
-      transitInsuranceRate: (parseFloat(formInputs.transitInsuranceRate) || 5) / 100,
-      defaultMarginRate: (parseFloat(formInputs.defaultMarginRate) || 35) / 100,
-      globalDiscountPercent: parseFloat(formInputs.globalDiscountPercent) || 5
-    };
-    siteSettingsService.updateSettings(cleanSettings);
-    setSettings(cleanSettings);
-    setSaveMsg('Paramètres généraux et barèmes enregistrés avec succès.');
-    setTimeout(() => setSaveMsg(''), 3500);
-    if (onNotify) onNotify('Paramètres du site mis à jour.');
+  const handleRemoveAdmin = (email: string) => {
+    if (settings.adminEmails.length <= 1) {
+      onNotify('Impossible de supprimer le dernier administrateur.');
+      return;
+    }
+    updateAndPersist({
+      adminEmails: settings.adminEmails.filter(e => e !== email)
+    });
+    onNotify(`Administrateur ${email} retiré.`);
   };
 
-  const handleCreatePromoCode = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPromoCode.code?.trim()) {
-      alert("Veuillez saisir un code promo (ex: DAKAR2026, BIENVENUE10).");
+  const resetPromoForm = () => {
+    setEditingPromoCode(null);
+    setNewPromoCode('');
+    setNewPromoPercent(10);
+    setNewPromoMinOrder(0);
+    setNewPromoDesc('');
+    setNewPromoExpires('');
+    setNewPromoMaxUsage(0);
+    setNewPromoMaxPerAccount(1);
+  };
+
+  const handleSavePromoCode = () => {
+    const code = newPromoCode.trim().toUpperCase();
+    if (!code) {
+      onNotify('Veuillez saisir un code promo (ex: PROMO10).');
+      return;
+    }
+    if (newPromoPercent <= 0 || newPromoPercent > 90) {
+      onNotify('Le pourcentage de remise doit être compris entre 1% et 90%.');
       return;
     }
 
-    const created = siteSettingsService.savePromoCode({
-      code: newPromoCode.code.trim().toUpperCase(),
-      discountType: newPromoCode.discountType || 'percent',
-      discountValue: Number(newPromoCode.discountValue) || 10,
-      minOrderAmount: Number(newPromoCode.minOrderAmount) || 0,
-      maxUses: Number(newPromoCode.maxUses) || 0,
-      usedCount: 0,
-      startDate: newPromoCode.startDate || new Date().toISOString().split('T')[0],
-      expiryDate: newPromoCode.expiryDate || undefined,
-      isActive: newPromoCode.isActive !== false,
-      description: newPromoCode.description || undefined
-    });
-
-    setPromoCodes(siteSettingsService.getPromoCodes());
-    setNewPromoCode({
-      code: '',
-      discountType: 'percent',
-      discountValue: 10,
-      minOrderAmount: 0,
-      maxUses: 0,
-      isActive: true,
-      description: '',
-      startDate: new Date().toISOString().split('T')[0],
-      expiryDate: ''
-    });
-    setPromoMsg(`Code promo "${created.code}" créé avec succès.`);
-    setTimeout(() => setPromoMsg(''), 3500);
-    if (onNotify) onNotify(`Code promo ${created.code} ajouté.`);
-  };
-
-  const handleTogglePromoStatus = (promo: PromoCode) => {
-    siteSettingsService.savePromoCode({
-      ...promo,
-      isActive: !promo.isActive
-    });
-    setPromoCodes(siteSettingsService.getPromoCodes());
-  };
-
-  const handleDeletePromo = (id: string) => {
-    if (window.confirm("Êtes-vous sûr de vouloir supprimer définitivement ce code promo ?")) {
-      siteSettingsService.deletePromoCode(id);
-      setPromoCodes(siteSettingsService.getPromoCodes());
-      if (onNotify) onNotify('Code promo supprimé.');
+    if (editingPromoCode) {
+      // Si le code a changé de nom, supprimer l'ancien
+      if (editingPromoCode.toUpperCase() !== code) {
+        siteSettingsService.deletePromoCode(editingPromoCode);
+      }
+      const existing = (settings.promoCodes || []).find(
+        p => p.code.trim().toUpperCase() === editingPromoCode.toUpperCase()
+      );
+      if (existing && editingPromoCode.toUpperCase() === code) {
+        const updated = siteSettingsService.updatePromoCode(code, {
+          code,
+          discountPercent: newPromoPercent,
+          minOrderAmount: newPromoMinOrder > 0 ? newPromoMinOrder : 0,
+          description: newPromoDesc.trim() || `Remise de ${newPromoPercent}%`,
+          expiresAt: newPromoExpires || undefined,
+          maxUsage: newPromoMaxUsage > 0 ? newPromoMaxUsage : 0,
+          maxUsagePerAccount: newPromoMaxPerAccount > 0 ? newPromoMaxPerAccount : 0
+        });
+        setSettings(updated);
+      } else {
+        const updated = siteSettingsService.addPromoCode({
+          code,
+          discountPercent: newPromoPercent,
+          minOrderAmount: newPromoMinOrder > 0 ? newPromoMinOrder : 0,
+          active: existing ? existing.active : true,
+          description: newPromoDesc.trim() || `Remise de ${newPromoPercent}%`,
+          expiresAt: newPromoExpires || undefined,
+          maxUsage: newPromoMaxUsage > 0 ? newPromoMaxUsage : 0,
+          maxUsagePerAccount: newPromoMaxPerAccount > 0 ? newPromoMaxPerAccount : 0,
+          usageByAccount: existing?.usageByAccount || {}
+        });
+        setSettings(updated);
+      }
+      onNotify(`Code promo "${code}" mis à jour avec succès.`);
+      resetPromoForm();
+      return;
     }
+
+    const updated = siteSettingsService.addPromoCode({
+      code,
+      discountPercent: newPromoPercent,
+      minOrderAmount: newPromoMinOrder > 0 ? newPromoMinOrder : 0,
+      active: true,
+      description: newPromoDesc.trim() || `Remise de ${newPromoPercent}%`,
+      expiresAt: newPromoExpires || undefined,
+      maxUsage: newPromoMaxUsage > 0 ? newPromoMaxUsage : 0,
+      maxUsagePerAccount: newPromoMaxPerAccount > 0 ? newPromoMaxPerAccount : 0,
+      usageByAccount: {}
+    });
+    setSettings(updated);
+    resetPromoForm();
+    onNotify(`Code promo "${code}" (-${newPromoPercent}%) créé et activé.`);
+  };
+
+  const handleEditPromo = (promo: PromoCode) => {
+    setEditingPromoCode(promo.code);
+    setNewPromoCode(promo.code);
+    setNewPromoPercent(promo.discountPercent || 10);
+    setNewPromoMinOrder(promo.minOrderAmount || 0);
+    setNewPromoDesc(promo.description || '');
+    setNewPromoExpires(promo.expiresAt || '');
+    setNewPromoMaxUsage(promo.maxUsage || 0);
+    setNewPromoMaxPerAccount(promo.maxUsagePerAccount || 0);
+  };
+
+  const handleDeletePromo = (code: string) => {
+    const updated = siteSettingsService.deletePromoCode(code);
+    setSettings(updated);
+    if (editingPromoCode && editingPromoCode.toUpperCase() === code.trim().toUpperCase()) {
+      resetPromoForm();
+    }
+    onNotify(`Code promo "${code}" supprimé définitivement.`);
+  };
+
+  const handleTogglePromo = (code: string) => {
+    const updated = siteSettingsService.togglePromoCode(code);
+    setSettings(updated);
+    onNotify(`Statut du code promo "${code}" mis à jour.`);
   };
 
   return (
-    <div className="space-y-8">
-      {/* 1. GESTION DES COMPTES ADMINISTRATEURS & DROITS D'ACCÈS */}
-      <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-orange-500/20 text-[#FF6600] flex items-center justify-center">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              Droits d'Administration & Comptes Autorisés
-            </h3>
-            <p className="text-xs text-slate-400">
-              L'authentification par clé a été retirée. L'accès au back-office est garanti pour vos deux comptes administrateurs.
-            </p>
-          </div>
-        </div>
-
-        {/* Info sur la suppression de la clé */}
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-300 leading-relaxed mb-6 space-y-2">
-          <div className="flex items-center gap-2 text-emerald-400 font-bold">
-            <CheckCircle2 className="w-4 h-4" />
-            <span>Authentification par clé désactivée définitivement</span>
-          </div>
-          <p className="text-slate-400">
-            Plus aucun mot de passe temporaire, passkey ou paramètre d'URL n'est requis. Dès que vous vous connectez avec l'un des deux comptes ci-dessous, vos droits d'administration sont appliqués automatiquement et sans risque de redirection inattendue.
+    <form onSubmit={handleSave} className="space-y-6">
+      {/* Header bar */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-2.5">
+            <Shield className="w-6 h-6 text-[#FF6600]" />
+            Paramètres Globaux, Fiscalité (TVA), Fret & Devises
+          </h2>
+          <p className="text-sm text-slate-400 mt-1">
+            Toutes vos modifications sont enregistrées de façon persistante et synchronisées en temps réel sur tout le site (Catalogue, Fiches Produits, Import, Panier et Contrats).
           </p>
         </div>
 
-        {/* Liste des comptes administrateurs */}
-        <div className="space-y-3">
-          <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-            Comptes Administrateurs Vérifiés (Accès Total)
-          </label>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {ADMIN_EMAILS.map((email) => {
-              const isCurrent = user?.email?.toLowerCase() === email.toLowerCase();
-              return (
-                <div 
-                  key={email}
-                  className={`p-4 rounded-xl border flex items-center justify-between gap-3 transition-all ${
-                    isCurrent 
-                      ? 'bg-emerald-950/30 border-emerald-500/50 shadow-sm shadow-emerald-900/20' 
-                      : 'bg-slate-900 border-slate-800'
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-                      isCurrent ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
-                    }`}>
-                      <UserCheck className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white truncate font-mono">{email}</p>
-                      <p className="text-[10px] text-slate-400">Administrateur Principal</p>
-                    </div>
-                  </div>
-
-                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider shrink-0 flex items-center gap-1 ${
-                    isCurrent 
-                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
-                      : 'bg-slate-800 text-slate-400 border border-slate-700'
-                  }`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${isCurrent ? 'bg-emerald-400' : 'bg-slate-400'}`}></span>
-                    {isCurrent ? 'Connecté' : 'Autorisé'}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+        <div className="flex items-center gap-3">
+          <button
+            type="submit"
+            className="bg-[#FF6600] hover:bg-[#e65c00] text-white px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-orange-950/50 transition-all cursor-pointer"
+          >
+            <Save className="w-4 h-4" />
+            Sauvegarder la Configuration
+          </button>
         </div>
       </div>
 
-      {/* 2. PARAMÉTRAGE TVA & FRAIS FINANCIERS */}
-      <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="w-10 h-10 rounded-xl bg-orange-600/20 text-orange-400 flex items-center justify-center">
-            <DollarSign className="w-5 h-5" />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* 1. Fiscalité & Marges par défaut */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+          <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
+            <Percent className="w-5 h-5 text-[#FF6600]" />
+            <h3 className="font-bold text-white text-base">Fiscalité (TVA) & Marge Commerciale</h3>
           </div>
-          <div>
-            <h3 className="text-lg font-bold text-white">
-              Paramètres Financiers, TVA & Taux de Change
-            </h3>
-            <p className="text-xs text-slate-400">
-              Activez, désactivez ou ignorez la TVA (18%), et réglez les taux de conversion et les barèmes de transport.
-            </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1.5">
+                Taux de TVA Applicable (%)
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                value={settings.vatRate}
+                onChange={e => updateAndPersist({ vatRate: Number(e.target.value) })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:border-[#FF6600] outline-none font-mono"
+              />
+              <span className="text-[11px] text-slate-500 mt-1 block">Standard UEMOA / Sénégal : 18%</span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1.5">
+                Marge Commerciale par Défaut (%)
+              </label>
+              <input
+                type="number"
+                step="1"
+                value={settings.defaultMarginPercentage}
+                onChange={e => updateAndPersist({ defaultMarginPercentage: Number(e.target.value) })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:border-[#FF6600] outline-none font-mono"
+              />
+              <span className="text-[11px] text-slate-500 mt-1 block">Appliquée lors des imports automatiques</span>
+            </div>
           </div>
         </div>
 
-        <form onSubmit={handleSaveSettings} className="mt-5 space-y-5">
-          {/* TVA CONFIGURATION */}
-          <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        {/* 2. Taux de Change Devises -> FCFA */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+          <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
+            <DollarSign className="w-5 h-5 text-emerald-400" />
+            <h3 className="font-bold text-white text-base">Taux de Change des Devises (vers FCFA / XOF)</h3>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
-              <span className="font-bold text-sm text-white block">
-                Application de la TVA (18%) sur les Devis et Ventes
+              <label className="block text-xs font-bold text-slate-400 mb-1">1 USD ($) =</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.1"
+                  value={settings.exchangeRates.USD}
+                  onChange={e => updateAndPersist({
+                    exchangeRates: { ...settings.exchangeRates, USD: Number(e.target.value) }
+                  })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+                <span className="absolute right-2.5 top-2.5 text-[10px] text-slate-500 font-bold">CFA</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1">1 EUR (€) =</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.001"
+                  value={settings.exchangeRates.EUR}
+                  onChange={e => updateAndPersist({
+                    exchangeRates: { ...settings.exchangeRates, EUR: Number(e.target.value) }
+                  })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+                <span className="absolute right-2.5 top-2.5 text-[10px] text-slate-500 font-bold">CFA</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1">1 CNY (¥) =</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.1"
+                  value={settings.exchangeRates.CNY}
+                  onChange={e => updateAndPersist({
+                    exchangeRates: { ...settings.exchangeRates, CNY: Number(e.target.value) }
+                  })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+                <span className="absolute right-2.5 top-2.5 text-[10px] text-slate-500 font-bold">CFA</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1">1 GBP (£) =</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  step="0.1"
+                  value={settings.exchangeRates.GBP}
+                  onChange={e => updateAndPersist({
+                    exchangeRates: { ...settings.exchangeRates, GBP: Number(e.target.value) }
+                  })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+                <span className="absolute right-2.5 top-2.5 text-[10px] text-slate-500 font-bold">CFA</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Barèmes Logistiques & Fret International */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 lg:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <Truck className="w-5 h-5 text-blue-400" />
+              <h3 className="font-bold text-white text-base">Barèmes Moyens de Fret & Transit Douanier (FCFA)</h3>
+            </div>
+            <span className="text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2.5 py-0.5 rounded-full font-semibold">
+              Affichage dynamique sur Fiche Produit, Panier, Import & Calculateur
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Fret Maritime */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-blue-400 block">
+                🚢 Fret Maritime (Groupage)
               </span>
-              <span className="text-xs text-slate-400">
-                Vous pouvez désactiver ou ignorer la TVA pour les clients export, entreprises exonérées ou régimes sous douane.
-              </span>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, applyVatByDefault: !settings.applyVatByDefault })}
-                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
-                  settings.applyVatByDefault
-                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
-                }`}
-              >
-                {settings.applyVatByDefault ? 'TVA 18% Activée par Défaut' : 'TVA Désactivée / Ignorée (0%)'}
-              </button>
-            </div>
-          </div>
-
-          {/* TAUX DE CHANGE */}
-          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-              Taux de Change des Devises d'Approvisionnement (vers FCFA / XOF)
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  1 USD ($) en FCFA
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={formInputs.usdExchangeRate}
-                  onChange={(e) => handleInputChange('usdExchangeRate', e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                  placeholder="610"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  1 EUR (€) en FCFA
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={formInputs.eurExchangeRate}
-                  onChange={(e) => handleInputChange('eurExchangeRate', e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                  placeholder="655.957"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  1 CNY (¥ Yuan) en FCFA
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={formInputs.cnyExchangeRate}
-                  onChange={(e) => handleInputChange('cnyExchangeRate', e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                  placeholder="85"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* FRAIS DE FRET & ASSURANCE */}
-          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-              Barèmes Moyens de Fret International vers Dakar (Maritime & Aérien)
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  Fret Maritime (FCFA / kg)
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formInputs.seaFreightPerKgXOF}
-                  onChange={(e) => handleInputChange('seaFreightPerKgXOF', e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                  placeholder="1800"
-                />
-                <span className="text-[10px] text-slate-500 block mt-1">Tarif au poids par kg</span>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  Fret Maritime (FCFA / CBM m³)
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formInputs.seaFreightPerCbmXOF}
-                  onChange={(e) => handleInputChange('seaFreightPerCbmXOF', e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                  placeholder="250000"
-                />
-                <span className="text-[10px] text-slate-500 block mt-1">Tarif au volume par m³</span>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  Fret Aérien Express (FCFA / kg)
-                </label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formInputs.airFreightPerKgXOF}
-                  onChange={(e) => handleInputChange('airFreightPerKgXOF', e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                  placeholder="7500"
-                />
-                <span className="text-[10px] text-slate-500 block mt-1">Avion rapide (7-12 jours)</span>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  Assurance Transit (%)
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={formInputs.transitInsuranceRate}
-                  onChange={(e) => handleInputChange('transitInsuranceRate', e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                  placeholder="5"
-                />
-                <span className="text-[10px] text-slate-500 block mt-1">% valeur marchandise</span>
-              </div>
-            </div>
-
-            {/* DURÉES DES MODES DE FRET PAR DÉFAUT */}
-            <div className="pt-3 border-t border-slate-800/80">
-              <h5 className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">
-                Durées de Transit & Délais de Livraison (Modifiables par défaut)
-              </h5>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Délai Fret Maritime
-                  </label>
-                  <input
-                    type="text"
-                    value={settings.seaFreightDurationDays || '30 - 45 jours'}
-                    onChange={(e) => setSettings({ ...settings, seaFreightDurationDays: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                    placeholder="30 - 45 jours"
-                  />
-                  <span className="text-[10px] text-slate-500 block mt-1">Affiché sur les fiches produits & panier</span>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Délai Fret Aérien Express
-                  </label>
-                  <input
-                    type="text"
-                    value={settings.airFreightDurationDays || '5 - 10 jours'}
-                    onChange={(e) => setSettings({ ...settings, airFreightDurationDays: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                    placeholder="5 - 10 jours"
-                  />
-                  <span className="text-[10px] text-slate-500 block mt-1">Transit avion rapide</span>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Délai Stock Local Dakar
-                  </label>
-                  <input
-                    type="text"
-                    value={settings.localDeliveryDurationDays || '24 - 48h'}
-                    onChange={(e) => setSettings({ ...settings, localDeliveryDurationDays: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                    placeholder="24 - 48h"
-                  />
-                  <span className="text-[10px] text-slate-500 block mt-1">Expédition immédiate Dakar</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 3. REMISES GÉNÉRALES DU SITE */}
-          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                  <Percent className="w-4 h-4 text-orange-400" />
-                  Remise Globale Applicable à Tous les Produits
-                </h4>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Applique une réduction générale calculée en temps réel sur tous les équipements du catalogue.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSettings({ ...settings, enableGlobalDiscount: !settings.enableGlobalDiscount })}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  settings.enableGlobalDiscount
-                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
-                }`}
-              >
-                {settings.enableGlobalDiscount ? 'Remise Globale Activée' : 'Désactivée'}
-              </button>
-            </div>
-
-            {settings.enableGlobalDiscount && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Pourcentage de Réduction Globale (%)
-                  </label>
+                  <label className="block text-[11px] text-slate-400 mb-1">Tarif / Kg (FCFA)</label>
                   <input
                     type="number"
-                    min="1"
-                    max="80"
-                    step="1"
-                    value={formInputs.globalDiscountPercent}
-                    onChange={(e) => handleInputChange('globalDiscountPercent', e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none font-mono"
-                    placeholder="5"
+                    value={settings.seaFreightPerKg}
+                    onChange={e => updateAndPersist({ seaFreightPerKg: Number(e.target.value) })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-2 text-sm text-white font-mono"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                    Libellé / Badge Commercial Affiché
-                  </label>
+                  <label className="block text-[11px] text-slate-400 mb-1">Tarif / m³ ($ USD)</label>
                   <input
-                    type="text"
-                    value={settings.globalDiscountLabel || 'Remise Commerciale Partenaires'}
-                    onChange={(e) => setSettings({ ...settings, globalDiscountLabel: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none"
-                    placeholder="Remise Commerciale Partenaires"
+                    type="number"
+                    value={settings.seaFreightPerCbmUSD ?? 220}
+                    onChange={e => updateAndPersist({ seaFreightPerCbmUSD: Number(e.target.value) })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-2 text-sm text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">Forfait Min. (F)</label>
+                  <input
+                    type="number"
+                    value={settings.seaFreightMin}
+                    onChange={e => updateAndPersist({ seaFreightMin: Number(e.target.value) })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-2 text-sm text-white font-mono"
                   />
                 </div>
               </div>
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">Durée / Délai affiché</label>
+                <input
+                  type="text"
+                  value={settings.seaFreightDuration || '20 à 40 jours'}
+                  onChange={e => updateAndPersist({ seaFreightDuration: e.target.value })}
+                  placeholder="Ex: 20 à 40 jours"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
+                />
+              </div>
+            </div>
+
+            {/* Fret Aérien Standard */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 block">
+                ✈️ Fret Aérien Cargo
+              </span>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">Tarif / Kg (FCFA)</label>
+                  <input
+                    type="number"
+                    value={settings.airFreightPerKg}
+                    onChange={e => updateAndPersist({ airFreightPerKg: Number(e.target.value) })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">Forfait Min. (FCFA)</label>
+                  <input
+                    type="number"
+                    value={settings.airFreightMin}
+                    onChange={e => updateAndPersist({ airFreightMin: Number(e.target.value) })}
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">Durée / Délai affiché</label>
+                <input
+                  type="text"
+                  value={settings.airFreightDuration || '8 à 15 jours'}
+                  onChange={e => updateAndPersist({ airFreightDuration: e.target.value })}
+                  placeholder="Ex: 8 à 15 jours"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 4. Logo, Nom d'Entreprise & Coordonnées (En-tête, Pied de page & Factures) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+          <div className="flex items-center justify-between gap-2.5 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <Building2 className="w-5 h-5 text-purple-400" />
+              <div>
+                <h3 className="font-bold text-white text-base">Logo, Nom d'Entreprise & Coordonnées</h3>
+                <p className="text-[11px] text-slate-400">Personnalisez le logo, le nom affiché à côté et vos mentions légales</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Aperçu en direct du Logo + Nom comme dans l'en-tête du site */}
+          <div className="bg-[#003366] border border-blue-800/60 rounded-xl p-3.5 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              {settings.companyLogo ? (
+                <img
+                  src={settings.companyLogo}
+                  alt={settings.companyName}
+                  className="w-11 h-11 rounded-xl object-contain bg-white p-1 shadow-md border border-white/20"
+                />
+              ) : (
+                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-[#FF6600] to-amber-600 flex items-center justify-center text-white shadow-md border border-orange-400/30">
+                  <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                    <path d="M2 17l10 5 10-5" />
+                    <path d="M2 12l10 5 10-5" />
+                  </svg>
+                </div>
+              )}
+              <div className="flex flex-col leading-none">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-white font-black tracking-tight text-base md:text-lg">
+                    {settings.companyName || 'ZONE ÉQUIPEMENTS'}
+                  </span>
+                  {(settings.companyBadge ?? 'MRO') && (
+                    <span className="bg-[#FF6600] text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded tracking-widest">
+                      {settings.companyBadge ?? 'MRO'}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[#FF6600] text-[10px] font-extrabold tracking-[0.2em] uppercase mt-1">
+                  {settings.companySubtitle !== undefined ? settings.companySubtitle : "SÉNÉGAL • AFRIQUE DE L'OUEST"}
+                </span>
+              </div>
+            </div>
+            {settings.companyLogo && (
+              <button
+                type="button"
+                onClick={() => updateAndPersist({ companyLogo: '' })}
+                className="text-[11px] bg-red-500/20 hover:bg-red-500/30 text-red-200 border border-red-400/30 px-2.5 py-1.5 rounded-lg font-bold transition-colors cursor-pointer"
+              >
+                Remettre logo par défaut
+              </button>
             )}
           </div>
 
-          {/* 4. COORDONNÉES RÉELLES DU SITE & CONTACTS */}
-          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-              Coordonnées Officielles Affichées sur le Site & WhatsApp
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  Numéro WhatsApp & Téléphone Officiel
-                </label>
-                <div className="relative">
-                  <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    value={settings.phone}
-                    onChange={(e) => setSettings({ ...settings, phone: e.target.value, phoneDisplay: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-xs text-white"
-                  />
-                </div>
-              </div>
+          <div className="space-y-3">
+            <ImageUploadInput
+              label="Charger un Logo d'entreprise (remplace l'icône actuelle)"
+              value={settings.companyLogo || ''}
+              onChange={val => updateAndPersist({ companyLogo: val })}
+              placeholder="Cliquez sur Parcourir ou collez l'URL de votre logo (PNG, SVG, JPG, WebP)"
+              helperText="Votre logo s'affiche immédiatement dans la barre de navigation en haut et dans le pied de page."
+            />
 
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-bold text-slate-400 mb-1">Nom de l'Entreprise (affiché à côté du logo)</label>
+                <input
+                  type="text"
+                  value={settings.companyName}
+                  onChange={e => updateAndPersist({ companyName: e.target.value })}
+                  placeholder="ZONE ÉQUIPEMENTS"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white font-bold"
+                />
+              </div>
               <div>
-                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                  Email Professionnel Officiel
-                </label>
-                <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                  <input
-                    type="email"
-                    value={settings.email}
-                    onChange={(e) => setSettings({ ...settings, email: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-2 text-xs text-white"
-                  />
-                </div>
+                <label className="block text-xs font-bold text-slate-400 mb-1">Badge (ex: MRO, B2B)</label>
+                <input
+                  type="text"
+                  value={settings.companyBadge !== undefined ? settings.companyBadge : 'MRO'}
+                  onChange={e => updateAndPersist({ companyBadge: e.target.value })}
+                  placeholder="MRO"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white"
+                />
               </div>
             </div>
-          </div>
 
-          {/* 5. TEXTES DE LA PAGE D'ACCUEIL */}
-          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-              Textes Phares de la Page d'Accueil
-            </h4>
             <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Titre Principal (Hero Banner)
-              </label>
+              <label className="block text-xs font-bold text-slate-400 mb-1">Sous-titre sous le nom d'entreprise</label>
               <input
                 type="text"
-                value={settings.heroTitle}
-                onChange={(e) => setSettings({ ...settings, heroTitle: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
+                value={settings.companySubtitle !== undefined ? settings.companySubtitle : "SÉNÉGAL • AFRIQUE DE L'OUEST"}
+                onChange={e => updateAndPersist({ companySubtitle: e.target.value })}
+                placeholder="SÉNÉGAL • AFRIQUE DE L'OUEST"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white"
               />
             </div>
+
             <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Sous-titre (Hero Banner)
-              </label>
-              <textarea
-                rows={2}
-                value={settings.heroSubtitle}
-                onChange={(e) => setSettings({ ...settings, heroSubtitle: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
+              <label className="block text-xs font-bold text-slate-400 mb-1">Adresse du Siège & Entrepôt</label>
+              <input
+                type="text"
+                value={settings.companyAddress}
+                onChange={e => updateAndPersist({ companyAddress: e.target.value })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white"
               />
             </div>
-            <ImageUploadInput
-              label="Image d'Arrière-Plan du Hero Banner"
-              value={settings.heroBgImage || ''}
-              onChange={(newUrl) => setSettings({ ...settings, heroBgImage: newUrl })}
-              placeholder="https://images.unsplash.com/... ou téléversez votre photo"
-              helperText="Personnalisez la grande bannière d'accueil avec une photo de votre entreprise, de vos entrepôts ou de vos équipements."
-            />
-          </div>
 
-          {saveMsg && (
-            <div className="p-3 bg-emerald-950/60 border border-emerald-800/80 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" />
-              <span>{saveMsg}</span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1 flex items-center gap-1">
+                  <Phone className="w-3 h-3" /> Téléphone Officiel
+                </label>
+                <input
+                  type="text"
+                  value={settings.companyPhone}
+                  onChange={e => updateAndPersist({ companyPhone: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1 flex items-center gap-1">
+                  <Mail className="w-3 h-3" /> Email Commercial
+                </label>
+                <input
+                  type="email"
+                  value={settings.companyEmail}
+                  onChange={e => updateAndPersist({ companyEmail: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white"
+                />
+              </div>
             </div>
-          )}
 
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              className="px-6 py-2.5 bg-[#FF6600] hover:bg-orange-500 text-white rounded-xl text-xs font-bold shadow-lg transition-all cursor-pointer"
-            >
-              Enregistrer tous les Paramètres du Site
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* 3. GESTION DES CODES PROMO PANIER (AVEC COMPTEUR ET DATE DE VALIDITÉ) */}
-      <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 shadow-xl space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-orange-600/20 text-[#FF6600] flex items-center justify-center">
-              <Tag className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                Codes Promo & Réductions Panier
-              </h3>
-              <p className="text-xs text-slate-400">
-                Créez des codes promo avec compteur d'utilisation, montant minimum et date de validité.
-              </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1 flex items-center gap-1">
+                  <FileText className="w-3 h-3" /> Numéro RCCM
+                </label>
+                <input
+                  type="text"
+                  value={settings.rccm}
+                  onChange={e => updateAndPersist({ rccm: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1 flex items-center gap-1">
+                  <FileText className="w-3 h-3" /> Numéro NINEA
+                </label>
+                <input
+                  type="text"
+                  value={settings.ninea}
+                  onChange={e => updateAndPersist({ ninea: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white font-mono"
+                />
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Formulaire Création Code Promo */}
-        <form onSubmit={handleCreatePromoCode} className="p-5 bg-slate-900 rounded-2xl border border-slate-800 space-y-4">
-          <h4 className="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
-            <Plus className="w-4 h-4" /> Nouveau Code Promo
-          </h4>
+        {/* 5. Gestion des Comptes Administrateurs & Bannière d'Accueil */}
+        <div className="space-y-6">
+          {/* Comptes Admin */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
+              <Shield className="w-5 h-5 text-emerald-400" />
+              <h3 className="font-bold text-white text-base">Comptes Administrateurs Autorisés</h3>
+            </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Code Promo * (Ex: DAKAR2026)
-              </label>
+            <div className="flex gap-2">
               <input
-                type="text"
-                required
-                value={newPromoCode.code || ''}
-                onChange={(e) => setNewPromoCode({ ...newPromoCode, code: e.target.value.toUpperCase() })}
-                placeholder="DAKAR2026"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono font-bold uppercase focus:border-orange-500 focus:outline-none"
+                type="email"
+                placeholder="Ajouter un email admin (ex: directeur@gmail.com)"
+                value={newAdminEmail}
+                onChange={e => setNewAdminEmail(e.target.value)}
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white focus:border-[#FF6600] outline-none"
               />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Type de Réduction
-              </label>
-              <select
-                value={newPromoCode.discountType || 'percent'}
-                onChange={(e) => setNewPromoCode({ ...newPromoCode, discountType: e.target.value as any })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-orange-500 focus:outline-none font-mono"
-              >
-                <option value="percent">Pourcentage (%)</option>
-                <option value="fixed">Montant Fixe (FCFA)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Valeur de la Réduction *
-              </label>
-              <input
-                type="number"
-                required
-                min="1"
-                value={newPromoCode.discountValue ?? 10}
-                onChange={(e) => setNewPromoCode({ ...newPromoCode, discountValue: parseFloat(e.target.value) || 0 })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-orange-500 focus:outline-none"
-                placeholder="10"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Utilisations Max (0 = illimité)
-              </label>
-              <input
-                type="number"
-                min="0"
-                value={newPromoCode.maxUses ?? 0}
-                onChange={(e) => setNewPromoCode({ ...newPromoCode, maxUses: parseInt(e.target.value) || 0 })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-orange-500 focus:outline-none"
-                placeholder="0"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Commande Min. (FCFA)
-              </label>
-              <input
-                type="number"
-                min="0"
-                step="5000"
-                value={newPromoCode.minOrderAmount ?? 0}
-                onChange={(e) => setNewPromoCode({ ...newPromoCode, minOrderAmount: parseFloat(e.target.value) || 0 })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-orange-500 focus:outline-none"
-                placeholder="0"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Date Début Validité
-              </label>
-              <input
-                type="date"
-                value={newPromoCode.startDate || ''}
-                onChange={(e) => setNewPromoCode({ ...newPromoCode, startDate: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-orange-500 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                Date Fin / Expiration (Optionnel)
-              </label>
-              <input
-                type="date"
-                value={newPromoCode.expiryDate || ''}
-                onChange={(e) => setNewPromoCode({ ...newPromoCode, expiryDate: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-orange-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="flex items-end">
               <button
-                type="submit"
-                className="w-full bg-[#FF6600] hover:bg-orange-500 text-white py-2 px-4 rounded-lg font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                type="button"
+                onClick={handleAddAdmin}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
               >
-                <Plus className="w-4 h-4" /> Créer le Code Promo
+                <Plus className="w-4 h-4" /> Ajouter
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {settings.adminEmails.map(email => (
+                <div
+                  key={email}
+                  className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span className="text-xs font-mono text-slate-200">{email}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveAdmin(email)}
+                    className="text-slate-500 hover:text-red-400 p-1 cursor-pointer"
+                    title="Retirer cet administrateur"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Personnalisation Hero Accueil */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
+              <Globe className="w-5 h-5 text-amber-400" />
+              <h3 className="font-bold text-white text-base">Bannière Principale (Page d'Accueil)</h3>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1">Titre Principal (Hero)</label>
+                <input
+                  type="text"
+                  value={settings.heroTitle}
+                  onChange={e => updateAndPersist({ heroTitle: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 mb-1">Sous-titre d'accroche</label>
+                <textarea
+                  rows={2}
+                  value={settings.heroSubtitle}
+                  onChange={e => updateAndPersist({ heroSubtitle: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white"
+                />
+              </div>
+              <ImageUploadInput
+                label="Image d'arrière-plan de la bannière (Hero)"
+                value={settings.heroBgImage || ''}
+                onChange={val => updateAndPersist({ heroBgImage: val })}
+                placeholder="https://images.unsplash.com/... ou téléversez une photo"
+                helperText="Importez une image depuis votre appareil ou renseignez une URL."
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* 6. Codes Promo & Réductions Panier (Revue intégrale + Max par Compte + Suppression directe) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 lg:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <Tag className="w-5 h-5 text-[#FF6600]" />
+              <div>
+                <h3 className="font-bold text-white text-base">Codes Promo & Réductions Panier</h3>
+                <p className="text-xs text-slate-400">
+                  Créez, modifiez ou supprimez vos codes promo avec gestion distincte du quota global et du quota d'utilisation par compte client.
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-3 py-1 rounded-full font-bold">
+              {(settings.promoCodes || []).length} code{(settings.promoCodes || []).length > 1 ? 's' : ''} configuré{(settings.promoCodes || []).length > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {/* Formulaire de Création / Édition d'un Code Promo */}
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-extrabold uppercase tracking-wider text-orange-400">
+                {editingPromoCode ? `✏️ Modifier le code promo : ${editingPromoCode}` : '➕ Créer un nouveau code promo'}
+              </span>
+              {editingPromoCode && (
+                <button
+                  type="button"
+                  onClick={resetPromoForm}
+                  className="text-xs text-slate-400 hover:text-white underline cursor-pointer"
+                >
+                  Annuler la modification
+                </button>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 items-end">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Code Promo *</label>
+                <input
+                  type="text"
+                  placeholder="Ex: DAKAR10"
+                  value={newPromoCode}
+                  onChange={e => setNewPromoCode(e.target.value.toUpperCase())}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono uppercase focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Remise (%) *</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="90"
+                  value={newPromoPercent}
+                  onChange={e => setNewPromoPercent(Number(e.target.value))}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Min. Panier (FCFA)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="5000"
+                  value={newPromoMinOrder}
+                  onChange={e => setNewPromoMinOrder(Number(e.target.value))}
+                  placeholder="0 = Aucun min"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1" title="Nombre total d'utilisations autorisées tous clients confondus (0 = illimité)">
+                  Utilisations Max (0 = illimité)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={newPromoMaxUsage}
+                  onChange={e => setNewPromoMaxUsage(Math.max(0, Number(e.target.value)))}
+                  placeholder="0 = Illimité"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-emerald-400 mb-1 flex items-center gap-1" title="Nombre maximum d'utilisations autorisées pour un même compte client (0 = illimité)">
+                  <Users className="w-3 h-3" /> Max / Compte (0 = illimité)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={newPromoMaxPerAccount}
+                  onChange={e => setNewPromoMaxPerAccount(Math.max(0, Number(e.target.value)))}
+                  placeholder="Ex: 1 par compte"
+                  className="w-full bg-slate-900 border border-emerald-700/60 rounded-lg px-3 py-2 text-xs text-emerald-300 font-mono focus:border-emerald-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Expiration (Optionnel)</label>
+                <input
+                  type="date"
+                  value={newPromoExpires}
+                  onChange={e => setNewPromoExpires(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-center pt-1">
+              <div className="sm:col-span-3">
+                <input
+                  type="text"
+                  placeholder="Description commerciale (ex: Remise fidélité 10% sur commande MRO)"
+                  value={newPromoDesc}
+                  onChange={e => setNewPromoDesc(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:border-[#FF6600] outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleSavePromoCode}
+                className="w-full bg-[#FF6600] hover:bg-[#e65c00] text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md"
+              >
+                <Plus className="w-4 h-4" />
+                {editingPromoCode ? 'Mettre à jour le Code' : 'Ajouter le Code Promo'}
               </button>
             </div>
           </div>
 
-          {promoMsg && (
-            <div className="p-3 bg-emerald-950/60 border border-emerald-800/80 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" />
-              <span>{promoMsg}</span>
-            </div>
-          )}
-        </form>
-
-        {/* Tableau des codes promo existants */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px] tracking-wider font-bold">
-                <th className="py-3 px-3">Code</th>
-                <th className="py-3 px-3">Réduction</th>
-                <th className="py-3 px-3">Utilisations (Réel / Max)</th>
-                <th className="py-3 px-3">Validité</th>
-                <th className="py-3 px-3">Min. Commande</th>
-                <th className="py-3 px-3">Statut</th>
-                <th className="py-3 px-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-900 text-slate-300">
-              {promoCodes.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-500">
-                    Aucun code promo créé pour le moment.
-                  </td>
-                </tr>
-              ) : (
-                promoCodes.map((p) => {
-                  const isExpired = p.expiryDate ? new Date(p.expiryDate) < new Date(new Date().toISOString().split('T')[0]) : false;
-                  const isLimitReached = p.maxUses && p.maxUses > 0 ? p.usedCount >= p.maxUses : false;
-
-                  return (
-                    <tr key={p.id} className="hover:bg-slate-900/50 transition-colors">
-                      <td className="py-3 px-3 font-mono font-bold text-orange-400">
-                        {p.code}
-                      </td>
-                      <td className="py-3 px-3 font-bold text-white">
-                        {p.discountType === 'percent' ? `-${p.discountValue}%` : `-${p.discountValue.toLocaleString('fr-FR')} FCFA`}
-                      </td>
-                      <td className="py-3 px-3">
-                        <span className="font-mono text-slate-200 font-bold">{p.usedCount}</span>
-                        <span className="text-slate-500 text-[10px]"> / {p.maxUses && p.maxUses > 0 ? `${p.maxUses} max` : 'Illimité'}</span>
-                        {isLimitReached && (
-                          <span className="ml-2 text-[10px] text-amber-400 font-bold bg-amber-950/60 px-1.5 py-0.5 rounded">Plein</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-[11px] text-slate-400">
-                        {p.expiryDate ? (
-                          <span className={isExpired ? 'text-red-400 font-bold' : 'text-slate-300'}>
-                            Jusqu'au {p.expiryDate} {isExpired ? '(Expiré)' : ''}
+          {/* Liste des Codes Promo Actuels */}
+          <div className="space-y-2.5">
+            {(settings.promoCodes || []).length === 0 ? (
+              <div className="p-6 bg-slate-950/60 border border-dashed border-slate-800 rounded-xl text-center">
+                <p className="text-xs text-slate-500 italic">
+                  Aucun code promo configuré. Utilisez le formulaire ci-dessus pour créer un code de réduction.
+                </p>
+              </div>
+            ) : (
+              (settings.promoCodes || []).map(promo => {
+                const accountCount = Object.keys(promo.usageByAccount || {}).length;
+                return (
+                  <div
+                    key={promo.code}
+                    className="flex flex-wrap items-center justify-between gap-4 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-xl px-4 py-3 transition-all"
+                  >
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="px-3 py-1 rounded-lg bg-[#FF6600]/15 border border-[#FF6600]/40 text-[#FF6600] font-mono font-black text-sm">
+                        {promo.code}
+                      </span>
+                      <span className="text-sm font-bold text-emerald-400 font-mono">
+                        -{promo.discountPercent}%
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                        promo.active
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                          : 'bg-slate-800 text-slate-400'
+                      }`}>
+                        {promo.active ? 'Actif' : 'Inactif'}
+                      </span>
+                      <div className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span>{promo.description}</span>
+                        {promo.minOrderAmount ? (
+                          <span className="text-slate-300 font-mono">
+                            • Min: {promo.minOrderAmount.toLocaleString('fr-FR')} FCFA
                           </span>
-                        ) : (
-                          <span className="text-emerald-400">Illimitée</span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 font-mono text-[11px]">
-                        {p.minOrderAmount && p.minOrderAmount > 0 ? `${p.minOrderAmount.toLocaleString('fr-FR')} F` : '0 F'}
-                      </td>
-                      <td className="py-3 px-3">
-                        <button
-                          type="button"
-                          onClick={() => handleTogglePromoStatus(p)}
-                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition-all cursor-pointer ${
-                            p.isActive && !isExpired && !isLimitReached
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-slate-800 text-slate-400 border border-slate-700'
-                          }`}
-                        >
-                          {p.isActive && !isExpired && !isLimitReached ? 'Actif' : 'Désactivé'}
-                        </button>
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleDeletePromo(p.id)}
-                          className="p-1.5 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
-                          title="Supprimer"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                        ) : null}
+                        {promo.expiresAt ? (
+                          <span className="text-amber-400 font-mono">
+                            • Exp: {new Date(promo.expiresAt).toLocaleDateString('fr-FR')}
+                          </span>
+                        ) : null}
+                        <span className="text-slate-300 font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800">
+                          Total : {promo.usageCount || 0} / {promo.maxUsage && promo.maxUsage > 0 ? promo.maxUsage : '∞'}
+                        </span>
+                        <span className="text-emerald-300 font-mono bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/50">
+                          Par compte : {promo.maxUsagePerAccount && promo.maxUsagePerAccount > 0 ? `${promo.maxUsagePerAccount} max` : 'Illimité'}
+                          {accountCount > 0 ? ` (${accountCount} compte${accountCount > 1 ? 's' : ''})` : ''}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleEditPromo(promo)}
+                        className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-200 hover:bg-slate-700 flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Modifier ce code promo"
+                      >
+                        <Edit className="w-3.5 h-3.5 text-blue-400" />
+                        Modifier
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleTogglePromo(promo.code)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer ${
+                          promo.active
+                            ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            : 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-600/30'
+                        }`}
+                      >
+                        {promo.active ? <XCircle className="w-3.5 h-3.5" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                        {promo.active ? 'Désactiver' : 'Activer'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeletePromo(promo.code)}
+                        className="px-2.5 py-1.5 text-rose-400 bg-rose-500/10 hover:bg-rose-600 hover:text-white border border-rose-500/20 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Supprimer définitivement ce code promo"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        Supprimer
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        {/* 7. Processeur de Paiement PayDunya (API Live & Test, IPN, Méthodes multi-pays) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 lg:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <CreditCard className="w-5 h-5 text-[#FF6600]" />
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-white text-base">Processeur de Paiement PayDunya (Payin / Payout & IPN)</h3>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                    settings.paydunya?.enabled
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}>
+                    {settings.paydunya?.enabled ? 'Statut : Activée' : 'Désactivée'}
+                  </span>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                    settings.paydunya?.mode === 'live'
+                      ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                      : 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+                  }`}>
+                    Mode : {settings.paydunya?.mode === 'live' ? 'PRODUCTION (LIVE)' : 'TEST (SANDBOX)'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Gérez ou modifiez vos clés API PayDunya (Production & Test), le mode d'encaissement et l'adresse de notification instantanée (IPN).
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowPaydunyaSecrets(prev => !prev)}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-700 cursor-pointer"
+              >
+                {showPaydunyaSecrets ? <EyeOff className="w-3.5 h-3.5 text-orange-400" /> : <Eye className="w-3.5 h-3.5 text-orange-400" />}
+                <span>{showPaydunyaSecrets ? 'Masquer les clés' : 'Afficher les clés'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  updatePaydunya({ enabled: !settings.paydunya?.enabled });
+                  onNotify(`PayDunya ${!settings.paydunya?.enabled ? 'activé' : 'désactivé'}.`);
+                }}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
+                  settings.paydunya?.enabled
+                    ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    : 'bg-emerald-600 text-white hover:bg-emerald-500'
+                }`}
+              >
+                {settings.paydunya?.enabled ? 'Désactiver PayDunya' : 'Activer PayDunya'}
+              </button>
+            </div>
+          </div>
+
+          {/* Sélecteur de Mode (Production Réel vs Test Sandbox) & Clé Principale */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                Environnement Actif PayDunya
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    updatePaydunya({ mode: 'live' });
+                    onNotify('PayDunya basculé en mode PRODUCTION (Réel).');
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-black border transition-all cursor-pointer ${
+                    settings.paydunya?.mode === 'live'
+                      ? 'bg-[#FF6600] text-white border-[#FF6600] shadow-md'
+                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                  }`}
+                >
+                  🟢 PRODUCTION (Réel)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    updatePaydunya({ mode: 'test' });
+                    onNotify('PayDunya basculé en mode TEST (Sandbox).');
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-black border transition-all cursor-pointer ${
+                    settings.paydunya?.mode === 'test'
+                      ? 'bg-blue-600 text-white border-blue-500 shadow-md'
+                      : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                  }`}
+                >
+                  🧪 TEST (Sandbox)
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Services actifs : <strong className="text-slate-300">Payin / Payout • PER Activé • Envoi Facture Activé</strong>
+              </p>
+            </div>
+
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2 lg:col-span-2">
+              <label className="block text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Key className="w-3.5 h-3.5" />
+                Clé Principale (Master Key PayDunya)
+              </label>
+              <input
+                type={showPaydunyaSecrets ? 'text' : 'password'}
+                value={settings.paydunya?.masterKey || ''}
+                onChange={e => updatePaydunya({ masterKey: e.target.value })}
+                placeholder="Ex: ealL1IWV-8gd7-JaP4-PUiw-yCKMqvb5LIre"
+                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3.5 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+              />
+              <p className="text-[11px] text-slate-500">
+                Utilisée pour authentifier l'application et vérifier la signature cryptographique SHA-512 des notifications IPN.
+              </p>
+            </div>
+          </div>
+
+          {/* Clés API de Production & Clés API de Test */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Clés de Production (LIVE) */}
+            <div className="bg-slate-950 border border-orange-500/30 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-orange-400">
+                  Clés API de Production (Mode Réel)
+                </span>
+                {settings.paydunya?.mode === 'live' && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
+                    Actuellement utilisé
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Clé Publique (Live Public Key)</label>
+                <input
+                  type={showPaydunyaSecrets ? 'text' : 'password'}
+                  value={settings.paydunya?.livePublicKey || ''}
+                  onChange={e => updatePaydunya({ livePublicKey: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Clé Privée (Live Private Key)</label>
+                <input
+                  type={showPaydunyaSecrets ? 'text' : 'password'}
+                  value={settings.paydunya?.livePrivateKey || ''}
+                  onChange={e => updatePaydunya({ livePrivateKey: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Token (Live Token)</label>
+                <input
+                  type={showPaydunyaSecrets ? 'text' : 'password'}
+                  value={settings.paydunya?.liveToken || ''}
+                  onChange={e => updatePaydunya({ liveToken: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Clés de Test (SANDBOX) */}
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-blue-400">
+                  Clés API de Test (Mode Sandbox)
+                </span>
+                {settings.paydunya?.mode === 'test' && (
+                  <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 text-[10px] font-bold">
+                    Actuellement utilisé
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Clé Publique (Test Public Key)</label>
+                <input
+                  type={showPaydunyaSecrets ? 'text' : 'password'}
+                  value={settings.paydunya?.testPublicKey || ''}
+                  onChange={e => updatePaydunya({ testPublicKey: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Clé Privée (Test Private Key)</label>
+                <input
+                  type={showPaydunyaSecrets ? 'text' : 'password'}
+                  value={settings.paydunya?.testPrivateKey || ''}
+                  onChange={e => updatePaydunya({ testPrivateKey: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 mb-1">Token (Test Token)</label>
+                <input
+                  type={showPaydunyaSecrets ? 'text' : 'password'}
+                  value={settings.paydunya?.testToken || ''}
+                  onChange={e => updatePaydunya({ testToken: e.target.value })}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono focus:border-[#FF6600] outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Endpoint IPN (Instant Payment Notification) & Méthodes Autorisées */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-slate-950 border border-emerald-500/30 rounded-xl p-4 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-emerald-400">
+                  Instant Payment Notification (Endpoint IPN)
+                </span>
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                  Recommandé & Prêt
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Copiez cette URL et collez-la dans votre tableau de bord PayDunya (champ <strong>Endpoint IPN</strong>) pour que votre site soit notifié automatiquement dès qu'un client confirme son paiement :
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={ipnEndpointUrl}
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-emerald-300 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(ipnEndpointUrl);
+                    setCopiedIpn(true);
+                    setTimeout(() => setCopiedIpn(false), 3000);
+                    onNotify('URL Endpoint IPN copiée dans le presse-papiers.');
+                  }}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                >
+                  {copiedIpn ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedIpn ? 'Copié !' : 'Copier URL IPN'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+              <span className="text-xs font-black uppercase tracking-wider text-white block">
+                Canaux & Pays Autorisés sur le Compte PayDunya
+              </span>
+              <div className="flex flex-wrap gap-1.5 text-[10px]">
+                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-orange-300 font-bold">
+                  💳 Carte Bancaire (CARD)
+                </span>
+                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-200">
+                  🇸🇳 Sénégal : Wave, Orange Money, Free Money, Expresso, Djamo
+                </span>
+                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-200">
+                  🇨🇮 Côte d'Ivoire : OM CI, MTN CI, Moov CI, Wave CI, Djamo CI
+                </span>
+                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-200">
+                  🇧🇯 Bénin : MTN, Moov, Celtiis • 🇧🇫 Burkina : OM, Moov
+                </span>
+                <span className="px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-200">
+                  🇲🇱 Mali : OM Mali • 🇹🇬 Togo : T-Money, Moov • 🇨🇲 Cameroun : MTN
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+    </form>
   );
 };

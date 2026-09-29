@@ -31,9 +31,30 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "name": { "type": "string" }
+        "name": { "type": "string" },
+        "agentWarehouseId": { "type": "string" }
       },
       "required": ["id", "name"]
+    },
+    "AgentWarehouse": {
+      "title": "Agent Warehouse",
+      "description": "Freight forwarder or transit agent warehouse with coordinates, address, and optional agent code.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "identificationMode": { "type": "string", "enum": ["agent_code", "standard_address"] },
+        "hasAgentCode": { "type": "boolean" },
+        "agentCode": { "type": "string" },
+        "recipientFirstName": { "type": "string" },
+        "recipientLastName": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "country": { "type": "string" },
+        "isDefault": { "type": "boolean" }
+      },
+      "required": ["id", "name", "identificationMode"]
     },
     "SiteSettings": {
       "title": "Site Settings",
@@ -57,12 +78,30 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "total", "status", "createdAt"]
+    },
+    "SupplierPortalToken": {
+      "title": "Supplier Portal Token",
+      "description": "One-time secure supplier portal link for purchase order response and payment link submission.",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "poRef": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "used", "revoked"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["token", "poRef", "supplierId", "status", "createdAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
       "description": "User profile documents."
+    },
+    "/users/{userId}/cart/{cartItemId}": {
+      "schema": "Product",
+      "description": "User shopping cart items."
     },
     "/products/{productId}": {
       "schema": "Product",
@@ -72,11 +111,19 @@
       "schema": "Supplier",
       "description": "Supplier information."
     },
+    "/agent_warehouses/{warehouseId}": {
+      "schema": "AgentWarehouse",
+      "description": "Agent warehouses and freight forwarder addresses."
+    },
     "/orders/{orderId}": {
       "schema": "Order",
       "description": "Global orders collection."
     },
-    "/settings/config": {
+    "/supplier_tokens/{tokenId}": {
+      "schema": "SupplierPortalToken",
+      "description": "Single-use supplier purchase order response tokens."
+    },
+    "/settings/{settingId}": {
       "schema": "SiteSettings",
       "description": "Global site configuration settings."
     }

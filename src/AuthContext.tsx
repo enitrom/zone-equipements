@@ -61,10 +61,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           // Get profile
           const userRef = doc(db, 'users', firebaseUser.uid);
-          const userDoc = await getDoc(userRef).catch(err => {
-            handleFirestoreError(err, OperationType.GET, `users/${firebaseUser.uid}`);
-            throw err;
-          });
+          const userDoc = await getDoc(userRef);
           
           if (userDoc.exists()) {
             const data = userDoc.data();
@@ -83,14 +80,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               role: shouldBeAdmin ? 'admin' : 'client',
               createdAt: new Date().toISOString(),
             };
-            await setDoc(userRef, newProfile).catch(err => {
-              handleFirestoreError(err, OperationType.WRITE, `users/${firebaseUser.uid}`);
-              throw err;
-            });
+            await setDoc(userRef, newProfile).catch(() => {});
             setProfile(newProfile);
           }
         } catch (err) {
-          console.warn("Profil Firestore indisponible, utilisation du profil direct de session.", err);
+          console.warn("Profil Firestore indisponible, utilisation du profil direct de session.");
           setProfile({
             uid: firebaseUser.uid,
             email: firebaseUser.email || '',

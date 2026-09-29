@@ -1,11 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300..800;1,300..800&family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Inter:wght@400;700;800&family=Space+Grotesk:wght@500;700;800&display=swap');
 @import "tailwindcss";
 
-/* Import Current Child Theme CSS Modules directly so preview matches exactly */
-@import "../zone-equipements-child/assets/css/main.css";
-@import "../zone-equipements-child/assets/css/header.css";
-@import "../zone-equipements-child/assets/css/mobile.css";
-@import "../zone-equipements-child/assets/css/products.css";
+/* Import Core CSS Modules directly from src/assets/css */
+@import "./assets/css/main.css";
+@import "./assets/css/header.css";
+@import "./assets/css/mobile.css";
+@import "./assets/css/products.css";
 
 @theme {
   --font-sans: "Open Sans", ui-sans-serif, system-ui, sans-serif;
@@ -14,21 +14,41 @@
   --font-space-grotesk: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
 }
 
+html, body {
+  overflow-x: hidden !important;
+  max-width: 100vw !important;
+}
+
+#root {
+  overflow-x: clip !important;
+  max-width: 100vw !important;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 /* --- Mega Folder Dropdown Catalogue Overrides --- */
 .ze-cat-dropdown-wrapper {
   position: relative !important;
+  padding-bottom: 8px !important;
+  margin-bottom: -8px !important;
 }
 
 .ze-cat-dropdown-btn {
   background-color: #003366 !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  border-radius: 6px !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 8px !important;
   color: #ffffff !important;
   font-weight: 800 !important;
-  font-size: 0.85rem !important;
+  font-size: 0.78rem !important;
   text-transform: uppercase !important;
   letter-spacing: 0.02em !important;
-  padding: 10px 18px !important;
+  padding: 8px 13px !important;
   cursor: pointer !important;
   display: inline-flex !important;
   align-items: center !important;
@@ -45,15 +65,26 @@
   position: absolute !important;
   top: 100% !important;
   left: 0 !important;
-  width: 850px !important;
+  width: min(940px, 92vw) !important;
   background-color: #ffffff !important;
   border: 1px solid #e2e8f0 !important;
-  border-radius: 12px !important;
-  box-shadow: 0 15px 40px rgba(0, 12, 23, 0.15) !important;
-  padding: 30px !important;
-  margin-top: 15px !important;
+  border-radius: 14px !important;
+  box-shadow: 0 20px 45px rgba(0, 20, 45, 0.16) !important;
+  padding: 24px 28px !important;
+  margin-top: 6px !important;
   display: none !important;
   z-index: 99999 !important;
+}
+
+/* Pont invisible anti-fermeture entre le bouton Catalogue et le menu déroulant */
+.ze-cat-mega-menu::before {
+  content: "" !important;
+  position: absolute !important;
+  top: -22px !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 24px !important;
+  background: transparent !important;
 }
 
 .ze-cat-dropdown-wrapper:hover .ze-cat-mega-menu,
@@ -64,7 +95,7 @@
 .ze-mega-grid {
   display: grid !important;
   grid-template-columns: repeat(4, 1fr) !important;
-  gap: 25px !important;
+  gap: 20px 24px !important;
 }
 
 .ze-mega-col h4 {
@@ -86,16 +117,18 @@
 }
 
 .ze-mega-col ul li {
-  margin-bottom: 8px !important;
+  margin-bottom: 7px !important;
   padding: 0 !important;
 }
 
 .ze-mega-col ul li a {
-  color: #445566 !important;
+  color: #334155 !important;
   text-decoration: none !important;
-  font-size: 0.82rem !important;
+  font-size: 0.84rem !important;
   font-weight: 600 !important;
-  transition: all 0.15s ease !important;
+  padding: 3px 6px !important;
+  border-radius: 6px !important;
+  transition: all 0.18s ease !important;
   display: flex !important;
   align-items: center !important;
   gap: 8px !important;
@@ -103,6 +136,7 @@
 
 .ze-mega-col ul li a:hover {
   color: #FF6600 !important;
+  background-color: #fff7ed !important;
   transform: translateX(3px) !important;
 }
 

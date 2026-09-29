@@ -204,6 +204,8 @@
 /* --- Mega Folder Dropdown Catalogue --- */
 .ze-cat-dropdown-wrapper {
     position: relative !important;
+    padding-bottom: 10px !important;
+    margin-bottom: -10px !important;
 }
 
 .ze-cat-dropdown-btn {
@@ -238,9 +240,19 @@
     border-radius: 12px !important;
     box-shadow: 0 15px 40px rgba(0, 12, 23, 0.2) !important;
     padding: 30px !important;
-    margin-top: 15px !important;
+    margin-top: 6px !important;
     display: none !important;
     z-index: 99999 !important;
+}
+
+.ze-cat-mega-menu::before {
+    content: "" !important;
+    position: absolute !important;
+    top: -22px !important;
+    left: 0 !important;
+    right: 0 !important;
+    height: 24px !important;
+    background: transparent !important;
 }
 
 .ze-cat-dropdown-wrapper:hover .ze-cat-mega-menu,
@@ -304,7 +316,8 @@
 /* --- Search Engine Styling --- */
 .ze-header-search {
     flex-grow: 1 !important;
-    max-width: 50% !important;
+    max-width: 58% !important;
+    min-width: 320px !important;
 }
 
 .ze-search-form {

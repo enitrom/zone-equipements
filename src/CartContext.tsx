@@ -7,15 +7,28 @@ export interface CartItem {
   id?: string;
   productId: number;
   name: string;
+  variantId?: string;
+  variantName?: string;
   price: number; // Prix équipement hors transport
+  costPrice?: number; // Coût de revient XOF (achat + frais entrepôt)
+  supplierPrice?: number; // Prix d'achat fournisseur dans la devise d'origine
+  supplierCurrency?: 'USD' | 'EUR' | 'CNY' | 'XOF';
+  supplierId?: string;
+  supplierName?: string;
+  brand?: string;
+  origin?: string;
   quantity: number;
   img: string;
   weightKg?: number;
-  shippingMethod?: 'none' | 'air' | 'sea'; // Choix du client
-  freightCost?: number; // Montant du fret unitaire calculé
+  inStock?: boolean;
+  availabilityMode?: 'stock' | 'sourcing';
+  sourcePlatform?: string;
+  supplierUrl?: string;
+  shippingMethod?: 'none' | 'air' | 'sea'; // Choix du client ('none' pour stock local disponible immédiatement)
+  freightCost?: number; // Montant du fret unitaire calculé (0 pour stock local)
   depositPercentage?: number;
   showDeposit?: boolean;
-  agentCode?: string; // Interne : DKR628+AIR ou DKR628+SEA
+  agentCode?: string; // Interne : DKR628+AIR, DKR628+SEA ou STOCK-LOCAL-DKR
 }
 
 interface CartContextType {
@@ -63,13 +76,19 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const q = collection(db, 'users', user.uid, 'cart');
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const cartItems = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as CartItem));
-      setItems(cartItems);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('ze_guest_cart_v5', JSON.stringify(cartItems));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const cartItems = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as CartItem));
+        setItems(cartItems);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('ze_guest_cart_v5', JSON.stringify(cartItems));
+        }
+      },
+      (error) => {
+        console.warn('Synchronisation panier Firestore indisponible, utilisation du stockage local :', error.message || error);
       }
-    });
+    );
 
     return () => unsubscribe();
   }, [user]);
@@ -79,6 +98,16 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (typeof window !== 'undefined') {
       localStorage.setItem('ze_guest_cart_v5', JSON.stringify(newItems));
     }
+  };
+
+  const cleanCartPayload = (item: Record<string, any>) => {
+    const cleaned: Record<string, any> = {};
+    for (const [k, v] of Object.entries(item)) {
+      if (v !== undefined) {
+        cleaned[k] = v;
+      }
+    }
+    return cleaned;
   };
 
   const addItem = async (newItem: CartItem) => {
@@ -92,24 +121,39 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     if (user) {
-      const existing = items.find(item => item.productId === newItem.productId && item.shippingMethod === itemWithAgent.shippingMethod);
-      if (existing && existing.id) {
-        await updateDoc(doc(db, 'users', user.uid, 'cart', existing.id), {
-          quantity: existing.quantity + newItem.quantity
-        });
-      } else {
-        await addDoc(collection(db, 'users', user.uid, 'cart'), itemWithAgent);
+      const existing = items.find(
+        item =>
+          item.productId === newItem.productId &&
+          item.name === newItem.name &&
+          item.shippingMethod === itemWithAgent.shippingMethod
+      );
+      try {
+        if (existing && existing.id && !existing.id.startsWith('guest-')) {
+          await updateDoc(doc(db, 'users', user.uid, 'cart', existing.id), {
+            quantity: existing.quantity + newItem.quantity
+          });
+        } else {
+          await addDoc(collection(db, 'users', user.uid, 'cart'), cleanCartPayload(itemWithAgent));
+        }
+        return;
+      } catch (err) {
+        console.warn('Repli sur le panier local :', err);
       }
+    }
+
+    // Guest cart or fallback
+    const existingIdx = items.findIndex(
+      item =>
+        item.productId === newItem.productId &&
+        item.name === newItem.name &&
+        item.shippingMethod === itemWithAgent.shippingMethod
+    );
+    if (existingIdx !== -1) {
+      const updated = [...items];
+      updated[existingIdx].quantity += newItem.quantity;
+      saveToLocal(updated);
     } else {
-      // Guest cart
-      const existingIdx = items.findIndex(item => item.productId === newItem.productId && item.shippingMethod === itemWithAgent.shippingMethod);
-      if (existingIdx !== -1) {
-        const updated = [...items];
-        updated[existingIdx].quantity += newItem.quantity;
-        saveToLocal(updated);
-      } else {
-        saveToLocal([...items, { ...itemWithAgent, id: `guest-${Date.now()}-${Math.random().toString(36).substr(2, 4)}` }]);
-      }
+      saveToLocal([...items, { ...itemWithAgent, id: `guest-${Date.now()}-${Math.random().toString(36).substr(2, 4)}` }]);
     }
   };
 
@@ -118,46 +162,66 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await removeItem(id);
       return;
     }
-    if (user) {
-      await updateDoc(doc(db, 'users', user.uid, 'cart', id), { quantity });
-    } else {
-      const updated = items.map(it => it.id === id ? { ...it, quantity } : it);
-      saveToLocal(updated);
+    if (user && !id.startsWith('guest-')) {
+      try {
+        await updateDoc(doc(db, 'users', user.uid, 'cart', id), { quantity });
+        return;
+      } catch (err) {
+        console.warn('Repli mise à jour quantité panier local :', err);
+      }
     }
+    const updated = items.map(it => it.id === id ? { ...it, quantity } : it);
+    saveToLocal(updated);
   };
 
   const updateItemFreight = async (id: string, method: 'none' | 'air' | 'sea', cost: number) => {
     const computedAgentCode = method === 'air' ? 'DKR628+AIR' : method === 'sea' ? 'DKR628+SEA' : '';
-    if (user) {
-      await updateDoc(doc(db, 'users', user.uid, 'cart', id), {
-        shippingMethod: method,
-        freightCost: cost,
-        agentCode: computedAgentCode
-      });
-    } else {
-      const updated = items.map(it => it.id === id ? {
-        ...it,
-        shippingMethod: method,
-        freightCost: cost,
-        agentCode: computedAgentCode
-      } : it);
-      saveToLocal(updated);
+    if (user && !id.startsWith('guest-')) {
+      try {
+        await updateDoc(doc(db, 'users', user.uid, 'cart', id), {
+          shippingMethod: method,
+          freightCost: cost,
+          agentCode: computedAgentCode
+        });
+        return;
+      } catch (err) {
+        console.warn('Repli mise à jour fret panier local :', err);
+      }
     }
+    const updated = items.map(it => it.id === id ? {
+      ...it,
+      shippingMethod: method,
+      freightCost: cost,
+      agentCode: computedAgentCode
+    } : it);
+    saveToLocal(updated);
   };
 
   const removeItem = async (id: string) => {
-    if (user) {
-      await deleteDoc(doc(db, 'users', user.uid, 'cart', id));
-    } else {
-      const updated = items.filter(it => it.id !== id);
-      saveToLocal(updated);
+    if (user && !id.startsWith('guest-')) {
+      try {
+        await deleteDoc(doc(db, 'users', user.uid, 'cart', id));
+        return;
+      } catch (err) {
+        console.warn('Repli suppression panier local :', err);
+      }
     }
+    const updated = items.filter(it => it.id !== id);
+    saveToLocal(updated);
   };
 
   const clearCart = async () => {
     if (user) {
-      const promises = items.map(item => item.id ? deleteDoc(doc(db, 'users', user.uid, 'cart', item.id)) : Promise.resolve());
-      await Promise.all(promises);
+      try {
+        const promises = items.map(item =>
+          item.id && !item.id.startsWith('guest-')
+            ? deleteDoc(doc(db, 'users', user.uid, 'cart', item.id))
+            : Promise.resolve()
+        );
+        await Promise.all(promises);
+      } catch (err) {
+        console.warn('Repli vidage panier local :', err);
+      }
     }
     saveToLocal([]);
   };

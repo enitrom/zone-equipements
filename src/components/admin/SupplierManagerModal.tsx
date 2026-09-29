@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Truck, DollarSign, Globe, Phone, Mail, Shield, Check, Building2, Package } from 'lucide-react';
-import { Supplier, catalogService } from '../../services/catalogService';
+import { X, Truck, DollarSign, Globe, Phone, Mail, Shield, Check, Building2, Package, Warehouse } from 'lucide-react';
+import { Supplier, AgentWarehouse, catalogService, formatWarehouseConsigneeLine, formatWarehouseFullAddress } from '../../services/catalogService';
 import { ConfirmModal } from './ConfirmModal';
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   onSave?: (supplier: Partial<Supplier>) => void;
   onSupplierSaved?: () => void;
   onDelete?: (id: string, name: string) => void;
+  onOpenWarehouseManager?: () => void;
 }
 
 export const SupplierManagerModal: React.FC<Props> = ({
@@ -18,8 +19,10 @@ export const SupplierManagerModal: React.FC<Props> = ({
   supplierToEdit,
   onSave,
   onSupplierSaved,
-  onDelete
+  onDelete,
+  onOpenWarehouseManager
 }) => {
+  const [warehouses, setWarehouses] = useState<AgentWarehouse[]>([]);
   const [form, setForm] = useState<Partial<Supplier>>({
     name: '',
     platform: 'Alibaba',
@@ -35,12 +38,20 @@ export const SupplierManagerModal: React.FC<Props> = ({
     warehouseDeliveryFeeUSD: 25,
     warehouseDeliveryMinUSD: 15,
     warehouseDeliveryMaxUSD: 45,
-    notes: ''
+    notes: '',
+    agentWarehouseId: ''
   });
 
   useEffect(() => {
+    setWarehouses(catalogService.getAgentWarehouses());
+    const handleWhUpdate = () => setWarehouses(catalogService.getAgentWarehouses());
+    window.addEventListener('agent_warehouses_updated', handleWhUpdate);
+    return () => window.removeEventListener('agent_warehouses_updated', handleWhUpdate);
+  }, [isOpen]);
+
+  useEffect(() => {
     if (supplierToEdit) {
-      setForm({ ...supplierToEdit });
+      setForm({ ...supplierToEdit, agentWarehouseId: supplierToEdit.agentWarehouseId || '' });
     } else {
       setForm({
         name: '',
@@ -57,7 +68,8 @@ export const SupplierManagerModal: React.FC<Props> = ({
         warehouseDeliveryFeeUSD: 25,
         warehouseDeliveryMinUSD: 15,
         warehouseDeliveryMaxUSD: 45,
-        notes: ''
+        notes: '',
+        agentWarehouseId: ''
       });
     }
   }, [supplierToEdit, isOpen]);
@@ -66,18 +78,32 @@ export const SupplierManagerModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
+  const defaultWh = warehouses.find(w => w.isDefault) || warehouses[0];
+  const selectedWh = form.agentWarehouseId
+    ? warehouses.find(w => w.id === form.agentWarehouseId) || defaultWh
+    : defaultWh;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name?.trim()) {
       alert("Le nom du fournisseur est obligatoire.");
       return;
     }
+    const days = Number(form.avgLeadTimeDays) || parseInt(String(form.leadTimeAvg || '14'), 10) || 14;
     const cleanSupplier: Partial<Supplier> = {
       ...form,
       name: form.name.trim(),
+      avgLeadTimeDays: days,
+      leadTimeAvg: `${days} jours`,
       circuit: form.isAutomatedCircuit ? 'automatisé' : 'manuel',
+      isAutomatedCircuit: Boolean(form.isAutomatedCircuit),
+      communicationChannel: form.communicationChannel || 'whatsapp',
       shippingMinMaxUSD: form.shippingMinMaxUSD || form.shippingPriceRange || '$6 - $8 / kg',
-      leadTimeAvg: form.leadTimeAvg || `${form.avgLeadTimeDays || 14} jours`
+      shippingPriceRange: form.shippingPriceRange || form.shippingMinMaxUSD || '$6 - $8 / kg',
+      paymentTerms: (form.paymentTerms || '30% acompte, 70% avant expédition').trim(),
+      contactPhone: (form.contactPhone || '').trim(),
+      contactEmail: (form.contactEmail || '').trim(),
+      agentWarehouseId: form.agentWarehouseId ? form.agentWarehouseId : undefined
     };
 
     if (supplierToEdit) {
@@ -323,16 +349,47 @@ export const SupplierManagerModal: React.FC<Props> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                Code Agent Logistique Assigné
-              </label>
-              <input
-                type="text"
-                readOnly
-                value="DKR628+AIR (Aérien) / DKR628+SEA (Maritime)"
-                className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-orange-400 font-mono"
-              />
-              <span className="text-[10px] text-slate-500">Code automatique intégré sur chaque bon de commande envoyé</span>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                  <Warehouse className="w-3.5 h-3.5 text-[#FF6600]" />
+                  Entrepôt d'Agent Assigné
+                </label>
+                {onOpenWarehouseManager && (
+                  <button
+                    type="button"
+                    onClick={onOpenWarehouseManager}
+                    className="text-[10px] font-bold text-[#FF6600] hover:underline"
+                  >
+                    Gérer les entrepôts →
+                  </button>
+                )}
+              </div>
+              <select
+                value={form.agentWarehouseId || ''}
+                onChange={(e) => setForm({ ...form, agentWarehouseId: e.target.value })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+              >
+                <option value="">
+                  ★ Entrepôt par Défaut ({defaultWh ? `${defaultWh.name} — ${defaultWh.identificationMode === 'standard_address' ? [defaultWh.firstName, defaultWh.lastName].filter(Boolean).join(' ') : defaultWh.agentCode}` : 'Standard'})
+                </option>
+                {warehouses.map(wh => (
+                  <option key={wh.id} value={wh.id}>
+                    {wh.name} — {wh.identificationMode === 'standard_address'
+                      ? `Standard : ${[wh.firstName, wh.lastName].filter(Boolean).join(' ')} (${wh.city || wh.country || ''})`
+                      : `Code Agent : ${wh.agentCode} (${wh.city || wh.country || ''})`}
+                  </option>
+                ))}
+              </select>
+              {selectedWh && (
+                <div className="mt-1.5 p-2 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400">
+                  <div className="font-semibold text-orange-400">
+                    {selectedWh.identificationMode === 'standard_address' || !selectedWh.agentCode
+                      ? `Méthode Standard : ${formatWarehouseConsigneeLine(selectedWh)}`
+                      : `Code Agent : ${selectedWh.agentCode}+SEA / ${selectedWh.agentCode}+AIR`}
+                  </div>
+                  <div className="truncate">{formatWarehouseFullAddress(selectedWh)} • Tél : {selectedWh.phone}</div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -343,7 +400,7 @@ export const SupplierManagerModal: React.FC<Props> = ({
             </label>
             <textarea
               rows={3}
-              value={form.defaultMessageTemplate || "Bonjour, voici notre commande groupée Zone Équipements Sénégal. Veuillez appliquer le marquage de carton avec notre Code Agent obligatoire. Merci de nous transmettre le lien sécurisé pour règlement."}
+              value={form.defaultMessageTemplate || "Bonjour, voici notre commande groupée ZONE ÉQUIPEMENTS. Veuillez appliquer le marquage de carton avec notre Code Agent obligatoire. Merci de nous transmettre le lien sécurisé pour règlement."}
               onChange={(e) => setForm({ ...form, defaultMessageTemplate: e.target.value })}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-[#FF6600]"
             />

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Layers, Check, X, Image as ImageIcon, Sparkles, FolderTree, Tag, Globe, ArrowRight } from 'lucide-react';
+import { Plus, Edit2, Trash2, Layers, Check, X, Image as ImageIcon, Sparkles, FolderTree, Tag, Globe, ArrowRight, MessageSquareQuote, BookOpen, HelpCircle, Star } from 'lucide-react';
 import * as Icons from 'lucide-react';
-import { siteSettingsService, SectorItem, CategoryItem, BrandItem } from '../../services/siteSettingsService';
-import { handleImageError, resolveImageUrl, DEFAULT_SECTOR_IMAGE } from '../../constants';
+import { siteSettingsService, SectorItem, CategoryItem, BrandItem, TestimonialItem, ArticleItem, FaqItem } from '../../services/siteSettingsService';
+import { handleImageError, resolveImageUrl, DEFAULT_SECTOR_IMAGE, DEFAULT_PRODUCT_IMAGE } from '../../constants';
 import { ImageUploadInput } from '../ImageUploadInput';
 import { ConfirmModal } from './ConfirmModal';
 
@@ -11,11 +11,22 @@ interface Props {
 }
 
 export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
-  const [subTab, setSubTab] = useState<'categories' | 'sectors' | 'brands'>('sectors');
+  const [subTab, setSubTab] = useState<'categories' | 'sectors' | 'brands' | 'testimonials' | 'articles' | 'faqs'>(() => {
+    if (typeof window !== 'undefined') {
+      const sub = new URLSearchParams(window.location.search).get('sub');
+      if (sub === 'testimonials' || sub === 'articles' || sub === 'faqs' || sub === 'categories' || sub === 'brands') {
+        return sub;
+      }
+    }
+    return 'sectors';
+  });
   
   const [sectors, setSectors] = useState<SectorItem[]>(siteSettingsService.getSectors());
   const [categories, setCategories] = useState<CategoryItem[]>(siteSettingsService.getCategories());
   const [brands, setBrands] = useState<BrandItem[]>(siteSettingsService.getBrands());
+  const [testimonials, setTestimonials] = useState<TestimonialItem[]>(siteSettingsService.getTestimonials());
+  const [articles, setArticles] = useState<ArticleItem[]>(siteSettingsService.getArticles());
+  const [faqs, setFaqs] = useState<FaqItem[]>(siteSettingsService.getFaqs());
 
   // Confirm Modal state
   const [confirmModal, setConfirmModal] = useState<{
@@ -65,10 +76,56 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
     iconName: 'Shield'
   });
 
+  // Editing state for Testimonial
+  const [editingTestimonial, setEditingTestimonial] = useState<TestimonialItem | null>(null);
+  const [showTestimonialModal, setShowTestimonialModal] = useState(false);
+  const [testimonialForm, setTestimonialForm] = useState<{
+    name: string;
+    role: string;
+    text: string;
+    rating: number;
+  }>({
+    name: '',
+    role: '',
+    text: '',
+    rating: 5
+  });
+
+  // Editing state for Article
+  const [editingArticle, setEditingArticle] = useState<ArticleItem | null>(null);
+  const [showArticleModal, setShowArticleModal] = useState(false);
+  const [articleForm, setArticleForm] = useState<{
+    title: string;
+    category: string;
+    date: string;
+    readTime: string;
+    author: string;
+    img: string;
+    description: string;
+    content: string;
+  }>({
+    title: '',
+    category: 'Maintenance technique',
+    date: '',
+    readTime: '6 min de lecture',
+    author: 'Ingénierie & Sourcing ZONE ÉQUIPEMENTS',
+    img: 'https://images.unsplash.com/photo-1581092162384-8987c1d64718?w=800&auto=format&fit=crop&q=80',
+    description: '',
+    content: ''
+  });
+
+  // Editing state for FAQ
+  const [editingFaq, setEditingFaq] = useState<FaqItem | null>(null);
+  const [showFaqModal, setShowFaqModal] = useState(false);
+  const [faqForm, setFaqForm] = useState<{ q: string; a: string }>({ q: '', a: '' });
+
   const reloadAll = () => {
     setSectors(siteSettingsService.getSectors());
     setCategories(siteSettingsService.getCategories());
     setBrands(siteSettingsService.getBrands());
+    setTestimonials(siteSettingsService.getTestimonials());
+    setArticles(siteSettingsService.getArticles());
+    setFaqs(siteSettingsService.getFaqs());
   };
 
   useEffect(() => {
@@ -258,6 +315,183 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
     });
   };
 
+  // ================= TÉMOIGNAGES CLIENTS =================
+  const handleOpenNewTestimonial = () => {
+    setEditingTestimonial(null);
+    setTestimonialForm({ name: '', role: '', text: '', rating: 5 });
+    setShowTestimonialModal(true);
+  };
+
+  const handleOpenEditTestimonial = (item: TestimonialItem) => {
+    setEditingTestimonial(item);
+    setTestimonialForm({
+      name: item.name,
+      role: item.role,
+      text: item.text,
+      rating: item.rating || 5
+    });
+    setShowTestimonialModal(true);
+  };
+
+  const handleSaveTestimonial = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testimonialForm.name.trim() || !testimonialForm.text.trim()) return;
+    if (editingTestimonial) {
+      siteSettingsService.updateTestimonial(editingTestimonial.id, {
+        name: testimonialForm.name.trim(),
+        role: testimonialForm.role.trim(),
+        text: testimonialForm.text.trim(),
+        rating: Number(testimonialForm.rating) || 5
+      });
+      if (onNotify) onNotify(`Témoignage de "${testimonialForm.name}" mis à jour.`);
+    } else {
+      siteSettingsService.addTestimonial({
+        name: testimonialForm.name.trim(),
+        role: testimonialForm.role.trim(),
+        text: testimonialForm.text.trim(),
+        rating: Number(testimonialForm.rating) || 5
+      });
+      if (onNotify) onNotify(`Nouveau témoignage client ajouté.`);
+    }
+    setShowTestimonialModal(false);
+    reloadAll();
+  };
+
+  const handleDeleteTestimonial = (item: TestimonialItem) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Supprimer ce témoignage client',
+      message: `Confirmez-vous la suppression du témoignage de "${item.name}" ?`,
+      onConfirm: () => {
+        siteSettingsService.deleteTestimonial(item.id);
+        if (onNotify) onNotify(`Témoignage supprimé.`);
+        reloadAll();
+      }
+    });
+  };
+
+  // ================= DERNIERS ARTICLES & GUIDES =================
+  const handleOpenNewArticle = () => {
+    setEditingArticle(null);
+    setArticleForm({
+      title: '',
+      category: 'Maintenance technique',
+      date: `Mis à jour le ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`,
+      readTime: '6 min de lecture',
+      author: 'Ingénierie & Sourcing ZONE ÉQUIPEMENTS',
+      img: 'https://images.unsplash.com/photo-1581092162384-8987c1d64718?w=800&auto=format&fit=crop&q=80',
+      description: '',
+      content: '### 1. Contexte Opérationnel\nDécrivez ici les enjeux techniques ou logistiques.\n\n### 2. Recommandations Clés\n- **Point 1** : Détail pratique.\n- **Point 2** : Détail pratique.'
+    });
+    setShowArticleModal(true);
+  };
+
+  const handleOpenEditArticle = (item: ArticleItem) => {
+    setEditingArticle(item);
+    setArticleForm({
+      title: item.title,
+      category: item.category,
+      date: item.date,
+      readTime: item.readTime || '6 min de lecture',
+      author: item.author || 'Ingénierie & Sourcing ZONE ÉQUIPEMENTS',
+      img: item.img,
+      description: item.description,
+      content: item.content || item.description
+    });
+    setShowArticleModal(true);
+  };
+
+  const handleSaveArticle = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!articleForm.title.trim()) return;
+    if (editingArticle) {
+      siteSettingsService.updateArticle(editingArticle.id, {
+        title: articleForm.title.trim(),
+        category: articleForm.category.trim() || 'Maintenance technique',
+        date: articleForm.date.trim() || editingArticle.date,
+        readTime: articleForm.readTime.trim() || '5 min de lecture',
+        author: articleForm.author.trim(),
+        img: articleForm.img.trim() || DEFAULT_PRODUCT_IMAGE,
+        description: articleForm.description.trim(),
+        content: articleForm.content.trim()
+      });
+      if (onNotify) onNotify(`Article "${articleForm.title}" mis à jour.`);
+    } else {
+      siteSettingsService.addArticle({
+        title: articleForm.title.trim(),
+        category: articleForm.category.trim() || 'Maintenance technique',
+        date: articleForm.date.trim(),
+        readTime: articleForm.readTime.trim() || '5 min de lecture',
+        author: articleForm.author.trim(),
+        img: articleForm.img.trim() || DEFAULT_PRODUCT_IMAGE,
+        description: articleForm.description.trim(),
+        content: articleForm.content.trim()
+      });
+      if (onNotify) onNotify(`Nouvel article "${articleForm.title}" publié.`);
+    }
+    setShowArticleModal(false);
+    reloadAll();
+  };
+
+  const handleDeleteArticle = (item: ArticleItem) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Supprimer cet article',
+      message: `Confirmez-vous la suppression de l'article "${item.title}" ?`,
+      onConfirm: () => {
+        siteSettingsService.deleteArticle(item.id);
+        if (onNotify) onNotify(`Article supprimé.`);
+        reloadAll();
+      }
+    });
+  };
+
+  // ================= QUESTIONS FRÉQUENTES (FAQ) =================
+  const handleOpenNewFaq = () => {
+    setEditingFaq(null);
+    setFaqForm({ q: '', a: '' });
+    setShowFaqModal(true);
+  };
+
+  const handleOpenEditFaq = (item: FaqItem) => {
+    setEditingFaq(item);
+    setFaqForm({ q: item.q, a: item.a });
+    setShowFaqModal(true);
+  };
+
+  const handleSaveFaq = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!faqForm.q.trim() || !faqForm.a.trim()) return;
+    if (editingFaq) {
+      siteSettingsService.updateFaq(editingFaq.id, {
+        q: faqForm.q.trim(),
+        a: faqForm.a.trim()
+      });
+      if (onNotify) onNotify(`Question FAQ mise à jour.`);
+    } else {
+      siteSettingsService.addFaq({
+        q: faqForm.q.trim(),
+        a: faqForm.a.trim()
+      });
+      if (onNotify) onNotify(`Nouvelle question FAQ ajoutée.`);
+    }
+    setShowFaqModal(false);
+    reloadAll();
+  };
+
+  const handleDeleteFaq = (item: FaqItem) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Supprimer cette question FAQ',
+      message: `Confirmez-vous la suppression de la question "${item.q}" ?`,
+      onConfirm: () => {
+        siteSettingsService.deleteFaq(item.id);
+        if (onNotify) onNotify(`Question FAQ supprimée.`);
+        reloadAll();
+      }
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Sub tabs navigation */}
@@ -296,7 +530,43 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
             }`}
           >
             <Tag className="w-3.5 h-3.5" />
-            Marques Constructeurs ({brands.length})
+            Marques ({brands.length})
+          </button>
+
+          <button
+            onClick={() => setSubTab('testimonials')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              subTab === 'testimonials'
+                ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <MessageSquareQuote className="w-3.5 h-3.5" />
+            Témoignages Clients ({testimonials.length})
+          </button>
+
+          <button
+            onClick={() => setSubTab('articles')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              subTab === 'articles'
+                ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            Derniers Articles ({articles.length})
+          </button>
+
+          <button
+            onClick={() => setSubTab('faqs')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              subTab === 'faqs'
+                ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+            Questions Fréquentes ({faqs.length})
           </button>
         </div>
 
@@ -327,6 +597,36 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
           >
             <Plus className="w-3.5 h-3.5" />
             Nouvelle Marque
+          </button>
+        )}
+
+        {subTab === 'testimonials' && (
+          <button
+            onClick={handleOpenNewTestimonial}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Nouveau Témoignage
+          </button>
+        )}
+
+        {subTab === 'articles' && (
+          <button
+            onClick={handleOpenNewArticle}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Nouvel Article / Guide
+          </button>
+        )}
+
+        {subTab === 'faqs' && (
+          <button
+            onClick={handleOpenNewFaq}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Nouvelle Question FAQ
           </button>
         )}
       </div>
@@ -530,6 +830,186 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* 4. TÉMOIGNAGES CLIENTS TAB */}
+      {subTab === 'testimonials' && (
+        <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800">
+          <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <MessageSquareQuote className="w-5 h-5 text-[#FF6600]" />
+                Témoignages Clients (Page d'Accueil)
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Ajoutez, modifiez ou supprimez les avis clients affichés dans le carrousel de la page d'accueil.
+              </p>
+            </div>
+            <span className="text-xs px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-slate-300 font-mono">
+              {testimonials.length} témoignages actifs
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {testimonials.map((t) => (
+              <div key={t.id} className="bg-slate-900 rounded-xl border border-slate-800 p-5 flex flex-col justify-between hover:border-slate-700 transition-all">
+                <div>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div>
+                      <h4 className="font-bold text-white text-sm">{t.name}</h4>
+                      <span className="text-xs text-orange-400 font-semibold">{t.role}</span>
+                    </div>
+                    <div className="flex items-center gap-0.5 text-amber-400 text-xs">
+                      {Array.from({ length: t.rating || 5 }).map((_, idx) => (
+                        <span key={idx}>⭐</span>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-300 italic leading-relaxed mt-3 bg-slate-950/60 p-3 rounded-lg border border-slate-800/80">
+                    "{t.text}"
+                  </p>
+                </div>
+                <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-slate-800/80">
+                  <button
+                    onClick={() => handleOpenEditTestimonial(t)}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-blue-400" /> Modifier
+                  </button>
+                  <button
+                    onClick={() => handleDeleteTestimonial(t)}
+                    className="px-2.5 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 rounded-lg text-xs font-bold transition-all"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 5. DERNIERS ARTICLES & GUIDES TAB */}
+      {subTab === 'articles' && (
+        <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800">
+          <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-[#FF6600]" />
+                Derniers Articles & Guides Pratiques (Accueil & Blog)
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Gérez les articles affichés dans "Derniers Articles" et leurs pages complètes de lecture (`/blog/:slug`).
+              </p>
+            </div>
+            <span className="text-xs px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-slate-300 font-mono">
+              {articles.length} articles publiés
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {articles.map((art) => (
+              <div key={art.id} className="bg-slate-900 rounded-xl border border-slate-800 overflow-hidden flex flex-col justify-between hover:border-slate-700 transition-all">
+                <div>
+                  <div className="h-40 bg-slate-950 relative overflow-hidden">
+                    <img
+                      src={art.img}
+                      alt={art.title}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => handleImageError(e, DEFAULT_PRODUCT_IMAGE)}
+                    />
+                    <span className="absolute top-2.5 left-2.5 bg-[#FF6600] text-white text-[10px] font-black uppercase px-2.5 py-1 rounded">
+                      {art.category}
+                    </span>
+                    {art.readTime && (
+                      <span className="absolute bottom-2 right-2 bg-slate-950/80 text-slate-200 text-[10px] font-bold px-2 py-0.5 rounded">
+                        ⏱ {art.readTime}
+                      </span>
+                    )}
+                  </div>
+                  <div className="p-4">
+                    <div className="text-[10px] text-slate-400 mb-1">{art.date}</div>
+                    <h4 className="font-bold text-white text-sm mb-2 line-clamp-2">{art.title}</h4>
+                    <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">{art.description}</p>
+                  </div>
+                </div>
+                <div className="p-3 bg-slate-950/60 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                  <a
+                    href={`/blog/${art.slug || art.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[11px] font-bold text-orange-400 hover:underline flex items-center gap-1"
+                  >
+                    Voir la page <ArrowRight className="w-3 h-3" />
+                  </a>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleOpenEditArticle(art)}
+                      className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium flex items-center gap-1 transition-all"
+                    >
+                      <Edit2 className="w-3.5 h-3.5 text-blue-400" /> Modifier
+                    </button>
+                    <button
+                      onClick={() => handleDeleteArticle(art)}
+                      className="p-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 rounded-lg text-xs font-medium transition-all"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 6. QUESTIONS FRÉQUENTES (FAQ) TAB */}
+      {subTab === 'faqs' && (
+        <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800">
+          <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <HelpCircle className="w-5 h-5 text-[#FF6600]" />
+                Questions Fréquentes (FAQ Industrielle)
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Ajoutez, modifiez ou supprimez les questions/réponses affichées en bas de la page d'accueil.
+              </p>
+            </div>
+            <span className="text-xs px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-slate-300 font-mono">
+              {faqs.length} questions actives
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {faqs.map((faq) => (
+              <div key={faq.id} className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-slate-700 transition-all">
+                <div className="space-y-1">
+                  <h4 className="font-bold text-white text-sm flex items-center gap-2">
+                    <HelpCircle className="w-4 h-4 text-[#FF6600] shrink-0" />
+                    {faq.q}
+                  </h4>
+                  <p className="text-xs text-slate-300 leading-relaxed pl-6">{faq.a}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                  <button
+                    onClick={() => handleOpenEditFaq(faq)}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-blue-400" /> Modifier
+                  </button>
+                  <button
+                    onClick={() => handleDeleteFaq(faq)}
+                    className="px-2.5 py-1.5 bg-red-950/40 hover:bg-red-900/60 text-red-300 rounded-lg text-xs font-bold transition-all"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -780,6 +1260,285 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
                 <button
                   type="button"
                   onClick={() => setShowBrandModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#FF6600] hover:bg-orange-500 text-white rounded-xl text-xs font-bold shadow-lg"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL TÉMOIGNAGE CLIENT */}
+      {showTestimonialModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowTestimonialModal(false)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-white mb-1">
+              {editingTestimonial ? 'Modifier le Témoignage Client' : 'Ajouter un Témoignage Client'}
+            </h3>
+            <p className="text-xs text-slate-400 mb-5">
+              Cet avis sera affiché dans la section Témoignages Clients de la page d'accueil.
+            </p>
+            <form onSubmit={handleSaveTestimonial} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                    Nom du Client / Responsable *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={testimonialForm.name}
+                    onChange={(e) => setTestimonialForm({ ...testimonialForm, name: e.target.value })}
+                    placeholder="Ex: Ibrahima D."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                    Note (Étoiles)
+                  </label>
+                  <select
+                    value={testimonialForm.rating}
+                    onChange={(e) => setTestimonialForm({ ...testimonialForm, rating: Number(e.target.value) })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+                  >
+                    <option value={5}>5 ⭐ (Excellent)</option>
+                    <option value={4}>4 ⭐ (Très bien)</option>
+                    <option value={3}>3 ⭐ (Bien)</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Fonction & Entreprise / Pays *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={testimonialForm.role}
+                  onChange={(e) => setTestimonialForm({ ...testimonialForm, role: e.target.value })}
+                  placeholder="Ex: Directeur de Maintenance - Cimenterie de Dakar (Sénégal)"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Commentaire / Témoignage *
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  value={testimonialForm.text}
+                  onChange={(e) => setTestimonialForm({ ...testimonialForm, text: e.target.value })}
+                  placeholder="Saisissez le retour d'expérience du client..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowTestimonialModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#FF6600] hover:bg-orange-500 text-white rounded-xl text-xs font-bold shadow-lg"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ARTICLE / GUIDE CONCRET */}
+      {showArticleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl p-6 shadow-2xl relative max-h-[92vh] overflow-y-auto">
+            <button
+              onClick={() => setShowArticleModal(false)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-white mb-1">
+              {editingArticle ? `Modifier l'Article "${editingArticle.title}"` : 'Nouvel Article & Guide Technique'}
+            </h3>
+            <p className="text-xs text-slate-400 mb-5">
+              Rédigez le résumé affiché sur l'accueil et le contenu complet de la page dédiée (`/blog/...`). Utilisez `### Titre` pour créer des sous-sections et `- Texte` pour des listes à puces.
+            </p>
+            <form onSubmit={handleSaveArticle} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Titre de l'Article *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={articleForm.title}
+                  onChange={(e) => setArticleForm({ ...articleForm, title: e.target.value })}
+                  placeholder="Ex: Comment optimiser la vie de vos moteurs électriques en climat tropical ?"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                    Catégorie
+                  </label>
+                  <input
+                    type="text"
+                    value={articleForm.category}
+                    onChange={(e) => setArticleForm({ ...articleForm, category: e.target.value })}
+                    placeholder="Ex: Maintenance technique"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#FF6600]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                    Temps de lecture
+                  </label>
+                  <input
+                    type="text"
+                    value={articleForm.readTime}
+                    onChange={(e) => setArticleForm({ ...articleForm, readTime: e.target.value })}
+                    placeholder="Ex: 6 min de lecture"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#FF6600]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                    Date affichée
+                  </label>
+                  <input
+                    type="text"
+                    value={articleForm.date}
+                    onChange={(e) => setArticleForm({ ...articleForm, date: e.target.value })}
+                    placeholder="Ex: Mis à jour le 10 Mai 2026"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#FF6600]"
+                  />
+                </div>
+              </div>
+
+              <ImageUploadInput
+                label="Image de couverture de l'article"
+                value={articleForm.img}
+                onChange={(val) => setArticleForm({ ...articleForm, img: val })}
+                placeholder="https://images.unsplash.com/... ou téléversez une image"
+              />
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Résumé d'accroche (affiché sur les cartes d'aperçu) *
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  value={articleForm.description}
+                  onChange={(e) => setArticleForm({ ...articleForm, description: e.target.value })}
+                  placeholder="Résumé court de 1 à 2 phrases..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Contenu complet de la page de l'article (Dossier Technique Concret) *
+                </label>
+                <textarea
+                  rows={10}
+                  required
+                  value={articleForm.content}
+                  onChange={(e) => setArticleForm({ ...articleForm, content: e.target.value })}
+                  placeholder="Utilisez ### Titre pour les sous-titres et - Point pour les listes..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono leading-relaxed focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowArticleModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-[#FF6600] hover:bg-orange-500 text-white rounded-xl text-xs font-bold shadow-lg"
+                >
+                  Enregistrer l'Article
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL QUESTION FRÉQUENTE (FAQ) */}
+      {showFaqModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowFaqModal(false)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <h3 className="text-lg font-bold text-white mb-1">
+              {editingFaq ? 'Modifier la Question Fréquente' : 'Nouvelle Question Fréquente (FAQ)'}
+            </h3>
+            <p className="text-xs text-slate-400 mb-5">
+              Renseignez la question et sa réponse précise pour vos clients B2B.
+            </p>
+            <form onSubmit={handleSaveFaq} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Question *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={faqForm.q}
+                  onChange={(e) => setFaqForm({ ...faqForm, q: e.target.value })}
+                  placeholder="Ex: Quels sont vos délais de livraison en Afrique ?"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
+                  Réponse détaillée *
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  value={faqForm.a}
+                  onChange={(e) => setFaqForm({ ...faqForm, a: e.target.value })}
+                  placeholder="Expliquez clairement la procédure, les délais ou les moyens de paiement..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setShowFaqModal(false)}
                   className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold"
                 >
                   Annuler
