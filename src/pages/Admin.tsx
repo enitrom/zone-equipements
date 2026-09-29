@@ -33,14 +33,17 @@ import { ConfirmModal } from '../components/admin/ConfirmModal';
 import { printHtmlDocument } from '../utils/printDocument';
 import AnalyticsTrafficManager from '../components/admin/AnalyticsTrafficManager';
 import AdminNotificationsBell from '../components/admin/AdminNotificationsBell';
+import { EmailMarketingManager } from '../components/admin/EmailMarketingManager';
+import { DirectInvoiceModal } from '../components/admin/DirectInvoiceModal';
 
 export default function Admin() {
   const { user, isAdmin, loading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState<'finance' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'security'>('finance');
+  const [activeTab, setActiveTab] = useState<'finance' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'campaigns' | 'security'>('finance');
   const [catalogSubTab, setCatalogSubTab] = useState<'products' | 'structure'>('products');
+  const [showDirectInvoiceModal, setShowDirectInvoiceModal] = useState(false);
   
   // Data states
   const [products, setProducts] = useState<ExtendedProduct[]>([]);
@@ -1031,6 +1034,15 @@ export default function Admin() {
             <RefreshCw className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Actualiser</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setShowDirectInvoiceModal(true)}
+            className="px-3.5 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+            title="Facturation sur place / Vente comptoir"
+          >
+            <FileText className="w-4 h-4" />
+            <span>+ Facture Comptoir</span>
+          </button>
           <a 
             href="/shop" 
             target="_blank" 
@@ -1157,12 +1169,28 @@ export default function Admin() {
             <Settings className="w-4 h-4" />
             Paramètres, TVA & Comptes Admin
           </button>
+
+          <button
+            onClick={() => setActiveTab('campaigns')}
+            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
+              activeTab === 'campaigns'
+                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+            }`}
+          >
+            <Mail className="w-4 h-4" />
+            Emails & Campagnes Promos
+          </button>
         </div>
       </div>
 
       {/* Main Content Area */}
       <main className="max-w-7xl mx-auto px-4 sm:px-8 mt-6">
         
+        {activeTab === 'campaigns' && (
+          <EmailMarketingManager />
+        )}
+
         {/* ================= TAB: ANALYTICS & TRAFFIC ================= */}
         {activeTab === 'analytics' && (
           <AnalyticsTrafficManager />
@@ -5210,6 +5238,16 @@ export default function Admin() {
         message={confirmModal.message}
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+      />
+
+      {/* ================= MODAL: FACTURATION DIRECTE / COMPTOIR ================= */}
+      <DirectInvoiceModal
+        isOpen={showDirectInvoiceModal}
+        onClose={() => setShowDirectInvoiceModal(false)}
+        onSuccess={(order) => {
+          refreshData();
+          triggerToast(`Facture / Devis comptoir ${order.orderNumber || order.id} créé et synchronisé avec succès !`);
+        }}
       />
     </div>
   );

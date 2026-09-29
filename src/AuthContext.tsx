@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db } from './firebase';
+import { siteSettingsService } from './services/siteSettingsService';
 
 export const ADMIN_EMAILS = [
   'enitrom@gmail.com',
@@ -12,6 +13,10 @@ export const isUserAdmin = (email?: string | null, role?: string | null): boolea
   if (!email) return false;
   const normalized = email.toLowerCase().trim();
   if (ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === normalized)) {
+    return true;
+  }
+  const dynamicAdmins = siteSettingsService.getSettings()?.adminEmails || [];
+  if (dynamicAdmins.some(adminEmail => adminEmail.toLowerCase().trim() === normalized)) {
     return true;
   }
   return role === 'admin' || role === 'superadmin';
@@ -37,8 +42,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+  const [adminList, setAdminList] = useState<string[]>(() => siteSettingsService.getSettings()?.adminEmails || ADMIN_EMAILS);
 
-  // Nettoyer les anciens artefacts de clé ou de verrou temporaire en local
+  // Synchroniser la liste des administrateurs depuis les paramètres du site
+  useEffect(() => {
+    return siteSettingsService.subscribe(() => {
+      const currentSettings = siteSettingsService.getSettings();
+      if (currentSettings && Array.isArray(currentSettings.adminEmails)) {
+        setAdminList(currentSettings.adminEmails);
+      }
+    });
+  }, []);
+
+  // Nettoyer les anciens artefacts de verrou temporaire en local
   useEffect(() => {
     try {
       localStorage.removeItem('ze_admin_auth_token');
@@ -56,7 +72,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(firebaseUser);
       if (firebaseUser) {
         const userEmail = firebaseUser.email?.toLowerCase().trim() || '';
-        const shouldBeAdmin = ADMIN_EMAILS.some(e => e.toLowerCase() === userEmail);
+        const shouldBeAdmin = 
+          ADMIN_EMAILS.some(e => e.toLowerCase() === userEmail) ||
+          adminList.some(e => e.toLowerCase().trim() === userEmail) ||
+          siteSettingsService.getSettings()?.adminEmails?.some(e => e.toLowerCase().trim() === userEmail);
 
         try {
           // Get profile
@@ -100,10 +119,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [adminList]);
 
-  // Détection stricte et directe du statut administrateur
-  const isAdmin = isUserAdmin(user?.email, profile?.role);
+  // Détection stricte et réactive du statut administrateur
+  const userEmail = user?.email?.toLowerCase().trim() || '';
+  const isAdmin = 
+    ADMIN_EMAILS.some(e => e.toLowerCase() === userEmail) ||
+    adminList.some(e => e.toLowerCase().trim() === userEmail) ||
+    siteSettingsService.getSettings()?.adminEmails?.some(e => e.toLowerCase().trim() === userEmail) ||
+    profile?.role === 'admin' || 
+    profile?.role === 'superadmin';
 
   return (
     <AuthContext.Provider value={{ user, profile, loading, isAdmin }}>

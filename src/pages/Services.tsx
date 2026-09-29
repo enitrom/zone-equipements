@@ -581,10 +581,6 @@ export default function Services() {
         <div className="absolute inset-0 opacity-10 pointer-events-none bg-[radial-gradient(#ffffff_1px,transparent_1px)] [background-size:24px_24px]" />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="max-w-3xl mx-auto text-center">
-            <span className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/10 border border-white/20 text-orange-300 text-xs font-extrabold uppercase tracking-widest mb-5">
-              <Globe className="w-3.5 h-3.5 text-[#FF6600]" />
-              {copy.badge}
-            </span>
             <h1 className="text-3xl sm:text-5xl font-black font-roboto mb-5 leading-tight">
               {copy.heroTitle}
             </h1>

@@ -25,6 +25,7 @@ import Cart from './pages/Cart';
 import ProductDetails from './pages/ProductDetails';
 import Admin from './pages/Admin';
 import SupplierPortal from './pages/SupplierPortal';
+import { NewsletterBanner } from './components/NewsletterBanner';
 
 // Services
 import { siteSettingsService, CategoryItem } from './services/siteSettingsService';
@@ -1048,6 +1049,8 @@ function AppLayout() {
           <Route path="*" element={<Shop />} />
         </Routes>
       </main>
+
+      <NewsletterBanner />
 
       {/* Footer */}
       <footer id="colophon" className="site-footer ze-custom-footer w-full max-w-full overflow-x-clip relative">

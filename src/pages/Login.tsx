@@ -83,7 +83,12 @@ export default function Login() {
       if (data.success) {
         setOtpSent(true);
         setStep('verify_otp');
-        setSuccessMsg(`Un code de vérification à 6 chiffres a été envoyé à ${cleanEmail}.`);
+        if (data.debugCode) {
+          setOtpCode(data.debugCode);
+          setSuccessMsg(`Code de vérification généré : ${data.debugCode}. (Également transmis à ${cleanEmail})`);
+        } else {
+          setSuccessMsg(`Un code de vérification à 6 chiffres a été envoyé à ${cleanEmail}.`);
+        }
         setResendCountdown(60);
         const timer = setInterval(() => {
           setResendCountdown(prev => {
@@ -107,6 +112,26 @@ export default function Login() {
     }
   };
 
+  const parseFirebaseError = (err: any): string => {
+    const code = err?.code || '';
+    const msg = err?.message || '';
+    if (code === 'auth/operation-not-allowed' || msg.includes('auth/operation-not-allowed')) {
+      return "L'authentification par email/mot de passe n'est pas encore activée dans la console Firebase. Veuillez utiliser le bouton 'Continuer avec Google' ci-dessous.";
+    }
+    if (code === 'auth/email-already-in-use' || msg.includes('auth/email-already-in-use')) {
+      setIsLogin(true);
+      setStep('form');
+      return "Cette adresse email est déjà enregistrée. Veuillez saisir votre mot de passe pour vous connecter.";
+    }
+    if (code === 'auth/invalid-credential' || code === 'auth/user-not-found' || code === 'auth/wrong-password' || msg.includes('auth/invalid-credential')) {
+      return "Identifiants incorrects (email ou mot de passe invalide). Si vous n'avez pas de compte, cliquez sur 'Créer un compte'.";
+    }
+    if (code === 'auth/weak-password' || msg.includes('auth/weak-password')) {
+      return "Le mot de passe est trop court (au moins 6 caractères requis).";
+    }
+    return msg || "Une erreur est survenue lors de l'authentification.";
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
@@ -119,7 +144,7 @@ export default function Login() {
         const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
         checkAdminAndRedirect(cred.user.email);
       } catch (err: any) {
-        setError(err.message === 'Firebase: Error (auth/invalid-credential).' ? 'Identifiants incorrects (email ou mot de passe invalide).' : err.message);
+        setError(parseFirebaseError(err));
       } finally {
         setIsLoading(false);
       }
@@ -182,7 +207,7 @@ export default function Login() {
 
       checkAdminAndRedirect(cred.user.email);
     } catch (err: any) {
-      setError(err?.message || 'Erreur lors de la création du compte.');
+      setError(parseFirebaseError(err));
     } finally {
       setIsLoading(false);
     }

@@ -334,9 +334,6 @@ export default function Blog() {
     <div className="bg-gray-50 min-h-screen py-12">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 bg-orange-100 text-[#FF6600] px-3.5 py-1.5 rounded-full text-xs font-extrabold uppercase tracking-wider mb-3">
-            <BookOpen className="w-4 h-4" /> Centre de Ressources Industrielles MRO
-          </div>
           <div className="flex items-center justify-center gap-3 flex-wrap">
             <h1 className="text-3xl md:text-4xl font-black font-roboto text-[#003366]">
               Derniers Articles & Guides Techniques Concrets

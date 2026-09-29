@@ -359,11 +359,26 @@ export default function ProductDetails() {
                 return (
                   <>
                     <div className="aspect-square bg-white rounded-xl border border-gray-200 flex items-center justify-center p-8 relative overflow-hidden group shadow-xs">
+                      {/* Status Badge on top of image */}
+                      <div className="absolute top-3 left-3 z-10">
+                        {isSourcingProduct ? (
+                          <span className="bg-[#FF6600] text-white text-[10px] font-extrabold px-2.5 py-1 rounded-full shadow-md flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+                            {translateText('À sourcer • Sur commande')}
+                          </span>
+                        ) : (
+                          <span className="bg-emerald-600 text-white text-[10px] font-extrabold px-2.5 py-1 rounded-full shadow-md flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
+                            {translateText('Disponible immédiatement • Stock Dakar')}
+                          </span>
+                        )}
+                      </div>
+
                       <img 
                         src={getProductImageUrl(activeImg)} 
                         alt={product.name} 
                         className="max-h-96 max-w-full object-contain group-hover:scale-105 transition-transform duration-500" 
-                        referrerPolicy="no-referrer"
+                        referrerPolicy="no-referrer" 
                         onError={handleImageError}
                       />
 
@@ -375,7 +390,7 @@ export default function ProductDetails() {
                       )}
 
                       {/* Top action icons */}
-                      <div className="absolute top-3 right-3 flex gap-2">
+                      <div className="absolute top-3 right-3 flex gap-2 z-10">
                         <button 
                           onClick={handleShare}
                           className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-[#003366] transition-all text-gray-400"
@@ -449,27 +464,6 @@ export default function ProductDetails() {
                   <span>{translateText('Modèle')}: <strong className="text-gray-900 font-semibold">{displayModel}</strong></span>
                   <span className="text-gray-300">|</span>
                   <span>{translateText('Origine')}: <strong className="text-gray-900 font-semibold">{product.origin || 'International'}</strong></span>
-                </div>
-
-                {/* Regrouped & Discreet Stock, Availability & Commercial Transparency Summary */}
-                <div className={`mb-5 px-3.5 py-2.5 rounded-xl border text-xs flex flex-wrap items-center justify-between gap-2 ${
-                  isSourcingProduct
-                    ? 'bg-amber-50/80 border-amber-200/80 text-amber-950'
-                    : 'bg-emerald-50/80 border-emerald-200/70 text-emerald-950'
-                }`}>
-                  <div className="flex items-center gap-2">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${isSourcingProduct ? 'bg-[#FF6600]' : 'bg-emerald-600'}`}></span>
-                    <span className="font-semibold">
-                      {!isSourcingProduct
-                        ? `${translateText('Disponible immédiatement')} • ${translateText('Stock Local Dakar')}`
-                        : `${translateText('À sourcer')} • ${translateText("Mandat d'importation direct usine")} (${product.origin || 'International'})`}
-                    </span>
-                  </div>
-                  <span className="text-[11px] text-gray-600 font-mono">
-                    {!isSourcingProduct
-                      ? translateText('Prêt à livrer')
-                      : '7 à 14 j (Air) / 30 à 55 j (Mer)'}
-                  </span>
                 </div>
 
                 {/* Pricing Block */}
@@ -635,31 +629,33 @@ export default function ProductDetails() {
                     </div>
                   )}
 
-                  {/* Dynamic Pricing Breakdown */}
-                  <div className="mt-3 pt-2.5 border-t border-slate-200/80 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs items-center">
-                    <div>
-                      <span className="text-[10px] text-gray-400 block font-semibold">{t('price_equipment_ht')}</span>
-                      <span className="font-mono font-bold text-gray-800">{currentUnitPrice.toLocaleString('fr-FR')} F</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 block font-semibold">
-                        {isSourcingProduct ? t('freight_selected_cost') : 'Fret'}
-                      </span>
-                      <span className={`font-mono font-bold ${isSourcingProduct ? 'text-orange-600' : 'text-emerald-600'}`}>
-                        {isSourcingProduct ? `+${freightCost.toLocaleString('fr-FR')} F` : '0 F'}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-gray-400 block font-semibold">
-                        TVA ({Math.round((product?.vatRate ?? siteSettings.defaultVatRate ?? 0.18) * 100)}%) :
-                      </span>
-                      <span className="font-mono font-bold text-gray-600">
-                        {isVatActive && vatRate > 0 ? `+${unitVat.toLocaleString('fr-FR')} F` : '0 F'}
-                      </span>
-                    </div>
-                    <div className="bg-white px-2.5 py-1.5 rounded-lg border border-gray-200 text-right">
-                      <span className="text-[9px] text-[#003366] font-bold block uppercase">{t('total_ttc_calc')}</span>
-                      <span className="text-sm font-black font-mono text-[#003366]">{unitTotalTTC.toLocaleString('fr-FR')} F</span>
+                  {/* Dynamic Pricing Breakdown (Organized, spacious & mobile-friendly) */}
+                  <div className="mt-4 pt-3 border-t border-slate-200/90">
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 sm:gap-2 text-xs">
+                      <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
+                        <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">{t('price_equipment_ht')}</span>
+                        <span className="font-mono font-bold text-gray-900 text-xs sm:text-xs">{currentUnitPrice.toLocaleString('fr-FR')} FCFA</span>
+                      </div>
+                      <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
+                        <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">
+                          {isSourcingProduct ? t('freight_selected_cost') : 'Option Fret'}
+                        </span>
+                        <span className={`font-mono font-bold text-xs ${isSourcingProduct ? 'text-orange-600' : 'text-emerald-600'}`}>
+                          {isSourcingProduct ? `+${freightCost.toLocaleString('fr-FR')} FCFA` : 'Inclus (0 FCFA)'}
+                        </span>
+                      </div>
+                      <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
+                        <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">
+                          TVA ({Math.round((product?.vatRate ?? siteSettings.defaultVatRate ?? 0.18) * 100)}%)
+                        </span>
+                        <span className="font-mono font-bold text-gray-700 text-xs">
+                          {isVatActive && vatRate > 0 ? `+${unitVat.toLocaleString('fr-FR')} FCFA` : '0 FCFA'}
+                        </span>
+                      </div>
+                      <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-end bg-gradient-to-br from-blue-50 to-indigo-50/50 p-2.5 rounded-xl border border-blue-200/80 shadow-2xs">
+                        <span className="text-[10px] sm:text-[9px] text-[#003366] font-extrabold uppercase tracking-wider">{t('total_ttc_calc')}</span>
+                        <span className="text-sm font-black font-mono text-[#003366]">{unitTotalTTC.toLocaleString('fr-FR')} FCFA</span>
+                      </div>
                     </div>
                   </div>
 

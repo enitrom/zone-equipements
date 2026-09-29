@@ -52,6 +52,17 @@ export interface ArticleItem {
   relatedCategory?: string;
 }
 
+export interface NewsletterSubscriber {
+  id: string;
+  email: string;
+  name?: string;
+  phone?: string;
+  company?: string;
+  subscribedAt: string;
+  source?: string;
+  tags?: string[];
+}
+
 export interface FaqItem {
   id: string;
   q: string;
@@ -200,6 +211,7 @@ const STORAGE_KEYS = {
   TESTIMONIALS: 'ze_site_testimonials_v1',
   ARTICLES: 'ze_site_articles_v1',
   FAQS: 'ze_site_faqs_v1',
+  SUBSCRIBERS: 'ze_newsletter_subscribers_v1',
   DELETED_STRUCTURE: 'ze_deleted_structure_v1',
   PROMO_PURGED_FLAG: 'ze_old_promos_purged_v2',
   CLIENT_ACCOUNT_ID: 'ze_client_account_id_v1'
@@ -1527,6 +1539,69 @@ class SiteSettingsService {
     const current = this.getFaqs();
     const updated = current.filter(f => f.id !== id);
     this.saveFaqs(updated);
+    return updated;
+  }
+
+  // --- COLLECTE DES EMAILS CLIENTS / NEWSLETTER / PROMOS CIBLÉES ---
+  getNewsletterSubscribers(): NewsletterSubscriber[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.SUBSCRIBERS);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.error('Error loading subscribers:', e);
+    }
+    return [];
+  }
+
+  saveNewsletterSubscribers(subscribers: NewsletterSubscriber[]) {
+    localStorage.setItem(STORAGE_KEYS.SUBSCRIBERS, JSON.stringify(subscribers));
+    this.notify();
+    try {
+      window.dispatchEvent(new CustomEvent('ze_subscribers_updated'));
+    } catch {}
+    this.pushStructureToFirestore();
+  }
+
+  addNewsletterSubscriber(email: string, name?: string, phone?: string, company?: string, source: string = 'web'): { success: boolean; message: string; subscriber?: NewsletterSubscriber } {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, message: 'Adresse email invalide.' };
+    }
+    const list = this.getNewsletterSubscribers();
+    const existing = list.find(s => s.email.toLowerCase() === cleanEmail);
+    if (existing) {
+      // Mettre à jour les infos si renseignées
+      const updated = list.map(s => s.email.toLowerCase() === cleanEmail ? {
+        ...s,
+        name: name?.trim() || s.name,
+        phone: phone?.trim() || s.phone,
+        company: company?.trim() || s.company,
+        source: s.source || source
+      } : s);
+      this.saveNewsletterSubscribers(updated);
+      return { success: true, message: 'Vos coordonnées ont été mises à jour pour nos offres exclusives.', subscriber: existing };
+    }
+    const newSub: NewsletterSubscriber = {
+      id: `sub-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      email: cleanEmail,
+      name: name?.trim() || undefined,
+      phone: phone?.trim() || undefined,
+      company: company?.trim() || undefined,
+      subscribedAt: new Date().toISOString(),
+      source,
+      tags: ['newsletter', 'prospect']
+    };
+    this.saveNewsletterSubscribers([newSub, ...list]);
+    return { success: true, message: 'Inscription réussie ! Vous recevrez nos promotions ciblées et arrivages exclusifs.', subscriber: newSub };
+  }
+
+  deleteNewsletterSubscriber(idOrEmail: string): NewsletterSubscriber[] {
+    const list = this.getNewsletterSubscribers();
+    const updated = list.filter(s => s.id !== idOrEmail && s.email.toLowerCase() !== idOrEmail.toLowerCase());
+    this.saveNewsletterSubscribers(updated);
     return updated;
   }
 }

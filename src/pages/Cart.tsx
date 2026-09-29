@@ -3,7 +3,7 @@ import { useCart } from '../CartContext';
 import { useAuth } from '../AuthContext';
 import { 
   Trash2, Plus, Minus, ShoppingBag, ArrowRight, ShieldCheck, CheckCircle2, 
-  FileText, Truck, AlertTriangle, Lock, Tag, X, Check, AlertCircle 
+  FileText, Truck, AlertTriangle, Lock, Tag, X, Check, AlertCircle, LogIn 
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { catalogService, ExtendedProduct, isProductSourcing } from '../services/catalogService';
@@ -76,6 +76,24 @@ export default function Cart() {
   const [paymentMethod, setPaymentMethod] = useState<'PayDunya' | 'Virement Proforma'>('PayDunya');
   const [orderType, setOrderType] = useState<'order' | 'quote'>('order');
   const [paymentChoice, setPaymentChoice] = useState<'full' | 'deposit'>('full');
+  const [useSavedAddress, setUseSavedAddress] = useState<boolean>(true);
+  const [createdOrderSnapshot, setCreatedOrderSnapshot] = useState<{
+    orderNumber: string;
+    totalTTC: number;
+    payableNow: number;
+    paymentMethod: string;
+    paymentChoice: 'full' | 'deposit';
+    depositAmount: number;
+    balanceAmount: number;
+    expiresAt: string;
+  } | null>(null);
+
+  // Quick auth in cart state
+  const [cartAuthEmail, setCartAuthEmail] = useState('');
+  const [cartAuthPassword, setCartAuthPassword] = useState('');
+  const [cartAuthIsLogin, setCartAuthIsLogin] = useState(true);
+  const [cartAuthLoading, setCartAuthLoading] = useState(false);
+  const [cartAuthError, setCartAuthError] = useState<string | null>(null);
 
   // Verify PayDunya return query params (?paydunya_status=return&token=... or ?order=...)
   useEffect(() => {
@@ -330,13 +348,15 @@ export default function Cart() {
       0
     );
 
+    const orderExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+
     const newOrder = catalogService.createOrder({
-      customerName: customerName || 'Client Zone Équipements',
-      customerCompany: customerCompany || undefined,
+      customerName: customerName || profile?.displayName || user?.displayName || 'Client Zone Équipements',
+      customerCompany: customerCompany || (profile as any)?.company || undefined,
       customerEmail: user?.email || 'contact@client.sn',
-      customerPhone: customerPhone,
-      customerAddress: customerAddress || 'Dakar Plateau / Zone Industrielle',
-      customerCity: customerCity,
+      customerPhone: customerPhone || (profile as any)?.phone || '',
+      customerAddress: customerAddress || (profile as any)?.address || 'Dakar Plateau / Zone Industrielle',
+      customerCity: customerCity || (profile as any)?.city || 'Dakar',
       customerCountry: 'Sénégal',
       items: orderItems,
       subtotalHT: discountedSubtotalHT,
@@ -355,6 +375,17 @@ export default function Cart() {
           ? `Acompte versé à la commande : ${depositAmountTTC.toLocaleString('fr-FR')} FCFA (${depositPct}%). Solde exigible à la livraison à Dakar : ${balanceAmountTTC.toLocaleString('fr-FR')} FCFA.`
           : ''
       ].filter(Boolean).join(' ') || undefined
+    });
+
+    setCreatedOrderSnapshot({
+      orderNumber: newOrder.orderNumber,
+      totalTTC: grandTotalTTC,
+      payableNow: payableNow,
+      paymentMethod: paymentMethod,
+      paymentChoice: hasDepositProduct && paymentChoice === 'deposit' ? 'deposit' : 'full',
+      depositAmount: depositAmountTTC,
+      balanceAmount: balanceAmountTTC,
+      expiresAt: orderExpiresAt
     });
 
     // If PayDunya is enabled and this is a real order (not a proforma quote) and not Virement Proforma
@@ -419,6 +450,12 @@ export default function Cart() {
   };
 
   if (orderCreatedSuccess) {
+    const snapPayable = createdOrderSnapshot?.payableNow ?? payableNow;
+    const snapTotal = createdOrderSnapshot?.totalTTC ?? grandTotalTTC;
+    const snapDeposit = createdOrderSnapshot?.depositAmount ?? depositAmountTTC;
+    const snapBalance = createdOrderSnapshot?.balanceAmount ?? balanceAmountTTC;
+    const snapIsDeposit = createdOrderSnapshot?.paymentChoice === 'deposit';
+
     return (
       <div className="max-w-3xl mx-auto px-4 py-20 text-center font-sans">
         <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-md">
@@ -434,22 +471,19 @@ export default function Cart() {
           Votre dossier porte la référence officielle <strong className="font-mono text-orange-600 font-bold">{orderCreatedSuccess}</strong>. Nos équipes logistiques ont transmis le mandat d'approvisionnement pour expédition.
         </p>
 
-        {/* Bloc de Règlement PayDunya Direct */}
+        {/* Bloc de Règlement PayDunya Direct (Épuré & Sans token/mode interne visible) */}
         {paydunyaInvoiceUrl && !paydunyaVerified && (
           <div className="bg-gradient-to-br from-[#003366] to-slate-900 text-white p-6 rounded-2xl shadow-xl max-w-lg mx-auto mb-8 text-left border border-blue-800">
             <div className="flex items-center justify-between mb-3">
               <span className="px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-orange-500 text-white">
-                Passerelle Officielle PayDunya ({siteSettings.paydunya?.mode === 'test' ? 'Mode Test' : 'Mode Live'})
+                Paiement Sécurisé en Ligne
               </span>
-              {paydunyaToken && (
-                <span className="text-[10px] font-mono text-blue-200">Token: {paydunyaToken}</span>
-              )}
             </div>
             <h3 className="text-base font-black mb-1">
-              Réglez votre facture en ligne maintenant ({payableNow.toLocaleString('fr-FR')} FCFA)
+              Réglez votre facture en ligne maintenant ({snapPayable.toLocaleString('fr-FR')} FCFA)
             </h3>
             <p className="text-xs text-blue-100 mb-4 leading-relaxed">
-              Votre facture de paiement sécurisée PayDunya est prête (Wave, Orange Money, Free Money, Djamo, Carte Bancaire Visa/Mastercard).
+              Votre facture de paiement sécurisée est prête (Wave, Orange Money, Free Money, Djamo, Carte Bancaire Visa/Mastercard).
             </p>
             <div className="flex flex-col sm:flex-row gap-3">
               <a
@@ -477,6 +511,10 @@ export default function Cart() {
                 {paydunyaVerifyMsg}
               </p>
             )}
+            
+            <div className="mt-4 p-3 bg-white/5 border border-white/10 rounded-xl text-blue-100 text-[11px] leading-relaxed">
+              ⏳ <strong>Délai de validité :</strong> Cette commande reste réservée pendant <strong>48 heures</strong>. Passé ce délai sans confirmation de règlement, la réservation sera automatiquement annulée.
+            </div>
           </div>
         )}
 
@@ -490,10 +528,10 @@ export default function Cart() {
         <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-md mx-auto text-left text-xs text-gray-700 space-y-2 mb-8">
           <p><strong>Bénéficiaire :</strong> {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'}</p>
           <p><strong>Mode sélectionné :</strong> {paymentMethod}</p>
-          <p><strong>Total TTC :</strong> {grandTotalTTC.toLocaleString('fr-FR')} FCFA</p>
-          {hasDepositProduct && paymentChoice === 'deposit' && (
+          <p><strong>Total TTC :</strong> {snapTotal.toLocaleString('fr-FR')} FCFA</p>
+          {snapIsDeposit && (
             <p className="text-amber-800 font-bold">
-              Acompte à payer : {depositAmountTTC.toLocaleString('fr-FR')} FCFA (Solde à réception : {balanceAmountTTC.toLocaleString('fr-FR')} FCFA)
+              Acompte à payer : {snapDeposit.toLocaleString('fr-FR')} FCFA (Solde à réception : {snapBalance.toLocaleString('fr-FR')} FCFA)
             </p>
           )}
           <p><strong>Conformité :</strong> Contrat de mandat éthique validé et archivé.</p>
@@ -746,76 +784,179 @@ export default function Cart() {
 
           {/* Formulaire Coordonnées Client Sénégal (strictly B2B/Client side, never shared with supplier) */}
           <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">
-              Coordonnées de Facturation & Livraison (Sénégal)
-            </h3>
-            <p className="text-[11px] text-gray-500">
-              Vos coordonnées restent strictement confidentielles au Sénégal. Elles ne sont jamais transmises aux usines ni aux fournisseurs.
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div>
-                <label className="block font-semibold text-gray-700 mb-1">Nom du Contact *</label>
-                <input
-                  type="text"
-                  required
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="Ex: Ibrahima Diallo"
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-gray-700 mb-1">Entreprise / Société (Optionnel)</label>
-                <input
-                  type="text"
-                  value={customerCompany}
-                  onChange={(e) => setCustomerCompany(e.target.value)}
-                  placeholder="Ex: Sahel Industries"
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-gray-700 mb-1">Téléphone Joignable (Wave / OM) *</label>
-                <input
-                  type="tel"
-                  required
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
-                  placeholder="Ex: +221 77 123 45 67"
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-gray-700 mb-1">Ville de Livraison au Sénégal</label>
-                <select
-                  value={customerCity}
-                  onChange={(e) => setCustomerCity(e.target.value)}
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                >
-                  <option value="Dakar">Dakar (Plateau, Zone Ind, Yoff, Rufisque)</option>
-                  <option value="Thiès">Thiès</option>
-                  <option value="Saint-Louis">Saint-Louis</option>
-                  <option value="Mbour">Mbour / Saly</option>
-                  <option value="Kaolack">Kaolack</option>
-                  <option value="Autre Région">Autre Région du Sénégal</option>
-                </select>
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="block font-semibold text-gray-700 mb-1">Adresse ou Emplacement Chantier</label>
-                <input
-                  type="text"
-                  value={customerAddress}
-                  onChange={(e) => setCustomerAddress(e.target.value)}
-                  placeholder="Ex: Km 12 Route de Rufisque, Entrepôt B3"
-                  className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                />
-              </div>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">
+                Coordonnées de Facturation & Livraison (Sénégal)
+              </h3>
+              {user && (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-[#003366] border border-blue-200 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-blue-600" />
+                  Compte connecté : {user.email}
+                </span>
+              )}
             </div>
+
+            {!user ? (
+              /* User Account Required Box */
+              <div className="p-5 bg-gradient-to-br from-blue-50 via-slate-50 to-orange-50/40 rounded-2xl border-2 border-blue-200 space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[#003366] text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <Lock className="w-5 h-5 text-orange-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-[#003366]">
+                      Compte Client Requis pour la Commande
+                    </h4>
+                    <p className="text-xs text-gray-600 mt-1 leading-relaxed">
+                      Conformément à la réglementation commerciale au Sénégal et pour assurer la traçabilité de votre commande et de vos factures officielles (proforma / reçu de paiement), la création ou connexion à un compte utilisateur est obligatoire avant le règlement.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex flex-col sm:flex-row gap-3">
+                  <Link
+                    to="/login?redirect=/cart"
+                    className="flex-1 bg-[#003366] hover:bg-[#002244] text-white text-center py-2.5 px-4 rounded-xl text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Se Connecter / Créer un Compte</span>
+                  </Link>
+                  <Link
+                    to="/login?mode=register&redirect=/cart"
+                    className="flex-1 bg-white hover:bg-gray-50 text-[#FF6600] border-2 border-[#FF6600] text-center py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2"
+                  >
+                    <span>Créer un Nouveau Compte</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+                </div>
+              </div>
+            ) : (
+              /* Choice between Saved Profile vs Custom Address */
+              <div className="space-y-4">
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-2">
+                  <label className="text-[11px] font-bold text-gray-700 uppercase tracking-wider block">
+                    Adresse de facturation & expédition :
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUseSavedAddress(true);
+                        if (profile || savedLocalProfile) {
+                          setCustomerName(profile?.displayName || user.displayName || savedLocalProfile.displayName || customerName);
+                          setCustomerPhone((profile as any)?.phone || savedLocalProfile.phone || customerPhone);
+                          setCustomerCompany((profile as any)?.company || savedLocalProfile.company || customerCompany);
+                          setCustomerAddress((profile as any)?.address || savedLocalProfile.address || customerAddress);
+                          setCustomerCity((profile as any)?.city || savedLocalProfile.city || customerCity || 'Dakar');
+                        }
+                      }}
+                      className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                        useSavedAddress
+                          ? 'border-[#003366] bg-blue-50/80 text-[#003366] font-semibold shadow-xs'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${useSavedAddress ? 'border-[#003366] bg-[#003366]' : 'border-gray-300'}`}>
+                          {useSavedAddress && <span className="w-1.5 h-1.5 bg-white rounded-full"></span>}
+                        </span>
+                        <span className="font-bold text-xs">Utiliser mon profil sauvegardé</span>
+                      </div>
+                      <p className="text-[10px] text-gray-500 pl-5">
+                        {customerName || user.displayName || user.email} {customerPhone ? `• ${customerPhone}` : ''} {customerAddress ? `• ${customerAddress}` : ''}
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setUseSavedAddress(false)}
+                      className={`p-3 rounded-xl border-2 text-left transition-all cursor-pointer ${
+                        !useSavedAddress
+                          ? 'border-[#003366] bg-blue-50/80 text-[#003366] font-semibold shadow-xs'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${!useSavedAddress ? 'border-[#003366] bg-[#003366]' : 'border-gray-300'}`}>
+                          {!useSavedAddress && <span className="w-1.5 h-1.5 bg-white rounded-full"></span>}
+                        </span>
+                        <span className="font-bold text-xs">Renseigner une autre adresse</span>
+                      </div>
+                      <p className="text-[10px] text-gray-500 pl-5">
+                        Pour expédier directement sur un autre chantier ou au nom d'un tiers
+                      </p>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Form fields: shown if user chose custom address OR if saved address is missing crucial fields like phone */}
+                {(!useSavedAddress || !customerPhone || !customerName) && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2 animate-fadeIn">
+                    <div>
+                      <label className="block font-semibold text-gray-700 mb-1">Nom du Contact *</label>
+                      <input
+                        type="text"
+                        required
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.target.value)}
+                        placeholder="Ex: Ibrahima Diallo"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-gray-700 mb-1">Entreprise / Société (Optionnel)</label>
+                      <input
+                        type="text"
+                        value={customerCompany}
+                        onChange={(e) => setCustomerCompany(e.target.value)}
+                        placeholder="Ex: Sahel Industries"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-gray-700 mb-1">Téléphone Joignable (Wave / OM) *</label>
+                      <input
+                        type="tel"
+                        required
+                        value={customerPhone}
+                        onChange={(e) => setCustomerPhone(e.target.value)}
+                        placeholder="Ex: +221 77 123 45 67"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-gray-700 mb-1">Ville de Livraison au Sénégal</label>
+                      <select
+                        value={customerCity}
+                        onChange={(e) => setCustomerCity(e.target.value)}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                      >
+                        <option value="Dakar">Dakar (Plateau, Zone Ind, Yoff, Rufisque)</option>
+                        <option value="Thiès">Thiès</option>
+                        <option value="Saint-Louis">Saint-Louis</option>
+                        <option value="Mbour">Mbour / Saly</option>
+                        <option value="Kaolack">Kaolack</option>
+                        <option value="Autre Région">Autre Région du Sénégal</option>
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block font-semibold text-gray-700 mb-1">Adresse ou Emplacement Chantier</label>
+                      <input
+                        type="text"
+                        value={customerAddress}
+                        onChange={(e) => setCustomerAddress(e.target.value)}
+                        placeholder="Ex: Km 12 Route de Rufisque, Entrepôt B3"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1019,7 +1160,7 @@ export default function Cart() {
               {siteSettings.paydunya?.enabled !== false && paymentMethod === 'PayDunya' && (
                 <p className="text-[10px] text-emerald-700 font-semibold mt-2 flex items-center gap-1">
                   <Check className="w-3 h-3 shrink-0" />
-                  Redirection sécurisée PayDunya ({siteSettings.paydunya?.mode === 'test' ? 'Mode Test Sandbox' : 'Mode Production Live'}).
+                  Redirection sécurisée PayDunya (Paiement 100% crypté et certifié).
                 </p>
               )}
             </div>
