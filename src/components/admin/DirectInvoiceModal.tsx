@@ -203,6 +203,32 @@ export const DirectInvoiceModal: React.FC<DirectInvoiceModalProps> = ({
         status: docType === 'invoice' && paymentStatus === 'Payé' ? 'Livré' : 'En attente'
       }));
 
+      // Deduct physical stock automatically if issuing an official invoice
+      if (docType === 'invoice') {
+        const currentProducts = catalogService.getProducts();
+        lines.forEach(l => {
+          if (l.productId) {
+            const matched = currentProducts.find(p => String(p.id) === String(l.productId));
+            if (matched) {
+              const currentStock = typeof matched.stockQuantity === 'number'
+                ? matched.stockQuantity
+                : (matched.stockStatus === 'IN_STOCK_DAKAR' ? 10 : 0);
+              const nextStock = Math.max(0, currentStock - l.quantity);
+              catalogService.updateProduct(matched.id, {
+                stockQuantity: nextStock,
+                stockStatus: nextStock > 0 ? 'IN_STOCK_DAKAR' : matched.stockStatus
+              });
+              try {
+                const rawMap = localStorage.getItem('ze_pos_local_stock_map_v1');
+                const parsedMap = rawMap ? JSON.parse(rawMap) : {};
+                parsedMap[matched.id] = nextStock;
+                localStorage.setItem('ze_pos_local_stock_map_v1', JSON.stringify(parsedMap));
+              } catch {}
+            }
+          }
+        });
+      }
+
       // Create official order
       const newOrder = catalogService.createOrder({
         customerName: customerName.trim() || customerCompany.trim(),

@@ -9,7 +9,7 @@ import { useCart } from '../CartContext';
 import { useAuth } from '../AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { Product, getProductImageUrl, handleImageError, DEFAULT_HERO_IMAGE } from '../constants';
-import { catalogService, ExtendedProduct, cleanBrand, getEffectiveProductBasePrice, isProductSourcing } from '../services/catalogService';
+import { catalogService, ExtendedProduct, cleanBrand, getEffectiveProductBasePrice, isProductSourcing, parseWeightToKg } from '../services/catalogService';
 import { siteSettingsService, CategoryItem } from '../services/siteSettingsService';
 import { useLanguage } from '../LanguageContext';
 import { analyticsTracker } from '../services/analyticsTracker';
@@ -51,6 +51,7 @@ export default function Shop() {
   // Custom rich filters (B2B / Industrial parameters)
   const [selectedBrands, setSelectedBrands] = useState<string[]>([]);
   const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
+  const [selectedProvenances, setSelectedProvenances] = useState<string[]>([]);
   const [priceTier, setPriceTier] = useState<string>('Tous'); // 'Tous', 'under50k', '50to150k', 'over150k'
   const [onlyInStock, setOnlyInStock] = useState<boolean>(false);
   const [availabilityFilter, setAvailabilityFilter] = useState<'all' | 'stock' | 'sourcing'>('all');
@@ -74,6 +75,7 @@ export default function Shop() {
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     category: true,
     subcategory: true,
+    provenance: true,
     brand: true,
     budget: true,
     sector: true,
@@ -180,6 +182,21 @@ export default function Shop() {
     // 5. Sectors multi-filter
     if (selectedSectors.length > 0 && !selectedSectors.includes(p.sector)) return false;
 
+    // 5b. Provenance filter (Europe, Amérique, Asie)
+    if (selectedProvenances.length > 0) {
+      const rawOrigin = `${p.origin || ''} ${p.sourcePlatform || ''} ${p.supplierName || ''} ${p.supplierUrl || ''} ${p.brand || ''}`.toLowerCase();
+      const isEurope = /\b(europe|france|allemagne|germany|italie|italy|espagne|spain|uk|royaume-uni|suisse|switzerland|pays-bas|belgique|suède|sweden|manutan|rs-online|schneider|siemens|legrand|bosch|facom|ks\s*tools|skf|abb)\b/i.test(rawOrigin);
+      const isAmerique = /\b(amérique|amerique|usa|états-unis|etats-unis|united\s+states|canada|grainger|mcmaster|dayton|fluke|dewalt|milwaukee|caterpillar|cummins|ridgid|stanley|3m|ingersoll)\b/i.test(rawOrigin);
+      const isAsie = /\b(asie|asia|chine|china|japon|japan|corée|korea|taïwan|taiwan|inde|india|alibaba|aliexpress|1688|made-in-china|makita|hikoki|honda|yamaha|chint|delixi|ingco|total)\b/i.test(rawOrigin) || (!isEurope && !isAmerique);
+
+      const matchesSelectedProvenance =
+        (selectedProvenances.includes('Europe') && isEurope) ||
+        (selectedProvenances.includes('Amérique') && isAmerique) ||
+        (selectedProvenances.includes('Asie') && isAsie);
+
+      if (!matchesSelectedProvenance) return false;
+    }
+
     // 6. Price range tiers
     const effectivePrice = getEffectiveProductBasePrice(p as any);
     if (priceTier === 'under50k' && effectivePrice >= 50000) return false;
@@ -238,10 +255,25 @@ export default function Shop() {
     }
 
     const isSourcing = isProductSourcing(ext);
-    const weightKg = parseFloat(String(product.weight || '1').replace(/[^0-9.]/g, '')) || 1.0;
-    const initialSeaFreight = isSourcing
-      ? Math.max(siteSettings.seaFreightMin || 8000, Math.round(weightKg * (siteSettings.seaFreightPerKg || 1800)))
-      : 0;
+    const weightKg = parseWeightToKg(product.weight, 1.0);
+    const seaRate = siteSettings.seaFreightPerKgXOF || siteSettings.seaFreightPerKg || 1800;
+    const airRate = siteSettings.airFreightPerKgXOF || siteSettings.airFreightPerKg || 7500;
+    const computedSeaFreight = ext.customSeaFreightCost !== undefined && ext.customSeaFreightCost !== null && ext.customSeaFreightCost >= 0
+      ? Math.round(Number(ext.customSeaFreightCost))
+      : Math.max(siteSettings.seaFreightMin || 8000, Math.round(weightKg * seaRate));
+    const computedAirFreight = ext.customAirFreightCost !== undefined && ext.customAirFreightCost !== null && ext.customAirFreightCost >= 0
+      ? Math.round(Number(ext.customAirFreightCost))
+      : Math.max(siteSettings.airFreightMin || 7000, Math.round(weightKg * airRate));
+    const chosenMethod: 'none' | 'neutral' | 'sea' | 'air' = !isSourcing
+      ? 'none'
+      : (ext.defaultShippingMethod === 'sea' || ext.defaultShippingMethod === 'air' ? ext.defaultShippingMethod : 'neutral');
+    const initialFreight = !isSourcing
+      ? 0
+      : chosenMethod === 'air'
+        ? computedAirFreight
+        : chosenMethod === 'sea'
+          ? computedSeaFreight
+          : 0;
     const effectivePrice = getEffectiveProductBasePrice(ext);
 
     addItem({
@@ -262,11 +294,21 @@ export default function Shop() {
       availabilityMode: isSourcing ? 'sourcing' : 'stock',
       sourcePlatform: ext.sourcePlatform,
       supplierUrl: ext.supplierUrl,
-      shippingMethod: isSourcing ? 'sea' : 'none',
-      freightCost: initialSeaFreight,
+      shippingMethod: chosenMethod,
+      freightCost: initialFreight,
+      seaFreightCostXOF: isSourcing ? computedSeaFreight : 0,
+      airFreightCostXOF: isSourcing ? computedAirFreight : 0,
+      customSeaFreightCost: ext.customSeaFreightCost,
+      customAirFreightCost: ext.customAirFreightCost,
       showDeposit: ext.showDeposit,
       depositPercentage: ext.depositPercentage || 30,
-      agentCode: isSourcing ? 'DKR628+SEA' : 'STOCK-LOCAL-DKR'
+      agentCode: !isSourcing
+        ? 'STOCK-LOCAL-DKR'
+        : chosenMethod === 'air'
+          ? 'DKR628+AIR'
+          : chosenMethod === 'sea'
+            ? 'DKR628+SEA'
+            : 'SOURCING-A-DEFINIR'
     });
     navigate('/cart');
   };
@@ -284,6 +326,14 @@ export default function Shop() {
       setSelectedSectors(selectedSectors.filter(s => s !== sectorName));
     } else {
       setSelectedSectors([...selectedSectors, sectorName]);
+    }
+  };
+
+  const toggleProvenanceFilter = (prov: string) => {
+    if (selectedProvenances.includes(prov)) {
+      setSelectedProvenances(selectedProvenances.filter(p => p !== prov));
+    } else {
+      setSelectedProvenances([...selectedProvenances, prov]);
     }
   };
 
@@ -322,6 +372,7 @@ export default function Shop() {
     setSelectedSubcategory('Tous');
     setSelectedBrands([]);
     setSelectedSectors([]);
+    setSelectedProvenances([]);
     setPriceTier('Tous');
     setOnlyInStock(false);
     setAvailabilityFilter('all');
@@ -379,7 +430,7 @@ export default function Shop() {
                   <div className="flex items-center gap-2">
                     <Filter className="w-4 h-4 text-[#FF6600]" />
                     <span>{translateText('Filtres Industriels')}</span>
-                    {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || priceTier !== 'Tous' || availabilityFilter !== 'all' || searchTerm !== '') && (
+                    {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || selectedProvenances.length > 0 || priceTier !== 'Tous' || availabilityFilter !== 'all' || searchTerm !== '') && (
                       <span className="bg-[#FF6600] text-white text-[9px] px-1.5 py-0.5 rounded-full font-mono">
                         ●
                       </span>
@@ -390,7 +441,7 @@ export default function Shop() {
                     <ChevronDown className={`w-4 h-4 text-[#003366] transition-transform duration-200 ${isMobileFiltersOpen ? 'rotate-180' : ''}`} />
                   </div>
                 </button>
-                {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || priceTier !== 'Tous' || !onlyInStock || searchTerm !== '') && (
+                {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || selectedProvenances.length > 0 || priceTier !== 'Tous' || !onlyInStock || searchTerm !== '') && (
                   <button 
                     onClick={resetAllFilters}
                     className="hidden lg:flex text-[10px] text-[#FF6600] font-extrabold hover:underline uppercase tracking-wider items-center gap-1"
@@ -402,7 +453,7 @@ export default function Shop() {
 
               {/* Collapsible Filter Body: Collapsed by default on mobile, always visible on desktop */}
               <div className={`${isMobileFiltersOpen ? 'block' : 'hidden'} lg:block`}>
-                {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || priceTier !== 'Tous' || availabilityFilter !== 'all' || searchTerm !== '') && (
+                {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || selectedProvenances.length > 0 || priceTier !== 'Tous' || availabilityFilter !== 'all' || searchTerm !== '') && (
                   <div className="flex justify-end mb-4 lg:hidden">
                     <button 
                       onClick={resetAllFilters}
@@ -520,6 +571,58 @@ export default function Shop() {
                     )}
                   </div>
                 )}
+
+                {/* C2. Par Provenance : Europe, Amérique, Asie */}
+                <div className="mb-6">
+                  <button
+                    onClick={() => toggleSidebarSection('provenance')}
+                    className="w-full flex items-center justify-between font-black text-gray-900 text-[11px] uppercase tracking-wider mb-3 pb-2 border-b border-gray-50 text-left"
+                  >
+                    <span>{translateText('Par Provenance')}</span>
+                    <div className="flex items-center gap-1.5">
+                      {selectedProvenances.length > 0 && (
+                        <span className="text-[10px] text-[#FF6600] font-mono font-bold">
+                          ({selectedProvenances.length})
+                        </span>
+                      )}
+                      <ChevronDown className={`w-3.5 h-3.5 text-gray-400 transition-transform ${openSections.provenance ? '' : '-rotate-90'}`} />
+                    </div>
+                  </button>
+                  {openSections.provenance && (
+                    <div className="space-y-2 animate-in fade-in duration-200">
+                      {[
+                        { key: 'Europe', label: translateText('Europe'), sub: 'UE, France, Allemagne, Italie' },
+                        { key: 'Amérique', label: translateText('Amérique'), sub: 'USA (Grainger), Canada' },
+                        { key: 'Asie', label: translateText('Asie'), sub: 'Chine, Japon, Corée' }
+                      ].map((prov) => {
+                        const isChecked = selectedProvenances.includes(prov.key);
+                        return (
+                          <label
+                            key={prov.key}
+                            className={`flex items-start gap-3 text-xs p-2 rounded-lg border transition-all cursor-pointer ${
+                              isChecked
+                                ? 'bg-blue-50/70 border-[#003366]/30 text-[#003366]'
+                                : 'border-gray-100 text-gray-600 hover:bg-gray-50'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleProvenanceFilter(prov.key)}
+                              className="mt-0.5 rounded border-gray-300 text-[#003366] focus:ring-[#003366] h-3.5 w-3.5 cursor-pointer"
+                            />
+                            <div className="flex flex-col leading-tight">
+                              <span className={`font-bold ${isChecked ? 'text-[#003366] font-extrabold' : 'text-gray-800'}`}>
+                                {prov.label}
+                              </span>
+                              <span className="text-[10px] text-gray-400 mt-0.5">{prov.sub}</span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
 
                 {/* D. Multi-Brand filtration without deceptive counts */}
                 <div className="mb-6">
@@ -796,7 +899,7 @@ export default function Shop() {
                               <div className="flex items-center gap-1.5 text-[10px] text-amber-900 bg-amber-50/80 border border-amber-200/80 px-2.5 py-1 rounded-lg font-medium truncate">
                                 <Truck className="w-3.5 h-3.5 text-[#FF6600] flex-shrink-0" />
                                 <span className="truncate">
-                                  {translateText('À sourcer')} • 7 à 14 j (Air) / 30 à 55 j (Mer)
+                                  {translateText('À sourcer')} • {siteSettings.airFreightDurationDays || '5-10j'} (Air) / {siteSettings.seaFreightDurationDays || '30-45j'} (Mer)
                                 </span>
                               </div>
                             )}
@@ -922,7 +1025,7 @@ export default function Shop() {
                           ) : (
                             <span className="text-[10px] font-medium text-amber-900 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full inline-flex items-center gap-1.5">
                               <span className="w-1.5 h-1.5 bg-[#FF6600] rounded-full"></span>
-                              {translateText('À sourcer')} • 7 à 14 j (Air) / 30 à 55 j (Mer)
+                              {translateText('À sourcer')} • {siteSettings.airFreightDurationDays || '5-10j'} (Air) / {siteSettings.seaFreightDurationDays || '30-45j'} (Mer)
                             </span>
                           )}
                         </div>

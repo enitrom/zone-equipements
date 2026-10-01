@@ -3,12 +3,17 @@ import { useState, useEffect, useMemo, FormEvent } from 'react';
 import { 
   ChevronRight, ShoppingCart, Truck, ShieldCheck, 
   ArrowLeft, FileText, Share2, Heart, CheckCircle2,
-  Building, Phone, Globe, X, Info, AlertCircle, Tag
+  Building, Phone, Globe, X, Info, AlertCircle, Tag,
+  ZoomIn, ZoomOut, ExternalLink, Download, ChevronLeft, ChevronDown
 } from 'lucide-react';
 import { useCart } from '../CartContext';
 import { useAuth } from '../AuthContext';
 import { getProductImageUrl, handleImageError } from '../constants';
-import { catalogService, ExtendedProduct, cleanBrand, normalizeVariants, ProductVariantItem, getEffectiveProductBasePrice, parseVariantCharacteristicsToSpecs, isProductSourcing } from '../services/catalogService';
+import {
+  catalogService, ExtendedProduct, cleanBrand, normalizeVariants, ProductVariantItem,
+  getEffectiveProductBasePrice, parseVariantCharacteristicsToSpecs, isProductSourcing,
+  parseWeightToKg, filterOutSmallOrIconImages
+} from '../services/catalogService';
 import { siteSettingsService } from '../services/siteSettingsService';
 import { useLanguage } from '../LanguageContext';
 import { analyticsTracker } from '../services/analyticsTracker';
@@ -72,10 +77,10 @@ export default function ProductDetails() {
     ? productVariants[selectedVariantIndex]
     : null;
 
-  // Active base weight: uses the selected variant's weight if defined, otherwise base product weight
-  const baseWeightKg = parseFloat(String(product?.weight || '1').replace(/[^0-9.]/g, '')) || 1.0;
+  // Active base weight: uses the selected variant's weight if defined, otherwise base product weight (supports kg, g, lb, oz, t)
+  const baseWeightKg = parseWeightToKg(product?.weight) || 1.0;
   const activeWeightKg = selectedVariant?.weight
-    ? (parseFloat(String(selectedVariant.weight).replace(/[^0-9.]/g, '')) || baseWeightKg)
+    ? (parseWeightToKg(selectedVariant.weight) || baseWeightKg)
     : baseWeightKg;
 
   // Active equipment price: uses selected variant price if defined, otherwise effective product base price (which takes cheapest variant if default price is 0)
@@ -101,18 +106,42 @@ export default function ProductDetails() {
 
   const originalUnitPrice = hasActiveDiscount ? baseEquipmentPrice : null;
 
-  // Dynamic Freight calculations using the active variant weight and live site settings (rate/kg + minimum charge)
-  const airFreightCost = Math.max(siteSettings.airFreightMin || 7000, Math.round(activeWeightKg * (siteSettings.airFreightPerKg || 7000)));
-  const seaFreightCost = Math.max(siteSettings.seaFreightMin || 8000, Math.round(activeWeightKg * (siteSettings.seaFreightPerKg || 1800)));
+  // Dynamic Freight calculations using the active variant weight, custom product freight overrides, and live site settings
+  const seaRatePerKg = siteSettings.seaFreightPerKgXOF || siteSettings.seaFreightPerKg || 1800;
+  const airRatePerKg = siteSettings.airFreightPerKgXOF || siteSettings.airFreightPerKg || 7500;
+  const autoAirFreightCost = Math.max(siteSettings.airFreightMin || 7500, Math.round(activeWeightKg * airRatePerKg));
+  const autoSeaFreightCost = Math.max(siteSettings.seaFreightMin || 8000, Math.round(activeWeightKg * seaRatePerKg));
+
+  const airFreightCost = (product?.customAirFreightCost !== undefined && product.customAirFreightCost >= 0)
+    ? product.customAirFreightCost
+    : autoAirFreightCost;
+  const seaFreightCost = (product?.customSeaFreightCost !== undefined && product.customSeaFreightCost >= 0)
+    ? product.customSeaFreightCost
+    : autoSeaFreightCost;
 
   const [quantity, setQuantity] = useState(1);
-  // Default to Maritime freight everywhere as requested
-  const [selectedFreight, setSelectedFreight] = useState<'air' | 'sea'>('sea');
+  // Default freight is neutral unless explicitly configured on the product
+  const [selectedFreight, setSelectedFreight] = useState<'neutral' | 'air' | 'sea'>(() => {
+    return product?.defaultShippingMethod || 'neutral';
+  });
+
+  useEffect(() => {
+    setSelectedFreight(product?.defaultShippingMethod || 'neutral');
+  }, [product?.id, product?.defaultShippingMethod]);
+
   const [activeTab, setActiveTab] = useState<'specs' | 'shipping'>('specs');
+  const [openCurtains, setOpenCurtains] = useState<Record<string, boolean>>({});
+  const toggleCurtain = (key: string) => setOpenCurtains(prev => ({ ...prev, [key]: !prev[key] }));
   const [copiedLink, setCopiedLink] = useState(false);
   const [favorite, setFavorite] = useState(false);
   const [showQuoteModal, setShowQuoteModal] = useState(false);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+
+  // Image Zoom & Lightbox states
+  const [isHoverZooming, setIsHoverZooming] = useState(false);
+  const [hoverZoomPos, setHoverZoomPos] = useState({ x: 50, y: 50 });
+  const [showZoomLightbox, setShowZoomLightbox] = useState(false);
+  const [zoomScale, setZoomScale] = useState(1);
 
   // Added to cart feedback state
   const [addedToCartSuccess, setAddedToCartSuccess] = useState(false);
@@ -143,9 +172,9 @@ export default function ProductDetails() {
 
   const isSourcingProduct = isProductSourcing(product);
 
-  // Selected freight unit cost: 0 FCFA for immediate stock in Dakar, or selected international freight for sourcing products
+  // Selected freight unit cost: 0 FCFA for immediate stock or when 'neutral' (not pre-selected)
   const freightCost = isSourcingProduct
-    ? (selectedFreight === 'air' ? airFreightCost : seaFreightCost)
+    ? (selectedFreight === 'air' ? airFreightCost : selectedFreight === 'sea' ? seaFreightCost : 0)
     : 0;
 
   const isVatActive = product?.applyVat !== undefined
@@ -165,21 +194,47 @@ export default function ProductDetails() {
   const depositTotal = Math.round((totalTTC * depositPct) / 100);
   const balanceTotal = totalTTC - depositTotal;
 
+  // PDF Catalog & Technical Datasheet URLs (Single clean direct-download PDF per product, zero Grainger mention/redirect)
+  const effectiveCatalogPdfUrl = useMemo(() => {
+    const cleanSku = encodeURIComponent(product?.ref || product?.model || `SKU-${product?.id}`);
+    const cleanTitle = encodeURIComponent(product?.name || '');
+    const cleanBr = encodeURIComponent(cleanBrand(product?.brand || '', product?.name || ''));
+    const rawUrl = (product?.catalogPdfUrl && product.catalogPdfUrl.trim())
+      ? product.catalogPdfUrl.trim()
+      : (product?.pdfUrls && product.pdfUrls.length > 0 && product.pdfUrls[0]?.url ? product.pdfUrls[0].url.trim() : '');
+    const externalSrcParam = (rawUrl && rawUrl.startsWith('http') && !rawUrl.toLowerCase().includes('grainger'))
+      ? `&src=${encodeURIComponent(rawUrl)}`
+      : '';
+    return `/api/catalog-pdf/${cleanSku}?download=1&title=${cleanTitle}&brand=${cleanBr}${externalSrcParam}`;
+  }, [product]);
+
+  const allPdfDocuments = useMemo(() => {
+    if (!effectiveCatalogPdfUrl) return [];
+    const cleanRef = product?.ref || product?.model || cleanBrand(product?.brand || '', product?.name || '');
+    return [{
+      title: `${translateText('Catalogue PDF & Fiche Technique Constructeur')}${cleanRef ? ` (${cleanRef})` : ''}`,
+      url: effectiveCatalogPdfUrl
+    }];
+  }, [product, effectiveCatalogPdfUrl, translateText]);
+
   const handleAddToCart = () => {
     // 1. Mandatory variant selection check: user MUST select an option if available
     if (productVariants.length > 0 && selectedVariantIndex === null) {
+      setOpenCurtains(prev => ({ ...prev, variants: true }));
       setVariantSelectionError("Veuillez obligatoirement sélectionner une option ou déclinaison ci-dessus avant d'ajouter au panier.");
-      const optEl = document.getElementById('product-options-section');
-      if (optEl) optEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => {
+        const optEl = document.getElementById('product-options-section');
+        if (optEl) optEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 80);
       return;
     }
 
     setVariantSelectionError(null);
 
-    // Internal Agent Code strictly for logistics / orders: DKR628+AIR, DKR628+SEA, or STOCK-LOCAL-DKR
-    const effectiveShippingMethod: 'none' | 'air' | 'sea' = isSourcingProduct ? selectedFreight : 'none';
+    // Internal Agent Code strictly for logistics / orders: DKR628+AIR, DKR628+SEA, or neutral/local
+    const effectiveShippingMethod: 'none' | 'neutral' | 'air' | 'sea' = isSourcingProduct ? selectedFreight : 'none';
     const internalAgentCode = isSourcingProduct
-      ? (selectedFreight === 'sea' ? 'DKR628+SEA' : 'DKR628+AIR')
+      ? (selectedFreight === 'sea' ? 'DKR628+SEA' : selectedFreight === 'air' ? 'DKR628+AIR' : '')
       : 'STOCK-LOCAL-DKR';
 
     const itemName = selectedVariant 
@@ -219,6 +274,8 @@ export default function ProductDetails() {
       supplierUrl: product.supplierUrl,
       shippingMethod: effectiveShippingMethod,
       freightCost: freightCost,
+      seaFreightCostXOF: seaFreightCost,
+      airFreightCostXOF: airFreightCost,
       showDeposit: product.showDeposit,
       depositPercentage: depositPct,
       agentCode: internalAgentCode
@@ -258,7 +315,7 @@ export default function ProductDetails() {
         quantity: quantity,
         brand: product.brand,
         origin: product.origin,
-        shippingMethod: isSourcingProduct ? selectedFreight : 'none',
+        shippingMethod: (isSourcingProduct && (selectedFreight === 'sea' || selectedFreight === 'air')) ? selectedFreight : 'none',
         freightCost: freightCost
       }],
       subtotalHT: totalHT,
@@ -291,29 +348,47 @@ export default function ProductDetails() {
 
   const supplierLeadTime = product.leadTime || translateText('Délais selon fournisseur');
 
-  // Real logistics info (no fake data)
+  // Real logistics info synchronized with top freight card and live siteSettings
   const shippingLeft = [
     {
       label: translateText('Disponibilité & Mode logistique'),
       value: isSourcingProduct
         ? (selectedFreight === 'air'
-            ? `${translateText('Sur commande')} • ${translateText('Fret Aérien Express')} (${siteSettings.airFreightDurationDays || '5 - 10j'})`
-            : `${translateText('Sur commande')} • ${translateText('Fret Maritime Économique')} (${siteSettings.seaFreightDurationDays || '30 - 45j'})`)
+            ? `${translateText('Sur commande')} • ${translateText('Fret Aérien Express')} (${siteSettings.airFreightDurationDays || '5 - 10 jours'})`
+            : selectedFreight === 'sea'
+              ? `${translateText('Sur commande')} • ${translateText('Fret Maritime Économique')} (${siteSettings.seaFreightDurationDays || '30 - 45 jours'})`
+              : `${translateText('Sur commande')} • ${translateText('Fret au choix (Maritime ou Aérien — Neutre par défaut)')}`)
         : `${translateText('Disponible immédiatement')} • ${translateText('Stock Local')} (${supplierLeadTime})`
     },
     {
-      label: translateText('Délai indicatif Dakar'),
+      label: translateText('Tarif Fret Maritime (Dakar)'),
       value: isSourcingProduct
-        ? (selectedFreight === 'air' ? (siteSettings.airFreightDurationDays || '5 - 10j') : (siteSettings.seaFreightDurationDays || '30 - 45j'))
-        : supplierLeadTime
+        ? `+${seaFreightCost.toLocaleString('fr-FR')} FCFA (${siteSettings.seaFreightDurationDays || '30 - 45 jours'})`
+        : translateText('Inclus (Stock Local Dakar)')
+    },
+    {
+      label: translateText('Tarif Fret Aérien Express (Dakar)'),
+      value: isSourcingProduct
+        ? `+${airFreightCost.toLocaleString('fr-FR')} FCFA (${siteSettings.airFreightDurationDays || '5 - 10 jours'})`
+        : translateText('Inclus (Stock Local Dakar)')
     },
     { label: translateText('Conditionnement transport'), value: `${product.packageQty || 1} ${translateText('colis renforcé industriel')}` }
   ];
 
   const shippingRight = [
     { label: translateText("Pays de provenance"), value: product.origin || 'International' },
-    { label: translateText('Poids brut vérifié'), value: product.weight || `${activeWeightKg} kg` },
-    { label: translateText('Dimensions colis'), value: translateText(product.dimensions || 'Standard export') }
+    { label: translateText('Poids brut vérifié'), value: `${activeWeightKg} kg` },
+    { label: translateText('Dimensions colis'), value: translateText(product.dimensions || 'Standard export') },
+    {
+      label: translateText('Option de fret sélectionnée'),
+      value: isSourcingProduct
+        ? (selectedFreight === 'sea'
+            ? `${translateText('Fret Maritime')} (+${seaFreightCost.toLocaleString('fr-FR')} FCFA)`
+            : selectedFreight === 'air'
+              ? `${translateText('Fret Aérien')} (+${airFreightCost.toLocaleString('fr-FR')} FCFA)`
+              : translateText('Neutre (Aucun fret pré-sélectionné — 0 FCFA)'))
+        : translateText('Livraison locale Dakar (0 FCFA)')
+    }
   ];
 
   // Real model display from product specs or model
@@ -346,10 +421,12 @@ export default function ProductDetails() {
         <div className="bg-white rounded-xl border border-gray-200 shadow-xs p-6 md:p-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
             
-            {/* LEFT COLUMN: Product Image Frame (5 cols) */}
+            {/* LEFT COLUMN: Product Image Frame with Interactive Hover Zoom & Fullscreen Lightbox (5 cols) */}
             <div className="lg:col-span-5 flex flex-col gap-4">
               {(() => {
-                const baseImages = (product.images && product.images.length > 0) ? product.images : [product.img];
+                const rawBaseImages = (product.images && product.images.length > 0) ? product.images : [product.img];
+                const filteredBaseImages = filterOutSmallOrIconImages(rawBaseImages.filter(Boolean));
+                const baseImages = filteredBaseImages.length > 0 ? filteredBaseImages : [product.img];
                 const variantImg = selectedVariant?.image && selectedVariant.image.trim() !== '' ? selectedVariant.image.trim() : null;
                 const allImages = variantImg
                   ? [variantImg, ...baseImages.filter(img => img !== variantImg)]
@@ -358,9 +435,24 @@ export default function ProductDetails() {
                 const activeImg = allImages[safeIndex] || product.img;
                 return (
                   <>
-                    <div className="aspect-square bg-white rounded-xl border border-gray-200 flex items-center justify-center p-8 relative overflow-hidden group shadow-xs">
+                    <div
+                      onMouseEnter={() => setIsHoverZooming(true)}
+                      onMouseLeave={() => setIsHoverZooming(false)}
+                      onMouseMove={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+                        const y = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+                        setHoverZoomPos({ x, y });
+                      }}
+                      onClick={() => {
+                        setZoomScale(1.75);
+                        setShowZoomLightbox(true);
+                      }}
+                      className="aspect-square bg-white rounded-xl border border-gray-200 flex items-center justify-center p-8 relative overflow-hidden group shadow-xs cursor-zoom-in"
+                      title={translateText('Survolez pour zoomer ou cliquez pour ouvrir en plein écran HD')}
+                    >
                       {/* Status Badge on top of image */}
-                      <div className="absolute top-3 left-3 z-10">
+                      <div className="absolute top-3 left-3 z-10 pointer-events-none">
                         {isSourcingProduct ? (
                           <span className="bg-[#FF6600] text-white text-[10px] font-extrabold px-2.5 py-1 rounded-full shadow-md flex items-center gap-1">
                             <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
@@ -377,30 +469,57 @@ export default function ProductDetails() {
                       <img 
                         src={getProductImageUrl(activeImg)} 
                         alt={product.name} 
-                        className="max-h-96 max-w-full object-contain group-hover:scale-105 transition-transform duration-500" 
+                        style={
+                          isHoverZooming
+                            ? {
+                                transformOrigin: `${hoverZoomPos.x}% ${hoverZoomPos.y}%`,
+                                transform: 'scale(2.15)'
+                              }
+                            : undefined
+                        }
+                        className="max-h-96 max-w-full object-contain transition-transform duration-200 ease-out select-none" 
                         referrerPolicy="no-referrer" 
                         onError={handleImageError}
                       />
 
-                      {/* Photo counter badge */}
-                      {allImages.length > 1 && (
-                        <span className="absolute bottom-3 left-3 bg-black/70 text-white text-[10px] font-mono px-2 py-0.5 rounded-md backdrop-blur-xs font-bold">
-                          {safeIndex + 1} / {allImages.length}
+                      {/* Photo counter badge & Zoom hint */}
+                      <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+                        {allImages.length > 1 ? (
+                          <span className="bg-black/70 text-white text-[10px] font-mono px-2 py-0.5 rounded-md backdrop-blur-xs font-bold">
+                            {safeIndex + 1} / {allImages.length}
+                          </span>
+                        ) : <span />}
+                        <span className="bg-white/95 border border-gray-200 text-[#003366] text-[10px] font-bold px-2.5 py-1 rounded-full shadow-xs flex items-center gap-1">
+                          <ZoomIn className="w-3.5 h-3.5 text-[#FF6600]" />
+                          <span>{translateText('Loupe HD / Plein écran')}</span>
                         </span>
-                      )}
+                      </div>
 
                       {/* Top action icons */}
-                      <div className="absolute top-3 right-3 flex gap-2 z-10">
+                      <div className="absolute top-3 right-3 flex gap-2 z-10" onClick={(e) => e.stopPropagation()}>
                         <button 
+                          type="button"
+                          onClick={() => {
+                            setZoomScale(1.75);
+                            setShowZoomLightbox(true);
+                          }}
+                          className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-[#003366] transition-all text-gray-500 cursor-pointer"
+                          title="Zoom Plein Écran HD"
+                        >
+                          <ZoomIn className="w-4 h-4" />
+                        </button>
+                        <button 
+                          type="button"
                           onClick={handleShare}
-                          className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-[#003366] transition-all text-gray-400"
+                          className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-[#003366] transition-all text-gray-400 cursor-pointer"
                           title="Partager le lien"
                         >
                           {copiedLink ? <span className="text-[10px] font-bold text-green-600 font-mono">Copié !</span> : <Share2 className="w-4 h-4" />}
                         </button>
                         <button 
+                          type="button"
                           onClick={() => setFavorite(!favorite)}
-                          className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-red-600 transition-all text-gray-400"
+                          className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-red-600 transition-all text-gray-400 cursor-pointer"
                           title="Ajouter aux favoris"
                         >
                           <Heart className={`w-4 h-4 ${favorite ? 'text-red-500 fill-red-500' : ''}`} />
@@ -414,8 +533,9 @@ export default function ProductDetails() {
                         {allImages.map((imgSrc, idx) => (
                           <button
                             key={idx}
+                            type="button"
                             onClick={() => setActiveImageIndex(idx)}
-                            className={`w-16 h-16 rounded-xl border-2 p-1 bg-white overflow-hidden shrink-0 transition-all ${
+                            className={`w-16 h-16 rounded-xl border-2 p-1 bg-white overflow-hidden shrink-0 transition-all cursor-pointer ${
                               safeIndex === idx ? 'border-[#FF6600] ring-2 ring-orange-500/20 shadow-sm' : 'border-gray-200 hover:border-gray-400 opacity-70 hover:opacity-100'
                             }`}
                           >
@@ -430,9 +550,126 @@ export default function ProductDetails() {
                         ))}
                       </div>
                     )}
+
+                    {/* Fullscreen HD Zoom Lightbox Modal */}
+                    {showZoomLightbox && (
+                      <div
+                        className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col items-center justify-center p-4"
+                        onClick={() => setShowZoomLightbox(false)}
+                      >
+                        <div
+                          className="w-full max-w-5xl flex items-center justify-between text-white mb-3 px-2"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="truncate pr-4">
+                            <span className="text-xs font-bold text-orange-400 uppercase block">{product.brand} — {product.ref}</span>
+                            <h4 className="text-sm font-bold truncate">{product.name}</h4>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setZoomScale(s => Math.max(1, +(s - 0.5).toFixed(2)))}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <ZoomOut className="w-4 h-4" /> -
+                            </button>
+                            <span className="text-xs font-mono font-bold px-2 py-1 bg-slate-900 rounded border border-slate-700">
+                              {Math.round(zoomScale * 100)}%
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setZoomScale(s => Math.min(3.5, +(s + 0.5).toFixed(2)))}
+                              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                            >
+                              <ZoomIn className="w-4 h-4" /> +
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowZoomLightbox(false)}
+                              className="p-2 bg-rose-600 hover:bg-rose-500 rounded-lg text-white cursor-pointer ml-2"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div
+                          className="relative w-full max-w-5xl h-[74vh] bg-white rounded-2xl overflow-auto flex items-center justify-center p-6 shadow-2xl"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {allImages.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setActiveImageIndex((safeIndex - 1 + allImages.length) % allImages.length)}
+                              className="fixed left-6 top-1/2 -translate-y-1/2 p-3 rounded-full bg-[#003366] text-white shadow-xl hover:bg-[#FF6600] transition-colors z-20 cursor-pointer"
+                            >
+                              <ChevronLeft className="w-5 h-5" />
+                            </button>
+                          )}
+                          <img
+                            src={getProductImageUrl(activeImg)}
+                            alt={product.name}
+                            style={{ transform: `scale(${zoomScale})` }}
+                            className="max-h-full max-w-full object-contain transition-transform duration-200 cursor-zoom-in"
+                            onClick={() => setZoomScale(s => (s >= 2.5 ? 1 : +(s + 0.75).toFixed(2)))}
+                            referrerPolicy="no-referrer"
+                            onError={handleImageError}
+                          />
+                          {allImages.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setActiveImageIndex((safeIndex + 1) % allImages.length)}
+                              className="fixed right-6 top-1/2 -translate-y-1/2 p-3 rounded-full bg-[#003366] text-white shadow-xl hover:bg-[#FF6600] transition-colors z-20 cursor-pointer"
+                            >
+                              <ChevronRight className="w-5 h-5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </>
                 );
               })()}
+
+              {/* Catalogue PDF & Fiche Technique Constructeur (Rideau horizontal plié par défaut) */}
+              {allPdfDocuments.length > 0 && (
+                <div className="bg-blue-50/70 rounded-xl border border-blue-200/80 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => toggleCurtain('pdf')}
+                    className="w-full p-3 flex items-center justify-between text-left hover:bg-blue-100/50 transition-colors cursor-pointer"
+                  >
+                    <span className="text-[11px] font-extrabold text-[#003366] uppercase tracking-wider flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-[#FF6600]" />
+                      {translateText('Catalogue PDF & Fiche Technique')}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono font-bold text-blue-800 bg-white px-2 py-0.5 rounded border border-blue-200">
+                        PDF Officiel
+                      </span>
+                      <ChevronDown className={`w-4 h-4 text-[#003366] transition-transform duration-200 ${openCurtains.pdf ? 'rotate-180' : ''}`} />
+                    </div>
+                  </button>
+                  {openCurtains.pdf && (
+                    <div className="px-3 pb-3 pt-1 border-t border-blue-200/60 flex flex-col gap-1.5">
+                      {allPdfDocuments.map((docItem, idx) => (
+                        <a
+                          key={idx}
+                          href={docItem.url}
+                          download={`Catalogue-Technique-${product.ref || product.id}.pdf`}
+                          className="w-full py-2 px-3 bg-white hover:bg-[#003366] text-[#003366] hover:text-white border border-blue-200 rounded-lg text-xs font-bold flex items-center justify-between gap-2 transition-all shadow-2xs"
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            <Download className="w-3.5 h-3.5 text-[#FF6600] shrink-0" />
+                            <span className="truncate">{docItem.title}</span>
+                          </span>
+                          <span className="text-[10px] font-mono uppercase shrink-0 opacity-80">Télécharger</span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Discreet 1-line Sourcing guarantee notice */}
               <div className="bg-slate-50 px-3 py-2 rounded-lg border border-slate-200/80 text-[11px] text-gray-600 flex items-center gap-2">
@@ -500,61 +737,81 @@ export default function ProductDetails() {
                   )}
                 </div>
 
-                {/* Product Variants / Options Picker (Mandatory Selection before Add to Cart) */}
+                {/* Product Variants / Options Picker (Rideau horizontal plié par défaut) */}
                 {productVariants.length > 0 && (
                   <div 
                     id="product-options-section" 
-                    className={`mb-5 p-3.5 rounded-xl border transition-all ${
+                    className={`mb-5 rounded-xl border transition-all overflow-hidden ${
                       variantSelectionError 
                         ? 'bg-red-50/70 border-red-300 ring-2 ring-red-400/40' 
                         : 'bg-slate-50 border-slate-200'
                     }`}
                   >
-                    <div className="flex items-center justify-between mb-2">
-                      <label className="text-xs font-bold text-[#003366] uppercase tracking-wider flex items-center gap-1.5">
-                        <span>{translateText('Options & Déclinaisons Disponibles :')}</span>
-                      </label>
-                      <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
-                        {translateText('* Sélection obligatoire')}
+                    <button
+                      type="button"
+                      onClick={() => toggleCurtain('variants')}
+                      className="w-full p-3.5 flex items-center justify-between text-left hover:bg-slate-100/80 transition-colors cursor-pointer"
+                    >
+                      <span className="text-xs font-bold text-[#003366] uppercase tracking-wider flex items-center gap-2">
+                        <span>{translateText('Options & Déclinaisons Disponibles (Variantes)')}</span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-blue-100 text-[#003366]">
+                          {productVariants.length}
+                        </span>
                       </span>
-                    </div>
+                      <div className="flex items-center gap-2">
+                        {selectedVariant ? (
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                            ✓ {selectedVariant.name}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-red-600 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
+                            {translateText('* Sélection obligatoire')}
+                          </span>
+                        )}
+                        <ChevronDown className={`w-4 h-4 text-[#003366] transition-transform duration-200 ${openCurtains.variants || variantSelectionError ? 'rotate-180' : ''}`} />
+                      </div>
+                    </button>
 
-                    {/* Validation error message if user clicked add to cart without choosing */}
-                    {variantSelectionError && (
-                      <div className="mb-3 p-2.5 bg-red-100 border border-red-300 rounded-lg text-xs font-bold text-red-800 flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                        <span>{variantSelectionError}</span>
+                    {(openCurtains.variants || Boolean(variantSelectionError)) && (
+                      <div className="px-3.5 pb-3.5 pt-2 border-t border-slate-200/80">
+                        {/* Validation error message if user clicked add to cart without choosing */}
+                        {variantSelectionError && (
+                          <div className="mb-3 p-2.5 bg-red-100 border border-red-300 rounded-lg text-xs font-bold text-red-800 flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                            <span>{variantSelectionError}</span>
+                          </div>
+                        )}
+
+                        <div className="flex flex-wrap gap-2">
+                          {productVariants.map((opt, idx) => {
+                            const isSelected = selectedVariantIndex === idx;
+
+                            return (
+                              <button
+                                key={opt.id || idx}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedVariantIndex(idx);
+                                  setVariantSelectionError(null);
+                                  if (opt.image && opt.image.trim() !== '') {
+                                    setActiveImageIndex(0);
+                                  } else if (selectedVariant?.image && selectedVariant.image.trim() !== '') {
+                                    setActiveImageIndex(0);
+                                  }
+                                }}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer text-left ${
+                                  isSelected
+                                    ? 'bg-[#003366] text-white shadow-sm ring-2 ring-blue-900/30'
+                                    : 'bg-white text-gray-700 border border-gray-300 hover:border-gray-400 hover:bg-gray-50'
+                                }`}
+                              >
+                                <span>{opt.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     )}
-
-                    <div className="flex flex-wrap gap-2">
-                      {productVariants.map((opt, idx) => {
-                        const isSelected = selectedVariantIndex === idx;
-
-                        return (
-                          <button
-                            key={opt.id || idx}
-                            type="button"
-                            onClick={() => {
-                              setSelectedVariantIndex(idx);
-                              setVariantSelectionError(null);
-                              if (opt.image && opt.image.trim() !== '') {
-                                setActiveImageIndex(0);
-                              } else if (selectedVariant?.image && selectedVariant.image.trim() !== '') {
-                                setActiveImageIndex(0);
-                              }
-                            }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer text-left ${
-                              isSelected
-                                ? 'bg-[#003366] text-white shadow-sm ring-2 ring-blue-900/30'
-                                : 'bg-white text-gray-700 border border-gray-300 hover:border-gray-400 hover:bg-gray-50'
-                            }`}
-                          >
-                            <span>{opt.name}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
                   </div>
                 )}
 
@@ -562,20 +819,31 @@ export default function ProductDetails() {
                 <div className="mb-6 p-3.5 bg-slate-50 rounded-xl border border-slate-200">
                   {isSourcingProduct ? (
                     <>
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                         <label className="text-[11px] font-bold text-[#003366] uppercase tracking-wider block">
-                          {t('freight_selection_title')}
+                          {t('freight_selection_title')} ({translateText('Optionnel')})
                         </label>
-                        <span className="text-[10px] font-mono text-gray-600 font-bold bg-white px-2 py-0.5 rounded border border-gray-200">
-                          {translateText('Poids calculé')} : {activeWeightKg} kg
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {selectedFreight !== 'neutral' && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFreight('neutral')}
+                              className="text-[10px] font-bold text-gray-500 hover:text-[#003366] underline cursor-pointer"
+                            >
+                              {translateText('Désélectionner (Neutre)')}
+                            </button>
+                          )}
+                          <span className="text-[10px] font-mono text-gray-600 font-bold bg-white px-2 py-0.5 rounded border border-gray-200">
+                            {translateText('Poids calculé')} : {activeWeightKg} kg
+                          </span>
+                        </div>
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {/* Option 1: Fret Maritime Économique */}
+                        {/* Option 1: Fret Maritime Économique (toggleable to neutral) */}
                         <button
                           type="button"
-                          onClick={() => setSelectedFreight('sea')}
+                          onClick={() => setSelectedFreight(selectedFreight === 'sea' ? 'neutral' : 'sea')}
                           className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
                             selectedFreight === 'sea'
                               ? 'bg-[#003366] text-white border-[#003366] shadow-xs'
@@ -589,14 +857,14 @@ export default function ProductDetails() {
                             </span>
                           </div>
                           <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'sea' ? 'text-blue-100' : 'text-gray-400'}`}>
-                            {siteSettings.seaFreightDurationDays || '30 - 45j'} • {(siteSettings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg
+                            {siteSettings.seaFreightDurationDays || '30 - 45 jours'}
                           </span>
                         </button>
 
-                        {/* Option 2: Fret Aérien Express */}
+                        {/* Option 2: Fret Aérien Express (toggleable to neutral) */}
                         <button
                           type="button"
-                          onClick={() => setSelectedFreight('air')}
+                          onClick={() => setSelectedFreight(selectedFreight === 'air' ? 'neutral' : 'air')}
                           className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
                             selectedFreight === 'air'
                               ? 'bg-[#003366] text-white border-[#003366] shadow-xs'
@@ -610,10 +878,15 @@ export default function ProductDetails() {
                             </span>
                           </div>
                           <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'air' ? 'text-blue-100' : 'text-gray-400'}`}>
-                            {siteSettings.airFreightDurationDays || '5 - 10j'} • {(siteSettings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} F/kg
+                            {siteSettings.airFreightDurationDays || '5 - 10 jours'}
                           </span>
                         </button>
                       </div>
+                      {selectedFreight === 'neutral' && (
+                        <p className="text-[10px] text-gray-500 mt-1.5 italic">
+                          {translateText('Mode neutre actif : aucun frais de fret international n\'est ajouté d\'office. Cliquez sur Maritime ou Aérien ci-dessus si vous souhaitez l\'inclure.')}
+                        </p>
+                      )}
                     </>
                   ) : (
                     <div className="flex items-center justify-between gap-2">
@@ -640,8 +913,10 @@ export default function ProductDetails() {
                         <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">
                           {isSourcingProduct ? t('freight_selected_cost') : 'Option Fret'}
                         </span>
-                        <span className={`font-mono font-bold text-xs ${isSourcingProduct ? 'text-orange-600' : 'text-emerald-600'}`}>
-                          {isSourcingProduct ? `+${freightCost.toLocaleString('fr-FR')} FCFA` : 'Inclus (0 FCFA)'}
+                        <span className={`font-mono font-bold text-xs ${isSourcingProduct && selectedFreight !== 'neutral' ? 'text-orange-600' : 'text-gray-500'}`}>
+                          {isSourcingProduct
+                            ? (selectedFreight === 'neutral' ? translateText('Non sélectionné (0 F)') : `+${freightCost.toLocaleString('fr-FR')} FCFA`)
+                            : 'Inclus (0 FCFA)'}
                         </span>
                       </div>
                       <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
@@ -743,6 +1018,19 @@ export default function ProductDetails() {
                   >
                     <FileText className="w-3.5 h-3.5" /> {t('quote_pro_btn')}
                   </button>
+
+                  {/* Catalogue PDF Constructeur Button (Téléchargement direct sans redirection) */}
+                  {effectiveCatalogPdfUrl && (
+                    <a
+                      href={effectiveCatalogPdfUrl}
+                      download={`Catalogue-Technique-${product.ref || product.id}.pdf`}
+                      className="bg-slate-100 hover:bg-[#003366] text-[#003366] hover:text-white border border-slate-300 h-9 px-3.5 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 shadow-xs"
+                      title={translateText('Télécharger directement le Catalogue PDF & Fiche Technique Constructeur')}
+                    >
+                      <Download className="w-3.5 h-3.5 text-[#FF6600]" />
+                      <span>{translateText('Catalogue PDF')}</span>
+                    </a>
+                  )}
                 </div>
 
               </div>

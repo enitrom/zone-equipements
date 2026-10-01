@@ -7,13 +7,14 @@ import {
   TrendingUp, Truck, Layers, FileText, CheckCircle2, Eye, Globe, Settings,
   Image as ImageIcon, MessageSquare, Send, Mail, Phone, ExternalLink, HelpCircle,
   ShieldCheck, LogIn, AlertCircle, LogOut, FileSpreadsheet, Warehouse, Star, MapPin,
-  Activity
+  Activity, Store
 } from 'lucide-react';
 import { 
-  catalogService, ExtendedProduct, ProductVariantItem, Order, Supplier, AgentWarehouse, AuditLog, EXCHANGE_RATES, cleanBrand,
+  catalogService, ExtendedProduct, ProductVariantItem, PdfDocumentItem, Order, Supplier, AgentWarehouse, AuditLog, EXCHANGE_RATES, cleanBrand,
   computeSingleVariantPricing, getCheapestVariant, getEffectiveProductBasePrice, normalizeVariants,
   formatSpecsToCharacteristicsText, parseVariantCharacteristicsToSpecs, parseCharacteristicsTextToSpecs, translateSpecsRecordToFrench,
-  smartTranslateProductTitleToFrench, smartTranslateProductDescriptionToFrench, isProductSourcing,
+  smartTranslateProductTitleToFrench, smartTranslateProductDescriptionToFrench, translateAndReformatProductSmart, isProductSourcing,
+  parseWeightToKg, filterOutSmallOrIconImages,
   getClientWarehouseCode, getItemFreightCode, formatSupplierParcelLabel,
   formatWarehouseConsigneeLine, formatWarehouseFullAddress
 } from '../services/catalogService';
@@ -35,13 +36,14 @@ import AnalyticsTrafficManager from '../components/admin/AnalyticsTrafficManager
 import AdminNotificationsBell from '../components/admin/AdminNotificationsBell';
 import { EmailMarketingManager } from '../components/admin/EmailMarketingManager';
 import { DirectInvoiceModal } from '../components/admin/DirectInvoiceModal';
+import { PhysicalStorePOS } from '../components/admin/PhysicalStorePOS';
 
 export default function Admin() {
   const { user, isAdmin, loading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState<'finance' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'campaigns' | 'security'>('finance');
+  const [activeTab, setActiveTab] = useState<'pos' | 'finance' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'campaigns' | 'security'>('pos');
   const [catalogSubTab, setCatalogSubTab] = useState<'products' | 'structure'>('products');
   const [showDirectInvoiceModal, setShowDirectInvoiceModal] = useState(false);
   
@@ -111,15 +113,22 @@ export default function Admin() {
   const [importForm, setImportForm] = useState<{
     name: string;
     brand: string;
+    model?: string;
     category: string;
     supplierPrice: number;
     supplierCurrency: 'USD' | 'EUR' | 'CNY' | 'XOF';
     weight: number;
+    weightInput?: string;
     dimensions: string;
     marginRate: number;
     applyVat: boolean;
     ignoreSeaWeight: boolean;
     ignoreSeaVolume: boolean;
+    defaultShippingMethod?: 'neutral' | 'sea' | 'air';
+    customSeaFreightCost?: number;
+    customAirFreightCost?: number;
+    catalogPdfUrl?: string;
+    pdfUrls?: PdfDocumentItem[];
     image: string;
     additionalImages: string[];
     specs: Record<string, string>;
@@ -141,11 +150,17 @@ export default function Admin() {
     supplierPrice: 0,
     supplierCurrency: 'USD',
     weight: 0,
+    weightInput: '',
     dimensions: '',
     marginRate: 0.35,
-    applyVat: true,
+    applyVat: (siteSettings.defaultVatRate ?? 0.18) > 0,
     ignoreSeaWeight: false,
     ignoreSeaVolume: false,
+    defaultShippingMethod: 'neutral',
+    customSeaFreightCost: undefined,
+    customAirFreightCost: undefined,
+    catalogPdfUrl: '',
+    pdfUrls: [],
     image: '',
     additionalImages: [],
     specs: {},
@@ -161,8 +176,15 @@ export default function Admin() {
     discountPercent: undefined
   });
 
-  // Expandable Category Manager inside Add/Edit & Import Modals
   const [showCategoryDrawer, setShowCategoryDrawer] = useState(false);
+  const [openProductCurtains, setOpenProductCurtains] = useState<Record<string, boolean>>({});
+  const toggleProductCurtain = (key: string) => {
+    setOpenProductCurtains(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+  const isSystemVatEnabled =
+    (siteSettings.defaultVatRate ?? 0.18) > 0 &&
+    (siteSettings as any).vatEnabled !== false &&
+    (siteSettings as any).applyVatByDefault !== false;
   const [editingCatIdx, setEditingCatIdx] = useState<number | null>(null);
   const [editingCatName, setEditingCatName] = useState('');
   const [editingCatBrands, setEditingCatBrands] = useState('');
@@ -192,7 +214,7 @@ export default function Admin() {
     sourcePlatform: 'Manuel',
     supplierId: '',
     warehouseDeliveryFeeUSD: 20,
-    applyVat: true,
+    applyVat: isSystemVatEnabled,
     ignoreSeaWeight: false,
     ignoreSeaVolume: false,
     specs: {},
@@ -201,6 +223,15 @@ export default function Admin() {
     discountPercent: undefined,
     image: 'https://images.unsplash.com/photo-1504148455328-c376907d081c?w=600&auto=format&fit=crop&q=80'
   });
+
+  useEffect(() => {
+    if (!isSystemVatEnabled) {
+      setImportForm(prev => (prev.applyVat ? { ...prev, applyVat: false } : prev));
+      if (!editingProduct) {
+        setFormProduct(prev => (prev.applyVat !== false ? { ...prev, applyVat: false } : prev));
+      }
+    }
+  }, [isSystemVatEnabled, editingProduct]);
 
   // Specs editor helper state
   const [newSpecKey, setNewSpecKey] = useState('');
@@ -298,7 +329,7 @@ export default function Admin() {
 
   // Dynamic pricing calculation helper for manual form
   const currentCalculatedPricing = useMemo(() => {
-    const rawWeight = parseFloat(formProduct.weight?.replace(/[^0-9.]/g, '') || '2');
+    const rawWeight = parseWeightToKg(formProduct.weight) || 2;
     const baseSupplierPrice = Number(formProduct.supplierPrice) || 0;
     const pricingCtx = {
       supplierCurrency: formProduct.supplierCurrency || 'USD',
@@ -311,7 +342,7 @@ export default function Admin() {
       ? baseSupplierPrice
       : (cheapestVar?.supplierPrice && cheapestVar.supplierPrice > 0 ? cheapestVar.supplierPrice : 0);
     const effectiveWeight = (baseSupplierPrice <= 0 && cheapestVar?.weight)
-      ? (parseFloat(String(cheapestVar.weight).replace(/[^0-9.]/g, '')) || rawWeight || 2)
+      ? (parseWeightToKg(cheapestVar.weight) || rawWeight || 2)
       : (rawWeight || 2);
 
     const calc = catalogService.calculatePricing({
@@ -321,10 +352,26 @@ export default function Admin() {
       ignoreSeaWeight: formProduct.ignoreSeaWeight,
       ignoreSeaVolume: formProduct.ignoreSeaVolume,
       marginRate: Number(formProduct.marginRate) || 0.35,
-      preferredFreight: formProduct.shippingMethod || 'auto',
+      preferredFreight: formProduct.defaultShippingMethod === 'sea'
+        ? 'sea'
+        : formProduct.defaultShippingMethod === 'air'
+          ? 'air'
+          : (formProduct.shippingMethod || 'auto'),
       warehouseDeliveryUSD: Number(formProduct.warehouseDeliveryFeeUSD) || 0,
       applyVat: formProduct.applyVat !== false
     });
+
+    const finalSeaCost = (formProduct.customSeaFreightCost !== undefined && formProduct.customSeaFreightCost >= 0)
+      ? formProduct.customSeaFreightCost
+      : calc.seaFreightCostXOF;
+    const finalAirCost = (formProduct.customAirFreightCost !== undefined && formProduct.customAirFreightCost >= 0)
+      ? formProduct.customAirFreightCost
+      : calc.airFreightCostXOF;
+    const finalFreightCost = formProduct.defaultShippingMethod === 'sea'
+      ? finalSeaCost
+      : formProduct.defaultShippingMethod === 'air'
+        ? finalAirCost
+        : (calc.shippingMethod === 'sea' ? finalSeaCost : finalAirCost);
 
     if (effectiveSupplierPrice <= 0 && cheapestVar && cheapestVar.price && cheapestVar.price > 0) {
       const activeVatRate = siteSettings.defaultVatRate ?? 0.18;
@@ -332,13 +379,21 @@ export default function Admin() {
       const ht = Math.round(cheapestVar.price / vatDivisor);
       return {
         ...calc,
+        seaFreightCostXOF: finalSeaCost,
+        airFreightCostXOF: finalAirCost,
+        freightCostXOF: finalFreightCost,
         priceHT: ht,
         priceTTC: cheapestVar.price,
         totalCostPrice: cheapestVar.costPrice || Math.round(ht * (1 - (Number(formProduct.marginRate) || 0.35)))
       };
     }
-    return calc;
-  }, [formProduct.supplierPrice, formProduct.supplierCurrency, formProduct.weight, formProduct.marginRate, formProduct.shippingMethod, formProduct.warehouseDeliveryFeeUSD, formProduct.applyVat, formProduct.ignoreSeaWeight, formProduct.ignoreSeaVolume, formProduct.options, siteSettings]);
+    return {
+      ...calc,
+      seaFreightCostXOF: finalSeaCost,
+      airFreightCostXOF: finalAirCost,
+      freightCostXOF: finalFreightCost
+    };
+  }, [formProduct.supplierPrice, formProduct.supplierCurrency, formProduct.weight, formProduct.marginRate, formProduct.shippingMethod, formProduct.defaultShippingMethod, formProduct.customSeaFreightCost, formProduct.customAirFreightCost, formProduct.warehouseDeliveryFeeUSD, formProduct.applyVat, formProduct.ignoreSeaWeight, formProduct.ignoreSeaVolume, formProduct.options, siteSettings]);
 
   // Dynamic pricing calculation helper for import form
   const importCalculatedPricing = useMemo(() => {
@@ -354,16 +409,36 @@ export default function Admin() {
       ? baseSupplierPrice
       : (cheapestVar?.supplierPrice && cheapestVar.supplierPrice > 0 ? cheapestVar.supplierPrice : 0);
 
+    const parsedKg = importForm.weightInput
+      ? (parseWeightToKg(importForm.weightInput) || Number(importForm.weight) || 1)
+      : (Number(importForm.weight) || 1);
+
     const calc = catalogService.calculatePricing({
       supplierPrice: effectiveSupplierPrice,
       supplierCurrency: importForm.supplierCurrency,
-      weightKg: Number(importForm.weight) || 1,
+      weightKg: parsedKg,
       ignoreSeaWeight: importForm.ignoreSeaWeight,
       ignoreSeaVolume: importForm.ignoreSeaVolume,
       marginRate: Number(importForm.marginRate) || 0.35,
-      preferredFreight: 'auto',
+      preferredFreight: importForm.defaultShippingMethod === 'sea'
+        ? 'sea'
+        : importForm.defaultShippingMethod === 'air'
+          ? 'air'
+          : 'auto',
       applyVat: importForm.applyVat
     });
+
+    const finalSeaCost = (importForm.customSeaFreightCost !== undefined && importForm.customSeaFreightCost >= 0)
+      ? importForm.customSeaFreightCost
+      : calc.seaFreightCostXOF;
+    const finalAirCost = (importForm.customAirFreightCost !== undefined && importForm.customAirFreightCost >= 0)
+      ? importForm.customAirFreightCost
+      : calc.airFreightCostXOF;
+    const finalFreightCost = importForm.defaultShippingMethod === 'sea'
+      ? finalSeaCost
+      : importForm.defaultShippingMethod === 'air'
+        ? finalAirCost
+        : (calc.shippingMethod === 'sea' ? finalSeaCost : finalAirCost);
 
     if (effectiveSupplierPrice <= 0 && cheapestVar && cheapestVar.price && cheapestVar.price > 0) {
       const activeVatRate = siteSettings.defaultVatRate ?? 0.18;
@@ -371,32 +446,52 @@ export default function Admin() {
       const ht = Math.round(cheapestVar.price / vatDivisor);
       return {
         ...calc,
+        seaFreightCostXOF: finalSeaCost,
+        airFreightCostXOF: finalAirCost,
+        freightCostXOF: finalFreightCost,
         priceHT: ht,
         priceTTC: cheapestVar.price,
         totalCostPrice: cheapestVar.costPrice || Math.round(ht * (1 - (Number(importForm.marginRate) || 0.35)))
       };
     }
-    return calc;
-  }, [importForm.supplierPrice, importForm.supplierCurrency, importForm.weight, importForm.marginRate, importForm.applyVat, importForm.ignoreSeaWeight, importForm.ignoreSeaVolume, importForm.options, siteSettings]);
+    return {
+      ...calc,
+      seaFreightCostXOF: finalSeaCost,
+      airFreightCostXOF: finalAirCost,
+      freightCostXOF: finalFreightCost
+    };
+  }, [importForm.supplierPrice, importForm.supplierCurrency, importForm.weight, importForm.weightInput, importForm.marginRate, importForm.applyVat, importForm.ignoreSeaWeight, importForm.ignoreSeaVolume, importForm.defaultShippingMethod, importForm.customSeaFreightCost, importForm.customAirFreightCost, importForm.options, siteSettings]);
 
   // Open Edit modal
   const handleOpenEdit = (prod: ExtendedProduct) => {
     const sourcing = isProductSourcing(prod);
+    const translated = translateAndReformatProductSmart({
+      name: prod.name,
+      brand: prod.brand,
+      description: prod.description,
+      specs: prod.specs
+    });
     setEditingProduct(prod);
     setFormProduct({
       ...prod,
+      name: translated.name,
       inStock: !sourcing,
       availabilityMode: sourcing ? 'sourcing' : 'stock',
-      description: prod.description || smartTranslateProductDescriptionToFrench(prod.description, prod.name, prod.specs),
+      defaultShippingMethod: prod.defaultShippingMethod || 'neutral',
+      customSeaFreightCost: prod.customSeaFreightCost,
+      customAirFreightCost: prod.customAirFreightCost,
+      catalogPdfUrl: prod.catalogPdfUrl || '',
+      pdfUrls: prod.pdfUrls || [],
+      description: translated.description,
       applyVat: prod.applyVat !== false,
       warehouseDeliveryFeeUSD: prod.warehouseDeliveryFeeUSD || 20,
-      specs: translateSpecsRecordToFrench(prod.specs || {}),
+      specs: translated.specs,
       options: prod.options || (prod as any).variants || [],
       ignoreSeaWeight: false,
       ignoreSeaVolume: false
     });
     const imgs = prod.images && prod.images.length > 0 ? [...prod.images] : [prod.image || prod.img || ''];
-    setGalleryImages(imgs.filter(Boolean));
+    setGalleryImages(filterOutSmallOrIconImages(imgs.filter(Boolean)));
     setNewOptionInput('');
     setNewOptionPrice('');
     setNewOptionWeight('');
@@ -405,12 +500,14 @@ export default function Admin() {
     setNewOptionSpecs({});
     setShowNewOptionSpecs(false);
     setOpenVariantSpecsIdx(null);
+    setOpenProductCurtains({});
     setShowAddModal(true);
   };
 
   // Open New Product modal
   const handleOpenNewProduct = () => {
     setEditingProduct(null);
+    setOpenProductCurtains({});
     setFormProduct({
       name: '',
       brand: '',
@@ -423,6 +520,11 @@ export default function Admin() {
       origin: 'Chine',
       marginRate: 0.35,
       shippingMethod: 'air',
+      defaultShippingMethod: 'neutral',
+      customSeaFreightCost: undefined,
+      customAirFreightCost: undefined,
+      catalogPdfUrl: '',
+      pdfUrls: [],
       isOnline: true,
       inStock: true,
       availabilityMode: 'stock',
@@ -431,7 +533,7 @@ export default function Admin() {
       sourcePlatform: 'Manuel',
       supplierId: suppliers[0]?.id || '',
       warehouseDeliveryFeeUSD: 20,
-      applyVat: true,
+      applyVat: isSystemVatEnabled,
       ignoreSeaWeight: false,
       ignoreSeaVolume: false,
       options: [],
@@ -472,9 +574,15 @@ export default function Admin() {
     };
     const normalizedOpts = normalizeVariants(formProduct.options || [], pricingCtx);
     const calculated = currentCalculatedPricing;
-    const finalImages = galleryImages.filter(Boolean);
+    const finalImages = filterOutSmallOrIconImages(galleryImages.filter(Boolean));
     const mainImg = finalImages[0] || formProduct.image || formProduct.img || DEFAULT_PRODUCT_IMAGE;
-    const translatedSpecs = translateSpecsRecordToFrench(formProduct.specs || {});
+    const translatedData = translateAndReformatProductSmart({
+      name: formProduct.name,
+      brand: formProduct.brand,
+      description: formProduct.description,
+      specs: formProduct.specs
+    });
+    const translatedSpecs = translatedData.specs;
     const isSourcingMode = formProduct.availabilityMode
       ? formProduct.availabilityMode === 'sourcing'
       : formProduct.inStock === false;
@@ -491,15 +599,22 @@ export default function Admin() {
       setCategories(siteSettingsService.getCategories());
     }
 
+    const parsedWeightKg = parseWeightToKg(formProduct.weight);
+    const normalizedWeightStr = parsedWeightKg > 0 ? `${parsedWeightKg} kg` : (formProduct.weight || '2 kg');
+
     const payload: Partial<ExtendedProduct> = {
       ...formProduct,
-      name: formProduct.name.trim(),
+      name: translatedData.name || formProduct.name.trim(),
+      weight: normalizedWeightStr,
       category: chosenCat,
       inStock: !isSourcingMode,
       availabilityMode: isSourcingMode ? 'sourcing' : 'stock',
-      description: formProduct.description?.trim()
-        ? formProduct.description.trim()
-        : smartTranslateProductDescriptionToFrench('', formProduct.name, translatedSpecs),
+      defaultShippingMethod: isSourcingMode ? (formProduct.defaultShippingMethod || 'neutral') : 'neutral',
+      customSeaFreightCost: formProduct.customSeaFreightCost,
+      customAirFreightCost: formProduct.customAirFreightCost,
+      catalogPdfUrl: formProduct.catalogPdfUrl?.trim() || undefined,
+      pdfUrls: formProduct.pdfUrls && formProduct.pdfUrls.length > 0 ? formProduct.pdfUrls : undefined,
+      description: translatedData.description,
       options: normalizedOpts,
       variants: normalizedOpts,
       img: mainImg,
@@ -507,7 +622,13 @@ export default function Admin() {
       images: finalImages.length > 0 ? finalImages : [mainImg],
       price: calculated.priceTTC,
       costPrice: calculated.totalCostPrice,
-      shippingMethod: isSourcingMode ? calculated.shippingMethod : 'none',
+      shippingMethod: isSourcingMode
+        ? (formProduct.defaultShippingMethod === 'sea'
+            ? 'sea'
+            : formProduct.defaultShippingMethod === 'air'
+              ? 'air'
+              : calculated.shippingMethod)
+        : 'none',
       specs: Object.keys(translatedSpecs).length > 0
         ? translatedSpecs
         : { "État": "Neuf d'origine", "Garantie": "1 an", "Certification": "Norme CE / ISO" }
@@ -591,7 +712,7 @@ export default function Admin() {
     );
   };
 
-  // Smart Translation & Intelligent Reformulation (Title, Description & Specs)
+  // Unified Forced French Translation & Intelligent Reformulation (Title, Description & Specs)
   const handleSmartTranslate = async (mode: 'manual' | 'import') => {
     setIsTranslating(true);
     try {
@@ -600,12 +721,18 @@ export default function Admin() {
       const currentDesc = mode === 'manual' ? (formProduct.description || '') : (importForm.description || '');
       const currentSpecs = mode === 'manual' ? (formProduct.specs || {}) : (importForm.specs || {});
 
-      // Local smart reformulation first
-      let bestName = smartTranslateProductTitleToFrench(currentName, currentBrand);
-      let bestSpecs = translateSpecsRecordToFrench(currentSpecs);
-      let bestDesc = smartTranslateProductDescriptionToFrench(currentDesc, bestName, bestSpecs);
+      // Forced local French translation & glued-spec splitting first
+      const localResult = translateAndReformatProductSmart({
+        name: currentName,
+        brand: currentBrand,
+        description: currentDesc,
+        specs: currentSpecs
+      });
+      let bestName = localResult.name;
+      let bestSpecs = localResult.specs;
+      let bestDesc = localResult.description;
 
-      // Optional AI refinement via backend /api/translate-product if configured
+      // Backend /api/translate-product refinement (Gemini or deterministic French dictionary)
       try {
         const res = await fetch('/api/translate-product', {
           method: 'POST',
@@ -618,14 +745,16 @@ export default function Admin() {
           })
         });
         const json = await res.json();
-        if (json.success && json.data && json.source === 'gemini') {
-          if (json.data.name) bestName = smartTranslateProductTitleToFrench(json.data.name, currentBrand);
-          if (json.data.specs && Object.keys(json.data.specs).length > 0) {
-            bestSpecs = translateSpecsRecordToFrench(json.data.specs);
-          }
-          if (json.data.description) {
-            bestDesc = smartTranslateProductDescriptionToFrench(json.data.description, bestName, bestSpecs);
-          }
+        if (json.success && json.data) {
+          const refined = translateAndReformatProductSmart({
+            name: json.data.name || bestName,
+            brand: currentBrand,
+            description: json.data.description || bestDesc,
+            specs: (json.data.specs && Object.keys(json.data.specs).length > 0) ? json.data.specs : bestSpecs
+          });
+          if (refined.name) bestName = refined.name;
+          if (Object.keys(refined.specs).length > 0) bestSpecs = refined.specs;
+          if (refined.description) bestDesc = refined.description;
         }
       } catch {
         // Fallback to local smart engine already computed
@@ -646,7 +775,7 @@ export default function Admin() {
           specs: bestSpecs
         }));
       }
-      triggerToast("Traduction et reformulation intelligente appliquées (Titre, Description & Caractéristiques).");
+      triggerToast("Traduction intégrale en français appliquée (Titre, Description & Caractéristiques).");
     } finally {
       setIsTranslating(false);
     }
@@ -659,6 +788,7 @@ export default function Admin() {
     setOpenImportVariantSpecsIdx(null);
     setShowNewImportOptionSpecs(false);
     setNewImportOptionSpecs({});
+    setOpenProductCurtains({});
     try {
       const res = await fetch('/api/scrape-product', {
         method: 'POST',
@@ -668,9 +798,10 @@ export default function Admin() {
       const json = await res.json();
       if (json.success && json.data) {
         const d = json.data;
-        const allExtractedImgs = Array.isArray(d.images) && d.images.length > 0 
+        const rawImgs = Array.isArray(d.images) && d.images.length > 0 
           ? d.images.filter(Boolean)
           : (d.imageUrl ? [d.imageUrl] : []);
+        const allExtractedImgs = filterOutSmallOrIconImages(rawImgs);
 
         // Automatically ensure supplier exists only if a real supplier name was extracted
         let autoSupplierId = '';
@@ -700,9 +831,16 @@ export default function Admin() {
           }
         }
 
-        const translatedDefaultSpecs = translateSpecsRecordToFrench(d.specs || {});
-        const smartFrenchTitle = smartTranslateProductTitleToFrench(d.name || '', d.brand || '');
-        const smartFrenchDesc = smartTranslateProductDescriptionToFrench(d.description || '', smartFrenchTitle, translatedDefaultSpecs);
+        const smartTranslated = translateAndReformatProductSmart({
+          name: d.name || '',
+          brand: d.brand || '',
+          description: d.description || '',
+          specs: d.specs || {}
+        });
+        const translatedDefaultSpecs = smartTranslated.specs;
+        const smartFrenchTitle = smartTranslated.name;
+        const smartFrenchDesc = smartTranslated.description;
+        const parsedWeightVal = parseWeightToKg(d.weight);
 
         setParsedLinkData({
           url: importUrl.trim(),
@@ -711,10 +849,12 @@ export default function Admin() {
           detectedCountry: d.country || '',
           guessedTitle: smartFrenchTitle,
           defaultCurrency: d.currency || 'USD',
-          estimatedWeight: d.weight ?? 0,
+          estimatedWeight: parsedWeightVal,
           brand: d.brand || '',
           dimensions: d.dimensions || '',
-          specs: translatedDefaultSpecs
+          specs: translatedDefaultSpecs,
+          catalogPdfUrl: d.catalogPdfUrl || '',
+          pdfUrls: Array.isArray(d.pdfUrls) ? d.pdfUrls : []
         });
 
         const rawExtractedOptions = Array.isArray(d.options)
@@ -727,12 +867,18 @@ export default function Admin() {
           category: d.category || categories[0]?.name || 'Outillage électrique',
           supplierPrice: typeof d.supplierPrice === 'number' && !isNaN(d.supplierPrice) ? d.supplierPrice : 0,
           supplierCurrency: d.currency || 'USD',
-          weight: typeof d.weight === 'number' && !isNaN(d.weight) ? d.weight : 0,
+          weight: parsedWeightVal,
+          weightInput: parsedWeightVal > 0 ? `${parsedWeightVal} kg` : '',
           dimensions: d.dimensions || '',
           marginRate: 0.35,
-          applyVat: true,
+          applyVat: isSystemVatEnabled,
           ignoreSeaWeight: false,
           ignoreSeaVolume: false,
+          defaultShippingMethod: 'neutral',
+          customSeaFreightCost: undefined,
+          customAirFreightCost: undefined,
+          catalogPdfUrl: d.catalogPdfUrl || '',
+          pdfUrls: Array.isArray(d.pdfUrls) ? d.pdfUrls : [],
           image: allExtractedImgs[0] || '',
           additionalImages: allExtractedImgs.slice(1),
           specs: translatedDefaultSpecs,
@@ -747,36 +893,67 @@ export default function Admin() {
           showDeposit: false,
           depositPercentage: 30
         });
-        triggerToast(`Analyse terminée (${d.platform}) : Titre, description et caractéristiques traduits et reformulés en français.`);
+        triggerToast(`Analyse terminée (${d.platform}) : Titre, description, caractéristiques et PDF extraits en français.`);
       } else {
         throw new Error(json.error || "Erreur d'analyse");
       }
     } catch {
-      // Fallback to local URL parser without any fictional data
+      // Fallback to local URL parser with dedicated Grainger / platform intelligence
       const parsed = catalogService.parseProductLink(importUrl);
-      const fallbackTitle = smartTranslateProductTitleToFrench(parsed.guessedTitle || '');
-      const fallbackDesc = smartTranslateProductDescriptionToFrench('', fallbackTitle, {});
+      const fallbackTranslated = translateAndReformatProductSmart({
+        name: parsed.guessedTitle || '',
+        brand: parsed.detectedBrand || '',
+        description: '',
+        specs: parsed.detectedSpecs || {}
+      });
+      const fallbackSpecs = fallbackTranslated.specs;
+      const fallbackTitle = fallbackTranslated.name;
+      const fallbackDesc = fallbackTranslated.description;
       setParsedLinkData(parsed);
+
+      let fallbackSupplierId = '';
+      if (parsed.detectedSupplier) {
+        const sup = catalogService.ensureSupplier({
+          name: parsed.detectedSupplier,
+          platform: parsed.detectedPlatform,
+          country: parsed.detectedCountry || 'États-Unis',
+          currency: parsed.defaultCurrency,
+          storeUrl: importUrl.trim()
+        });
+        fallbackSupplierId = sup.id;
+      }
+
+      const fallbackImgs = filterOutSmallOrIconImages(
+        parsed.detectedImages && parsed.detectedImages.length > 0
+          ? parsed.detectedImages
+          : (parsed.detectedImage ? [parsed.detectedImage] : [])
+      );
 
       setImportForm({
         name: fallbackTitle,
-        brand: '',
-        category: categories[0]?.name || 'Outillage électrique',
-        supplierPrice: 0,
+        brand: parsed.detectedBrand || '',
+        category: parsed.detectedCategory || categories[0]?.name || 'Outillage électrique',
+        supplierPrice: parsed.detectedPrice || 0,
         supplierCurrency: parsed.defaultCurrency,
-        weight: 0,
-        dimensions: '',
+        weight: parsed.estimatedWeight || 0,
+        weightInput: parsed.estimatedWeight ? `${parsed.estimatedWeight} kg` : '',
+        dimensions: parsed.detectedDimensions || '',
         marginRate: 0.35,
-        applyVat: true,
+        applyVat: isSystemVatEnabled,
         ignoreSeaWeight: false,
         ignoreSeaVolume: false,
-        image: '',
-        additionalImages: [],
-        specs: {},
+        defaultShippingMethod: 'neutral',
+        customSeaFreightCost: undefined,
+        customAirFreightCost: undefined,
+        catalogPdfUrl: parsed.catalogPdfUrl || '',
+        pdfUrls: parsed.pdfUrls || [],
+        image: fallbackImgs[0] || '',
+        additionalImages: fallbackImgs.slice(1),
+        specs: fallbackSpecs,
         options: [],
-        supplierId: '',
-        supplierName: '',
-        supplierCountry: '',
+        supplierId: fallbackSupplierId,
+        supplierName: parsed.detectedSupplier || '',
+        supplierCountry: parsed.detectedCountry || '',
         supplierPlatform: parsed.detectedPlatform,
         description: fallbackDesc,
         inStock: false,
@@ -784,7 +961,7 @@ export default function Admin() {
         showDeposit: false,
         depositPercentage: 30
       });
-      triggerToast("Lien préparé : veuillez compléter manuellement les données non disponibles.");
+      triggerToast(`Lien analysé (${parsed.detectedPlatform}) : données extraites et traduites en français.`);
     } finally {
       setIsScraping(false);
     }
@@ -798,7 +975,7 @@ export default function Admin() {
       return;
     }
     const calculated = importCalculatedPricing;
-    const allImgs = [importForm.image, ...importForm.additionalImages].filter(Boolean);
+    const allImgs = filterOutSmallOrIconImages([importForm.image, ...importForm.additionalImages].filter(Boolean));
     const resolvedCleanBrand = importForm.brand?.trim()
       ? cleanBrand(importForm.brand, importForm.name)
       : (parsedLinkData.brand ? cleanBrand(parsedLinkData.brand, importForm.name) : 'Constructeur Certifié');
@@ -838,12 +1015,20 @@ export default function Admin() {
       applyVat: importForm.applyVat
     });
 
-    const translatedFinalSpecs = translateSpecsRecordToFrench(importForm.specs || {});
+    const finalTranslated = translateAndReformatProductSmart({
+      name: importForm.name.trim(),
+      brand: resolvedCleanBrand,
+      description: importForm.description || '',
+      specs: importForm.specs || {}
+    });
+    const translatedFinalSpecs = finalTranslated.specs;
     const isSourcingImport = importForm.availabilityMode !== 'stock';
-    const finalFrenchTitle = smartTranslateProductTitleToFrench(importForm.name.trim(), resolvedCleanBrand);
-    const finalFrenchDesc = importForm.description?.trim()
-      ? importForm.description.trim()
-      : smartTranslateProductDescriptionToFrench('', finalFrenchTitle, translatedFinalSpecs);
+    const finalFrenchTitle = finalTranslated.name;
+    const finalFrenchDesc = finalTranslated.description;
+
+    const parsedWeightKg = importForm.weightInput
+      ? (parseWeightToKg(importForm.weightInput) || importForm.weight || 1)
+      : (importForm.weight || 1);
 
     catalogService.addProduct({
       name: finalFrenchTitle,
@@ -856,7 +1041,7 @@ export default function Admin() {
       supplierId: finalSupplierId,
       supplierPrice: importForm.supplierPrice,
       supplierCurrency: importForm.supplierCurrency,
-      weight: importForm.weight ? `${importForm.weight} kg` : '1 kg',
+      weight: `${parsedWeightKg} kg`,
       dimensions: importForm.dimensions || '',
       marginRate: importForm.marginRate,
       applyVat: importForm.applyVat,
@@ -865,7 +1050,18 @@ export default function Admin() {
       discountPercent: importForm.discountPercent || undefined,
       costPrice: calculated.totalCostPrice,
       price: calculated.priceTTC,
-      shippingMethod: isSourcingImport ? calculated.shippingMethod : 'none',
+      defaultShippingMethod: isSourcingImport ? (importForm.defaultShippingMethod || 'neutral') : 'neutral',
+      customSeaFreightCost: importForm.customSeaFreightCost,
+      customAirFreightCost: importForm.customAirFreightCost,
+      catalogPdfUrl: importForm.catalogPdfUrl?.trim() || undefined,
+      pdfUrls: importForm.pdfUrls && importForm.pdfUrls.length > 0 ? importForm.pdfUrls : undefined,
+      shippingMethod: isSourcingImport
+        ? (importForm.defaultShippingMethod === 'sea'
+            ? 'sea'
+            : importForm.defaultShippingMethod === 'air'
+              ? 'air'
+              : calculated.shippingMethod)
+        : 'none',
       description: finalFrenchDesc,
       specs: translatedFinalSpecs,
       options: normalizedImportOpts,
@@ -907,6 +1103,13 @@ export default function Admin() {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 3500);
   };
+
+  // Redirection intelligente et silencieuse si un compte connecté n'est pas (ou n'est plus) administrateur
+  useEffect(() => {
+    if (!loading && user && !isAdmin) {
+      navigate('/account', { replace: true });
+    }
+  }, [loading, user, isAdmin, navigate]);
 
   // 1. ÉTAT DE CHARGEMENT DE LA SESSION
   if (loading) {
@@ -1003,190 +1206,274 @@ export default function Admin() {
       )}
 
       {/* Top Admin Header */}
-      <header className="bg-slate-950 border-b border-slate-800 sticky top-0 z-40 px-4 sm:px-8 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#FF6600] flex items-center justify-center font-black text-white text-lg shadow-lg shadow-orange-600/30">
-            ZE
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-extrabold tracking-tight text-white">Zone Équipements Sénégal</h1>
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/30 uppercase tracking-wider">
-                Back-Office B2B
-              </span>
+      <header className="bg-slate-950 border-b border-slate-800 sticky top-0 z-40 px-3 sm:px-8 py-3 sm:py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shadow-lg w-full max-w-full">
+        <div className="flex items-center justify-between gap-2 w-full lg:w-auto min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#FF6600] flex items-center justify-center font-black text-white text-base sm:text-lg shadow-lg shadow-orange-600/30 shrink-0">
+              ZE
             </div>
-            <p className="text-xs text-slate-400">Plateforme de Gestion Industrielle, Financière & Approvisionnements</p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-base sm:text-xl font-extrabold tracking-tight text-white truncate">
+                  Zone Équipements
+                </h1>
+                <span className="px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/30 uppercase tracking-wider shrink-0">
+                  Back-Office
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 hidden sm:block truncate">
+                Plateforme de Gestion Industrielle, Magasin Physique & Approvisionnements
+              </p>
+            </div>
+          </div>
+
+          {/* Mobile Quick Bell & Logout on top-right so row 2 never overflows */}
+          <div className="flex items-center gap-1.5 lg:hidden shrink-0">
+            <AdminNotificationsBell
+              onNavigateTab={(tab, targetId) => {
+                setActiveTab(tab as any);
+                if (targetId) setOrderSearchTerm(targetId);
+              }}
+            />
+            <button
+              onClick={refreshData}
+              className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center justify-center transition-all cursor-pointer"
+              title="Rafraîchir les données"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <AdminNotificationsBell 
-            onNavigateTab={(tab, targetId) => {
-              setActiveTab(tab as any);
-              if (targetId) setOrderSearchTerm(targetId);
-            }} 
-          />
-          <button 
-            onClick={refreshData} 
-            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5 w-full lg:w-auto justify-start lg:justify-end">
+          <div className="hidden lg:block">
+            <AdminNotificationsBell
+              onNavigateTab={(tab, targetId) => {
+                setActiveTab(tab as any);
+                if (targetId) setOrderSearchTerm(targetId);
+              }}
+            />
+          </div>
+
+          <button
+            onClick={refreshData}
+            className="hidden lg:flex p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold items-center gap-1.5 transition-all cursor-pointer"
             title="Rafraîchir les données"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Actualiser</span>
+            <span>Actualiser</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setShowDirectInvoiceModal(true)}
-            className="px-3.5 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
-            title="Facturation sur place / Vente comptoir"
+
+          <a
+            href="/shop"
+            target="_blank"
+            rel="noreferrer"
+            className="px-2.5 sm:px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1.5 transition-all"
           >
-            <FileText className="w-4 h-4" />
-            <span>+ Facture Comptoir</span>
-          </button>
-          <a 
-            href="/shop" 
-            target="_blank" 
-            rel="noreferrer" 
-            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
-          >
-            <Eye className="w-3.5 h-3.5 text-blue-400" />
-            Voir la Boutique Client
+            <Eye className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+            <span className="hidden sm:inline">Voir la </span>
+            <span>Boutique</span>
           </a>
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-semibold">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">{user?.email}</span>
+
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-[11px] sm:text-xs font-semibold max-w-[140px] sm:max-w-none truncate">
+            <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden md:inline truncate">{user?.email}</span>
             <span className="md:hidden">Admin</span>
           </div>
+
           <button
             onClick={async () => {
               await auth.signOut();
               navigate('/');
             }}
-            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+            className="px-2.5 sm:px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[11px] sm:text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
             title="Se déconnecter"
           >
-            <LogOut className="w-3.5 h-3.5 text-red-400" />
+            <LogOut className="w-3.5 h-3.5 text-red-400 shrink-0" />
             <span className="hidden sm:inline">Déconnexion</span>
           </button>
         </div>
       </header>
 
-      {/* Navigation Tabs */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-8 mt-6">
-        <div className="flex overflow-x-auto no-scrollbar gap-2 p-1.5 bg-slate-950/80 rounded-2xl border border-slate-800/80 shadow-lg">
+      {/* Navigation Tabs — Architecture Ergonomique 6 Piliers (Zéro débordement horizontal, 100% accessible) */}
+      <nav aria-label="Navigation principale administration" className="max-w-7xl mx-auto px-4 sm:px-8 mt-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2 p-2 bg-slate-950/90 rounded-2xl border border-slate-800/90 shadow-xl">
           <button
-            onClick={() => setActiveTab('finance')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-              activeTab === 'finance'
+            type="button"
+            onClick={() => setActiveTab('pos')}
+            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-black text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
+              activeTab === 'pos'
                 ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20'
             }`}
           >
-            <BarChart3 className="w-4 h-4" />
-            Finance & Chiffre d'Affaires
+            <Store className="w-4 h-4 shrink-0" />
+            <span className="truncate">Magasin Physique</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('catalog')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
+            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
               activeTab === 'catalog'
                 ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
           >
-            <Package className="w-4 h-4" />
-            Gestion Catalogue ({products.length})
+            <Package className="w-4 h-4 shrink-0" />
+            <span className="truncate">Catalogue ({products.length})</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setActiveTab('orders')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
+            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
               activeTab === 'orders'
                 ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
           >
-            <ShoppingCart className="w-4 h-4" />
-            Commandes & Devis ({orders.length})
+            <ShoppingCart className="w-4 h-4 shrink-0" />
+            <span className="truncate">Commandes ({orders.length})</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('suppliers')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-              activeTab === 'suppliers'
+            type="button"
+            onClick={() => setActiveTab(activeTab === 'warehouses' ? 'warehouses' : 'suppliers')}
+            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
+              activeTab === 'suppliers' || activeTab === 'warehouses'
                 ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
           >
-            <Users className="w-4 h-4" />
-            Fournisseurs & Sourcing ({suppliers.length})
+            <Users className="w-4 h-4 shrink-0" />
+            <span className="truncate">Sourcing & Transit ({suppliers.length})</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('warehouses')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-              activeTab === 'warehouses'
+            type="button"
+            onClick={() => setActiveTab(activeTab === 'analytics' || activeTab === 'campaigns' ? activeTab : 'finance')}
+            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
+              activeTab === 'finance' || activeTab === 'analytics' || activeTab === 'campaigns'
                 ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
           >
-            <Warehouse className="w-4 h-4" />
-            Entrepôts d'Agents ({agentWarehouses.length})
+            <BarChart3 className="w-4 h-4 shrink-0" />
+            <span className="truncate">Finance & Pilotage</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('audit')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-              activeTab === 'audit'
+            type="button"
+            onClick={() => setActiveTab(activeTab === 'audit' ? 'audit' : 'security')}
+            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
+              activeTab === 'security' || activeTab === 'audit'
                 ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
           >
-            <Shield className="w-4 h-4" />
-            Journal d'Audit & Éthique
-          </button>
-
-          <button
-            onClick={() => setActiveTab('analytics')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-              activeTab === 'analytics'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Activity className="w-4 h-4" />
-            Trafic & Analytique
-          </button>
-
-          <button
-            onClick={() => setActiveTab('security')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-              activeTab === 'security'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Settings className="w-4 h-4" />
-            Paramètres, TVA & Comptes Admin
-          </button>
-
-          <button
-            onClick={() => setActiveTab('campaigns')}
-            className={`flex items-center gap-2.5 px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-              activeTab === 'campaigns'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Mail className="w-4 h-4" />
-            Emails & Campagnes Promos
+            <Settings className="w-4 h-4 shrink-0" />
+            <span className="truncate">Paramètres & Audit</span>
           </button>
         </div>
-      </div>
+
+        {/* Sub-Navigation Contextuelle pour les pôles regroupés (Ergonomie 1-clic sans redondance) */}
+        {(activeTab === 'finance' || activeTab === 'analytics' || activeTab === 'campaigns') && (
+          <div className="flex flex-wrap items-center gap-2 mt-3 p-1.5 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setActiveTab('finance')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'finance' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Chiffre d'Affaires & Marges</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('analytics')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'analytics' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span>Trafic & Analytique Web</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('campaigns')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'campaigns' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Emails & Campagnes B2B</span>
+            </button>
+          </div>
+        )}
+
+        {(activeTab === 'suppliers' || activeTab === 'warehouses') && (
+          <div className="flex flex-wrap items-center gap-2 mt-3 p-1.5 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setActiveTab('suppliers')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'suppliers' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Fournisseurs Partenaires ({suppliers.length})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('warehouses')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'warehouses' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Warehouse className="w-3.5 h-3.5" />
+              <span>Entrepôts d'Agents & Transit ({agentWarehouses.length})</span>
+            </button>
+          </div>
+        )}
+
+        {(activeTab === 'security' || activeTab === 'audit') && (
+          <div className="flex flex-wrap items-center gap-2 mt-3 p-1.5 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setActiveTab('security')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'security' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>Paramètres Globaux, TVA, Devises & Comptes Admin</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('audit')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'audit' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Shield className="w-3.5 h-3.5" />
+              <span>Journal d'Audit & Traçabilité ({auditLogs.length})</span>
+            </button>
+          </div>
+        )}
+      </nav>
 
       {/* Main Content Area */}
       <main className="max-w-7xl mx-auto px-4 sm:px-8 mt-6">
-        
+        {activeTab === 'pos' && (
+          <PhysicalStorePOS
+            onNotify={(msg) => triggerToast(msg)}
+            onRefreshParent={refreshData}
+            onOpenDirectInvoiceModal={() => setShowDirectInvoiceModal(true)}
+          />
+        )}
+
         {activeTab === 'campaigns' && (
           <EmailMarketingManager />
         )}
@@ -2304,11 +2591,11 @@ export default function Admin() {
                       type="button"
                       disabled={isTranslating}
                       onClick={() => handleSmartTranslate('manual')}
-                      className="text-[11px] font-extrabold text-emerald-300 bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-600/50 px-3 py-1 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer"
-                      title="Traduit en français et reformule intelligemment le titre, la description et toutes les caractéristiques"
+                      className="text-[11px] font-extrabold text-emerald-300 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/60 px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                      title="Bouton unique de traduction forcée : traduit en français le titre, la description et toutes les caractéristiques techniques"
                     >
-                      <RefreshCw className={`w-3 h-3 ${isTranslating ? 'animate-spin' : ''}`} />
-                      <span>{isTranslating ? 'Reformulation en cours...' : '✨ Traduire, Corriger & Reformuler (FR)'}</span>
+                      <RefreshCw className={`w-3.5 h-3.5 ${isTranslating ? 'animate-spin' : ''}`} />
+                      <span>{isTranslating ? 'Traduction FR en cours...' : '✨ Traduire & Reformuler tout en Français (Titre, Description & Caractéristiques)'}</span>
                     </button>
                   </div>
                   <input
@@ -2323,26 +2610,9 @@ export default function Admin() {
 
                 {/* Description Technique Traduite & Reformulée */}
                 <div className="sm:col-span-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                      Description Technique (Traduite & Reformulée en Français)
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const reformulated = smartTranslateProductDescriptionToFrench(
-                          formProduct.description || '',
-                          formProduct.name || '',
-                          formProduct.specs || {}
-                        );
-                        setFormProduct({ ...formProduct, description: reformulated });
-                        triggerToast("Description reformulée intelligemment en français.");
-                      }}
-                      className="text-[10px] font-bold text-orange-300 hover:text-orange-200 underline cursor-pointer"
-                    >
-                      Reformuler / Générer la synthèse technique FR
-                    </button>
-                  </div>
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+                    Description Technique (Traduite & Reformulée en Français)
+                  </label>
                   <textarea
                     rows={2}
                     value={formProduct.description || ''}
@@ -2571,99 +2841,116 @@ export default function Admin() {
                 </select>
               </div>
 
-              {/* GESTION MULTI-IMAGES DU PRODUIT */}
-              <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                    Photos & Visuels du Produit
-                  </label>
-                  <span className="text-[11px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full">
-                    {galleryImages.length} image{galleryImages.length > 1 ? 's' : ''} enregistrée{galleryImages.length > 1 ? 's' : ''}
-                  </span>
-                </div>
-
-                {/* Liste des images actuelles */}
-                {galleryImages.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 bg-slate-950 rounded-xl border border-slate-800/80">
-                    {galleryImages.map((img, idx) => (
-                      <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-700 bg-slate-900 group">
-                        <img 
-                          src={getProductImageUrl(img)} 
-                          alt="" 
-                          className="w-full h-full object-cover" 
-                          referrerPolicy="no-referrer" 
-                          onError={handleImageError}
-                        />
-                        {idx === 0 ? (
-                          <span className="absolute top-1 left-1 bg-orange-600 text-[9px] font-black text-white px-2 py-0.5 rounded-md shadow-md">
-                            ★ Principale
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleSetPrimaryImage(idx)}
-                            className="absolute top-1 left-1 bg-slate-900/90 hover:bg-orange-600 text-slate-300 hover:text-white text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-700 transition-colors"
-                            title="Définir comme photo principale"
-                          >
-                            Mettre en principale
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveGalleryImage(idx)}
-                          className="absolute top-1 right-1 p-1 bg-black/80 hover:bg-rose-600 text-white rounded-lg transition-colors cursor-pointer"
-                          title="Supprimer cette image"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Champ pour ajouter une nouvelle image URL ou fichier */}
-                <ImageUploadInput
-                  label={galleryImages.length === 0 ? "Importer la photo principale" : "Ajouter une autre photo à la galerie"}
-                  value={newGalleryImageUrl}
-                  onChange={(imgUrl) => {
-                    if (imgUrl) {
-                      setGalleryImages(prev => [...prev, imgUrl]);
-                      setNewGalleryImageUrl('');
-                      if (galleryImages.length === 0) {
-                        setFormProduct(prev => ({ ...prev, image: imgUrl, img: imgUrl }));
-                      }
-                    }
-                  }}
-                  placeholder="Collez une URL d'image ou cliquez sur Importer Fichier..."
-                  helperText="Vous pouvez importer vos propres fichiers ou coller un lien externe. La première image sert de visuel principal sur le catalogue."
-                />
-              </div>
-
-              {/* SPÉCIFICATIONS & CARACTÉRISTIQUES TECHNIQUES PAR DÉFAUT DU PRODUIT */}
-              <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                      Caractéristiques Techniques par défaut (Traduites en FR & Modifiables)
-                    </label>
-                    <p className="text-[10px] text-slate-400">
-                      Cliquez directement sur chaque intitulé ou valeur pour le modifier librement
-                    </p>
+              {/* GESTION MULTI-IMAGES DU PRODUIT (Rideau horizontal plié par défaut) */}
+              <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleProductCurtain('manual_gallery')}
+                  className="w-full p-4 flex items-center justify-between hover:bg-slate-800/40 transition-colors cursor-pointer text-left"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <ImageIcon className="w-4 h-4 text-orange-400" />
+                    <span className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                      Photos & Visuels du Produit
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    {Object.keys(formProduct.specs || {}).length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const translated = translateSpecsRecordToFrench(formProduct.specs || {});
-                          setFormProduct({ ...formProduct, specs: translated });
-                        }}
-                        className="text-[10px] font-bold text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700/50 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
-                        title="Traduire automatiquement tous les intitulés et valeurs en français"
-                      >
-                        Traduire en FR
-                      </button>
+                    <span className="text-[11px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full">
+                      {galleryImages.length} image{galleryImages.length > 1 ? 's' : ''}
+                    </span>
+                    <span className="text-xs font-bold text-slate-400">
+                      {openProductCurtains['manual_gallery'] ? '▲ Replier' : '▼ Dérouler'}
+                    </span>
+                  </div>
+                </button>
+
+                {openProductCurtains['manual_gallery'] && (
+                  <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
+                    {galleryImages.length > 0 && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 bg-slate-950 rounded-xl border border-slate-800/80">
+                        {galleryImages.map((img, idx) => (
+                          <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-700 bg-slate-900 group">
+                            <img 
+                              src={getProductImageUrl(img)} 
+                              alt="" 
+                              className="w-full h-full object-cover" 
+                              referrerPolicy="no-referrer" 
+                              onError={handleImageError}
+                            />
+                            {idx === 0 ? (
+                              <span className="absolute top-1 left-1 bg-orange-600 text-[9px] font-black text-white px-2 py-0.5 rounded-md shadow-md">
+                                ★ Principale
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleSetPrimaryImage(idx)}
+                                className="absolute top-1 left-1 bg-slate-900/90 hover:bg-orange-600 text-slate-300 hover:text-white text-[9px] font-bold px-1.5 py-0.5 rounded border border-slate-700 transition-colors"
+                                title="Définir comme photo principale"
+                              >
+                                Mettre en principale
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveGalleryImage(idx)}
+                              className="absolute top-1 right-1 p-1 bg-black/80 hover:bg-rose-600 text-white rounded-lg transition-colors cursor-pointer"
+                              title="Supprimer cette image"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     )}
+
+                    <ImageUploadInput
+                      label={galleryImages.length === 0 ? "Importer la photo principale" : "Ajouter une autre photo à la galerie"}
+                      value={newGalleryImageUrl}
+                      onChange={(imgUrl) => {
+                        if (imgUrl) {
+                          setGalleryImages(prev => [...prev, imgUrl]);
+                          setNewGalleryImageUrl('');
+                          if (galleryImages.length === 0) {
+                            setFormProduct(prev => ({ ...prev, image: imgUrl, img: imgUrl }));
+                          }
+                        }
+                      }}
+                      placeholder="Collez une URL d'image ou cliquez sur Importer Fichier..."
+                      helperText="Vous pouvez importer vos propres fichiers ou coller un lien externe. La première image sert de visuel principal sur le catalogue."
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* SPÉCIFICATIONS & CARACTÉRISTIQUES TECHNIQUES PAR DÉFAUT DU PRODUIT (Rideau horizontal plié par défaut) */}
+              <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleProductCurtain('manual_specs')}
+                  className="w-full p-4 flex items-center justify-between hover:bg-slate-800/40 transition-colors cursor-pointer text-left"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Layers className="w-4 h-4 text-emerald-400" />
+                    <div>
+                      <span className="block text-xs font-bold text-slate-200 uppercase tracking-wider">
+                        Caractéristiques Techniques par défaut (Traduites en FR & Modifiables)
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-full">
+                      {Object.keys(formProduct.specs || {}).length} spécification{Object.keys(formProduct.specs || {}).length > 1 ? 's' : ''}
+                    </span>
+                    <span className="text-xs font-bold text-slate-400">
+                      {openProductCurtains['manual_specs'] ? '▲ Replier' : '▼ Dérouler'}
+                    </span>
+                  </div>
+                </button>
+
+                {openProductCurtains['manual_specs'] && (
+                <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
+                  <div className="flex justify-end">
                     <button
                       type="button"
                       onClick={() => {
@@ -2680,11 +2967,7 @@ export default function Admin() {
                     >
                       <Plus className="w-3 h-3" /> Ligne vide
                     </button>
-                    <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-full">
-                      {Object.keys(formProduct.specs || {}).length} spécification{Object.keys(formProduct.specs || {}).length > 1 ? 's' : ''}
-                    </span>
                   </div>
-                </div>
 
                 {/* Tableau des caractéristiques actuelles modifiables directement */}
                 <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
@@ -2797,21 +3080,39 @@ export default function Admin() {
                     <Plus className="w-3.5 h-3.5" /> Ajouter
                   </button>
                 </div>
+                </div>
+                )}
               </div>
 
-              {/* Options & Déclinaisons Réelles du Produit (Design épuré et compact) */}
-              <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                      Options & Déclinaisons Disponibles (Variantes)
-                    </label>
-                    <p className="text-[10px] text-slate-400">
-                      Prix d'achat fournisseur (marge auto), image dédiée compacte et caractéristiques propres sur demande.
-                    </p>
+              {/* Options & Déclinaisons Réelles du Produit (Rideau horizontal plié par défaut) */}
+              <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleProductCurtain('manual_variants')}
+                  className="w-full p-4 flex items-center justify-between hover:bg-slate-800/40 transition-colors cursor-pointer text-left"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Package className="w-4 h-4 text-orange-400" />
+                    <div>
+                      <span className="block text-xs font-bold text-slate-200 uppercase tracking-wider">
+                        Options & Déclinaisons Disponibles (Variantes)
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {(formProduct.options || []).length > 0 && (
+                    <span className="text-[11px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full font-bold">
+                      {(formProduct.options || []).length} variant{(formProduct.options || []).length > 1 ? 's' : ''}
+                    </span>
+                    <span className="text-xs font-bold text-slate-400">
+                      {openProductCurtains['manual_variants'] ? '▲ Replier' : '▼ Dérouler'}
+                    </span>
+                  </div>
+                </button>
+
+                {openProductCurtains['manual_variants'] && (
+                <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
+                  {(formProduct.options || []).length > 0 && (
+                    <div className="flex justify-end">
                       <button
                         type="button"
                         onClick={() => setFormProduct({ ...formProduct, supplierPrice: 0 })}
@@ -2820,18 +3121,13 @@ export default function Admin() {
                             ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
                             : 'bg-slate-800 hover:bg-slate-700 text-orange-300 border-slate-700'
                         }`}
-                        title="Remettre le prix principal à 0 pour que le site affiche automatiquement le prix du variant le moins cher"
                       >
                         {Number(formProduct.supplierPrice) === 0
                           ? '✓ Prix principal à 0 (Variant min actif)'
                           : '↺ Prix principal à 0'}
                       </button>
-                    )}
-                    <span className="text-[11px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full font-bold">
-                      {(formProduct.options || []).length} variant{(formProduct.options || []).length > 1 ? 's' : ''}
-                    </span>
-                  </div>
-                </div>
+                    </div>
+                  )}
 
                 {/* Liste compacte des variantes */}
                 <div className="space-y-2 min-h-10 p-2.5 bg-slate-950 rounded-xl border border-slate-800 max-h-[420px] overflow-y-auto">
@@ -3379,6 +3675,8 @@ export default function Admin() {
                     </div>
                   )}
                 </div>
+                </div>
+                )}
               </div>
 
               {/* Saisie Coûts & Paramètres Fournisseur */}
@@ -3436,167 +3734,281 @@ export default function Admin() {
                   </div>
 
                   <div>
-                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      Poids Brut Estimé
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-semibold text-slate-400">
+                        Poids Brut (kg, g, lb, oz, t)
+                      </label>
+                      <span className="text-[10px] font-mono text-emerald-400 font-bold">
+                        = {parseWeightToKg(formProduct.weight) || 0} kg
+                      </span>
+                    </div>
                     <input
                       type="text"
                       value={formProduct.weight}
                       onChange={(e) => setFormProduct({ ...formProduct, weight: e.target.value })}
-                      placeholder="Ex: 5 kg"
+                      placeholder="Ex: 5 kg, 500 g, 18 lbs..."
                       className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      Mode de Fret Préconisé
-                    </label>
-                    <select
-                      value={formProduct.shippingMethod}
-                      onChange={(e) => setFormProduct({ ...formProduct, shippingMethod: e.target.value as any })}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-orange-500"
-                    >
-                      <option value="air">Aérien Express ({siteSettings.airFreightDurationDays || '5 - 10 jours'} • {(siteSettings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} F/kg)</option>
-                      <option value="sea">Maritime Économique ({siteSettings.seaFreightDurationDays || '30 - 45 jours'} • {(siteSettings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      Taux de Marge Commerciale (%)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.05"
-                      min="0.10"
-                      max="0.80"
-                      value={formProduct.marginRate}
-                      onChange={(e) => setFormProduct({ ...formProduct, marginRate: parseFloat(e.target.value) || 0.35 })}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                      Frais Entrepôt Export ($ USD)
-                    </label>
-                    <input
-                      type="number"
-                      step="5"
-                      value={formProduct.warehouseDeliveryFeeUSD || 20}
-                      onChange={(e) => setFormProduct({ ...formProduct, warehouseDeliveryFeeUSD: parseFloat(e.target.value) || 0 })}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono"
-                    />
-                  </div>
-                </div>
-
-                {/* OPTION DE RÉDUCTION SUR CE PRODUIT */}
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <span className="text-xs font-bold text-white block">Option de Réduction sur ce Produit (%)</span>
-                    <span className="text-[10px] text-slate-400">Pourcentage de remise direct déduit du prix catalogue (ex: 10 pour -10%)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min="0"
-                      max="80"
-                      step="1"
-                      placeholder="0% (Aucune)"
-                      value={formProduct.discountPercent ?? ''}
-                      onChange={(e) => setFormProduct({ ...formProduct, discountPercent: e.target.value ? parseInt(e.target.value) : undefined })}
-                      className="w-28 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono focus:border-orange-500 focus:outline-none"
-                    />
-                    <span className="text-xs font-bold text-orange-400 font-mono">%</span>
-                  </div>
-                </div>
-
-                {/* TOGGLE TVA SUR LE PRODUIT */}
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-between">
-                  <div>
-                    <span className="text-xs font-bold text-white block">Application de la TVA ({Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%)</span>
-                    <span className="text-[10px] text-slate-400">Désactivez ou ignorez pour produits exonérés ou régimes spéciaux</span>
-                  </div>
+                {/* CATALOGUE PDF & FICHE TECHNIQUE CONSTRUCTEUR (Rideau horizontal plié par défaut) */}
+                <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
                   <button
                     type="button"
-                    onClick={() => setFormProduct({ ...formProduct, applyVat: !formProduct.applyVat })}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      formProduct.applyVat !== false
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-800 text-slate-400'
-                    }`}
+                    onClick={() => toggleProductCurtain('manual_pdf')}
+                    className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
                   >
-                    {formProduct.applyVat !== false ? `TVA ${Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}% Activée` : 'TVA Exonérée (0%)'}
-                  </button>
-                </div>
-
-                {/* TOGGLE & REGLAGE ACOMPTE PRODUIT CHER */}
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-bold text-white block">Acompte réglable pour produit cher</span>
-                      <span className="text-[10px] text-slate-400">Activer l'exigence d'un acompte partiel à la commande (ex: 30%)</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setFormProduct({ ...formProduct, showDeposit: !formProduct.showDeposit })}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        formProduct.showDeposit
-                          ? 'bg-amber-600 text-white'
-                          : 'bg-slate-800 text-slate-400'
-                      }`}
-                    >
-                      {formProduct.showDeposit ? 'Acompte Activé' : 'Acompte Désactivé'}
-                    </button>
-                  </div>
-                  {formProduct.showDeposit && (
-                    <div className="flex items-center gap-3 pt-2 border-t border-slate-900">
-                      <label className="text-[11px] text-slate-300 font-medium">Pourcentage d'acompte :</label>
-                      <input
-                        type="number"
-                        min="10"
-                        max="90"
-                        value={formProduct.depositPercentage || 30}
-                        onChange={(e) => setFormProduct({ ...formProduct, depositPercentage: parseInt(e.target.value) || 30 })}
-                        className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1 text-xs text-white font-mono"
-                      />
-                      <span className="text-xs font-mono text-amber-400 font-bold">
-                        ({Math.round(((currentCalculatedPricing.priceTTC || 0) * (formProduct.depositPercentage || 30)) / 100).toLocaleString('fr-FR')} FCFA exigibles)
+                    <span className="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5" /> Catalogue PDF & Fiche Technique Constructeur
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {(formProduct.catalogPdfUrl || (formProduct.pdfUrls && formProduct.pdfUrls.length > 0)) && (
+                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-full">
+                          1 Catalogue PDF
+                        </span>
+                      )}
+                      <span className="text-xs font-bold text-slate-400">
+                        {openProductCurtains['manual_pdf'] ? '▲ Replier' : '▼ Dérouler'}
                       </span>
+                    </div>
+                  </button>
+                  {openProductCurtains['manual_pdf'] && (
+                    <div className="px-3.5 pb-3.5 pt-2 border-t border-slate-800/80 space-y-2.5">
+                      {(formProduct.catalogPdfUrl || (formProduct.pdfUrls && formProduct.pdfUrls[0]?.url)) && (
+                        <div className="flex items-center justify-between bg-slate-900 border border-slate-700 px-3 py-2 rounded-lg">
+                          <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5 truncate">
+                            <FileText className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                            {((formProduct.pdfUrls && formProduct.pdfUrls[0]?.title) || formProduct.name || 'Catalogue Technique Constructeur').replace(/grainger/gi, '').trim()}
+                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <a
+                              href={`/api/download-pdf?url=${encodeURIComponent(formProduct.catalogPdfUrl || formProduct.pdfUrls?.[0]?.url || '')}&filename=${encodeURIComponent((formProduct.name || 'Catalogue-Technique').replace(/grainger/gi, '').trim())}`}
+                              download
+                              className="text-[11px] font-bold text-emerald-400 bg-emerald-950/50 border border-emerald-700/50 px-2.5 py-1 rounded-md hover:bg-emerald-900/60 flex items-center gap-1"
+                            >
+                              <FileText className="w-3 h-3" /> Télécharger le PDF
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => setFormProduct({ ...formProduct, catalogPdfUrl: '', pdfUrls: [] })}
+                              className="text-rose-400 hover:text-rose-300 p-1 cursor-pointer"
+                              title="Supprimer le catalogue PDF"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <input
+                        type="text"
+                        value={(formProduct.catalogPdfUrl || '').replace(/https?:\/\/[^/]*grainger\.com[^\s]*/gi, `/api/catalog-pdf/${encodeURIComponent(formProduct.model || 'REF')}`)}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setFormProduct({
+                            ...formProduct,
+                            catalogPdfUrl: v,
+                            pdfUrls: v.trim() ? [{ title: 'Fiche Technique & Catalogue PDF', url: v.trim() }] : []
+                          });
+                        }}
+                        placeholder="Lien direct ou chemin vers le Catalogue PDF du produit..."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                      />
                     </div>
                   )}
                 </div>
 
-                {/* Résultat Calcul en temps réel */}
-                <div className="mt-3 p-4 bg-slate-950 rounded-xl border border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-                  <div>
-                    <span className="text-[10px] text-slate-400 block uppercase">Coût Achat XOF</span>
-                    <span className="text-xs font-mono font-bold text-slate-200">
-                      {currentCalculatedPricing.supplierPriceXOF.toLocaleString('fr-FR')} F
+                {/* OPTIONS COMMERCIALES AVANCÉES (Marge, Réduction, TVA, Acompte) - Rideau horizontal plié par défaut */}
+                <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => toggleProductCurtain('manual_commercial')}
+                    className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
+                  >
+                    <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                      <Settings className="w-3.5 h-3.5 text-orange-400" /> Options Financières (Marge, TVA, Remise & Acompte)
                     </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-slate-400">
+                        Marge {Math.round((Number(formProduct.marginRate) || 0.35) * 100)}% • {formProduct.applyVat !== false ? `TVA ${Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%` : 'TVA 0%'}
+                      </span>
+                      <span className="text-xs font-bold text-slate-400">
+                        {openProductCurtains['manual_commercial'] ? '▲ Replier' : '▼ Dérouler'}
+                      </span>
+                    </div>
+                  </button>
+                  {openProductCurtains['manual_commercial'] && (
+                    <div className="px-3.5 pb-3.5 pt-2 border-t border-slate-800/80 space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                            Taux de Marge Commerciale (%)
+                          </label>
+                          <input
+                            type="number"
+                            step="0.05"
+                            min="0.10"
+                            max="0.80"
+                            value={formProduct.marginRate}
+                            onChange={(e) => setFormProduct({ ...formProduct, marginRate: parseFloat(e.target.value) || 0.35 })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-orange-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                            Frais Entrepôt Export ($ USD)
+                          </label>
+                          <input
+                            type="number"
+                            step="5"
+                            value={formProduct.warehouseDeliveryFeeUSD || 20}
+                            onChange={(e) => setFormProduct({ ...formProduct, warehouseDeliveryFeeUSD: parseFloat(e.target.value) || 0 })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-white">TVA ({Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%)</span>
+                          <button
+                            type="button"
+                            onClick={() => setFormProduct({ ...formProduct, applyVat: !formProduct.applyVat })}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              formProduct.applyVat !== false ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'
+                            }`}
+                          >
+                            {formProduct.applyVat !== false ? 'Activée' : 'TVA 0%'}
+                          </button>
+                        </div>
+
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-white">Acompte 30%</span>
+                          <button
+                            type="button"
+                            onClick={() => setFormProduct({ ...formProduct, showDeposit: !formProduct.showDeposit })}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              formProduct.showDeposit ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-400'
+                            }`}
+                          >
+                            {formProduct.showDeposit ? 'Activé' : 'Désactivé'}
+                          </button>
+                        </div>
+
+                        <div className="p-2.5 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-white">Remise %</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="80"
+                            step="1"
+                            placeholder="0%"
+                            value={formProduct.discountPercent ?? ''}
+                            onChange={(e) => setFormProduct({ ...formProduct, discountPercent: e.target.value ? parseInt(e.target.value) : undefined })}
+                            className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* SYNTHÈSE FINALE FUSIONNÉE : Coût Achat + Choix & Calcul Fret par défaut + Prix Vente TTC */}
+                <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                      Synthèse Finale & Option de Fret par défaut sur la Fiche
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setFormProduct({ ...formProduct, defaultShippingMethod: 'neutral' })}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer ${
+                        (!formProduct.defaultShippingMethod || formProduct.defaultShippingMethod === 'neutral')
+                          ? 'bg-orange-500/20 border-orange-500 text-orange-300'
+                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      ⚪ Mode Neutre (Au choix du client)
+                    </button>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block uppercase">Fret + Transit</span>
-                    <span className="text-xs font-mono font-bold text-slate-200">
-                      {Math.round(currentCalculatedPricing.freightCostXOF).toLocaleString('fr-FR')} F
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block uppercase">Prix Vente HT</span>
-                    <span className="text-xs font-mono font-bold text-purple-400">
-                      {currentCalculatedPricing.priceHT.toLocaleString('fr-FR')} F
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-orange-400 block uppercase font-bold">
-                      Prix Client {formProduct.applyVat !== false ? `TTC (${Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%)` : 'Net (TVA 0%)'}
-                    </span>
-                    <span className="text-sm font-mono font-black text-orange-400">
-                      {currentCalculatedPricing.priceTTC.toLocaleString('fr-FR')} F
-                    </span>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                    <div className="p-2.5 bg-slate-900/70 rounded-xl border border-slate-800 flex flex-col justify-center">
+                      <span className="text-[10px] text-slate-400 block uppercase">Coût Achat</span>
+                      <span className="text-xs font-mono font-bold text-white mt-0.5">
+                        {currentCalculatedPricing.supplierPriceXOF.toLocaleString('fr-FR')} F
+                      </span>
+                    </div>
+
+                    <div
+                      onClick={() => setFormProduct({ ...formProduct, defaultShippingMethod: 'sea', shippingMethod: 'sea' })}
+                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                        formProduct.defaultShippingMethod === 'sea'
+                          ? 'bg-emerald-950/60 border-emerald-500 ring-1 ring-emerald-500/40'
+                          : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                      }`}
+                      title="Cliquez pour pré-sélectionner le Fret Maritime par défaut"
+                    >
+                      <span className="text-[10px] text-slate-300 block uppercase font-semibold">
+                        🚢 Fret Maritime ({siteSettings.seaFreightDurationDays || '30 à 55 jours'})
+                      </span>
+                      <span className="text-xs font-bold text-emerald-400 font-mono block mt-0.5">
+                        {Math.round(currentCalculatedPricing.seaFreightCostXOF).toLocaleString('fr-FR')} F
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="500"
+                        onClick={(e) => e.stopPropagation()}
+                        placeholder="Auto (ou saisir)"
+                        value={formProduct.customSeaFreightCost ?? ''}
+                        onChange={(e) => setFormProduct({
+                          ...formProduct,
+                          customSeaFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
+                        })}
+                        className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-emerald-300 font-mono text-center"
+                      />
+                    </div>
+
+                    <div
+                      onClick={() => setFormProduct({ ...formProduct, defaultShippingMethod: 'air', shippingMethod: 'air' })}
+                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                        formProduct.defaultShippingMethod === 'air'
+                          ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/40'
+                          : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                      }`}
+                      title="Cliquez pour pré-sélectionner le Fret Aérien par défaut"
+                    >
+                      <span className="text-[10px] text-slate-300 block uppercase font-semibold">
+                        ✈️ Fret Aérien ({siteSettings.airFreightDurationDays || '7 à 14 jours'})
+                      </span>
+                      <span className="text-xs font-bold text-blue-400 font-mono block mt-0.5">
+                        {Math.round(currentCalculatedPricing.airFreightCostXOF).toLocaleString('fr-FR')} F
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="500"
+                        onClick={(e) => e.stopPropagation()}
+                        placeholder="Auto (ou saisir)"
+                        value={formProduct.customAirFreightCost ?? ''}
+                        onChange={(e) => setFormProduct({
+                          ...formProduct,
+                          customAirFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
+                        })}
+                        className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-blue-300 font-mono text-center"
+                      />
+                    </div>
+
+                    <div className="p-2.5 bg-slate-900/70 rounded-xl border border-orange-500/30 flex flex-col justify-center">
+                      <span className="text-[10px] text-orange-400 block uppercase font-bold">
+                        Prix Vente {formProduct.applyVat !== false ? 'TTC' : 'Net'}
+                      </span>
+                      <span className="text-sm font-mono font-black text-orange-400 mt-0.5">
+                        {currentCalculatedPricing.priceTTC.toLocaleString('fr-FR')} F
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3688,7 +4100,7 @@ export default function Admin() {
             <div className="flex justify-between items-center pb-4 border-b border-slate-800">
               <div>
                 <h3 className="text-lg font-bold text-white">Importer par Lien Multi-Plateformes</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Compatible AliExpress, Alibaba, 1688, Made-in-China, Europe & USA</p>
+                <p className="text-xs text-slate-400 mt-0.5">Compatible Grainger (USA), Alibaba, AliExpress, 1688, Made-in-China & Europe</p>
               </div>
               <button 
                 onClick={() => { setShowImportLinkModal(false); setParsedLinkData(null); }}
@@ -3700,15 +4112,17 @@ export default function Admin() {
 
             <div className="mt-5 space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
-                  Collez le lien URL du produit fournisseur :
-                </label>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
+                    Collez le lien URL du produit fournisseur :
+                  </label>
+                </div>
                 <div className="flex gap-2">
                   <input
                     type="url"
                     value={importUrl}
                     onChange={(e) => setImportUrl(e.target.value)}
-                    placeholder="https://www.alibaba.com/product-detail/... ou aliexpress.com/item/..."
+                    placeholder="https://www.grainger.com/product/... ou alibaba.com/product-detail/..."
                     className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-orange-500"
                   />
                   <button
@@ -3746,33 +4160,10 @@ export default function Admin() {
                     </span>
                   </div>
 
-                  {/* Barèmes & Délais Dynamiques appliqués à l'import */}
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/90 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                    <div className="flex flex-wrap items-center gap-3 text-slate-300">
-                      <span className="font-bold text-orange-400 flex items-center gap-1">
-                        <Truck className="w-3.5 h-3.5" /> Barèmes Actifs :
-                      </span>
-                      <span>
-                        Maritime : <strong className="text-white font-mono">{(siteSettings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg</strong> ({siteSettings.seaFreightDurationDays || '30 - 45 jours'})
-                      </span>
-                      <span className="text-slate-700">|</span>
-                      <span>
-                        Aérien : <strong className="text-white font-mono">{(siteSettings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} F/kg</strong> ({siteSettings.airFreightDurationDays || '5 - 10 jours'})
-                      </span>
-                      <span className="text-slate-700">|</span>
-                      <span>
-                        TVA : <strong className="text-white font-mono">{Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%</strong>
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-400">
-                      1$={siteSettings.exchangeRates.USD}F • 1€={siteSettings.exchangeRates.EUR}F • 1¥={siteSettings.exchangeRates.CNY}F
-                    </span>
-                  </div>
-
                   {/* 1. Titre, Description, Marque Constructeur, Catégorie & Disponibilité */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="sm:col-span-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
                         <label className="block text-[11px] font-bold text-slate-300">
                           Titre / Désignation en Français (Traduit & Reformulé) :
                         </label>
@@ -3780,10 +4171,11 @@ export default function Admin() {
                           type="button"
                           disabled={isTranslating}
                           onClick={() => handleSmartTranslate('import')}
-                          className="text-[10px] font-extrabold text-emerald-300 bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-600/50 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                          className="text-[11px] font-extrabold text-emerald-300 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/60 px-3 py-1 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-md"
+                          title="Bouton unique de traduction forcée : traduit en français le titre, la description et toutes les caractéristiques techniques"
                         >
-                          <RefreshCw className={`w-3 h-3 ${isTranslating ? 'animate-spin' : ''}`} />
-                          <span>{isTranslating ? 'Reformulation...' : '✨ Traduire, Corriger & Reformuler en FR'}</span>
+                          <RefreshCw className={`w-3.5 h-3.5 ${isTranslating ? 'animate-spin' : ''}`} />
+                          <span>{isTranslating ? 'Traduction FR en cours...' : '✨ Traduire & Reformuler tout en Français (Titre, Description & Caractéristiques)'}</span>
                         </button>
                       </div>
                       <input
@@ -3795,26 +4187,9 @@ export default function Admin() {
                     </div>
 
                     <div className="sm:col-span-2">
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[11px] font-bold text-slate-300">
-                          Description Technique (Traduite & Reformulée en FR) :
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const reformulated = smartTranslateProductDescriptionToFrench(
-                              importForm.description || '',
-                              importForm.name || '',
-                              importForm.specs || {}
-                            );
-                            setImportForm({ ...importForm, description: reformulated });
-                            triggerToast("Description reformulée intelligemment en français.");
-                          }}
-                          className="text-[10px] font-bold text-orange-400 hover:text-orange-300 underline cursor-pointer"
-                        >
-                          Reformuler intelligemment la description
-                        </button>
-                      </div>
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                        Description Technique (Traduite & Reformulée en FR) :
+                      </label>
                       <textarea
                         rows={2}
                         value={importForm.description || ''}
@@ -3985,143 +4360,167 @@ export default function Admin() {
                     </div>
                   </div>
 
-                  {/* 2. Fournisseur Extrait & Assignation Automatique */}
-                  <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800/90 space-y-2">
-                    <div className="flex items-center justify-between">
+                  {/* 2. Fournisseur Extrait (Rideau horizontal plié par défaut, sans texte superflu) */}
+                  <div className="bg-slate-950 rounded-xl border border-slate-800/90 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleProductCurtain('import_supplier')}
+                      className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
+                    >
                       <span className="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
                         <Users className="w-3.5 h-3.5" /> Fournisseur & Fabricant Extrait
                       </span>
-                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30 font-bold">
-                        Ajouté automatiquement à la liste
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      <div>
-                        <label className="block text-[10px] text-slate-400 mb-0.5">Nom de l'entreprise :</label>
-                        <input
-                          type="text"
-                          value={importForm.supplierName}
-                          onChange={(e) => setImportForm({ ...importForm, supplierName: e.target.value })}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-medium"
-                        />
+                      <div className="flex items-center gap-2">
+                        {importForm.supplierName && (
+                          <span className="text-[10px] font-mono text-slate-300 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded-full truncate max-w-[180px]">
+                            {importForm.supplierName}
+                          </span>
+                        )}
+                        <span className="text-xs font-bold text-slate-400">
+                          {openProductCurtains['import_supplier'] ? '▲ Replier' : '▼ Dérouler'}
+                        </span>
                       </div>
-                      <div>
-                        <label className="block text-[10px] text-slate-400 mb-0.5">Pays & Localisation :</label>
-                        <input
-                          type="text"
-                          value={importForm.supplierCountry}
-                          onChange={(e) => setImportForm({ ...importForm, supplierCountry: e.target.value })}
-                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
-                        />
+                    </button>
+                    {openProductCurtains['import_supplier'] && (
+                      <div className="px-3.5 pb-3.5 pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-0.5">Nom de l'entreprise :</label>
+                          <input
+                            type="text"
+                            value={importForm.supplierName}
+                            onChange={(e) => setImportForm({ ...importForm, supplierName: e.target.value })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-medium"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-slate-400 mb-0.5">Pays & Localisation :</label>
+                          <input
+                            type="text"
+                            value={importForm.supplierCountry}
+                            onChange={(e) => setImportForm({ ...importForm, supplierCountry: e.target.value })}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                          />
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
-                  {/* 3. Galerie Multi-Images HD Importée */}
-                  <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                        Galerie Complète des Images du Produit
-                      </label>
-                      <span className="text-[10px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full font-bold">
-                        {[importForm.image, ...importForm.additionalImages].filter(Boolean).length} photo(s) extraite(s)
+                  {/* 3. Galerie Multi-Images HD Importée (Rideau horizontal plié par défaut) */}
+                  <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleProductCurtain('import_gallery')}
+                      className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
+                    >
+                      <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                        <ImageIcon className="w-3.5 h-3.5 text-orange-400" /> Galerie Complète des Images du Produit
                       </span>
-                    </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full font-bold">
+                          {[importForm.image, ...importForm.additionalImages].filter(Boolean).length} photo(s)
+                        </span>
+                        <span className="text-xs font-bold text-slate-400">
+                          {openProductCurtains['import_gallery'] ? '▲ Replier' : '▼ Dérouler'}
+                        </span>
+                      </div>
+                    </button>
 
-                    {/* Aperçu des miniatures */}
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                      {[importForm.image, ...importForm.additionalImages].filter(Boolean).map((imgUrl, idx) => (
-                        <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-slate-700 bg-slate-900 group">
-                          <img 
-                            src={getProductImageUrl(imgUrl)} 
-                            alt="" 
-                            className="w-full h-full object-cover" 
-                            referrerPolicy="no-referrer" 
-                            onError={handleImageError}
-                          />
-                          {idx === 0 ? (
-                            <span className="absolute top-1 left-1 bg-orange-600 text-[8px] font-black text-white px-1.5 py-0.5 rounded">
-                              ★ Principale
-                            </span>
-                          ) : (
+                    {openProductCurtains['import_gallery'] && (
+                    <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
+                      <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                        {[importForm.image, ...importForm.additionalImages].filter(Boolean).map((imgUrl, idx) => (
+                          <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-slate-700 bg-slate-900 group">
+                            <img 
+                              src={getProductImageUrl(imgUrl)} 
+                              alt="" 
+                              className="w-full h-full object-cover" 
+                              referrerPolicy="no-referrer" 
+                              onError={handleImageError}
+                            />
+                            {idx === 0 ? (
+                              <span className="absolute top-1 left-1 bg-orange-600 text-[8px] font-black text-white px-1.5 py-0.5 rounded">
+                                ★ Principale
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const all = [importForm.image, ...importForm.additionalImages].filter(Boolean);
+                                  const chosen = all[idx];
+                                  const rest = all.filter((_, i) => i !== idx);
+                                  setImportForm({
+                                    ...importForm,
+                                    image: chosen,
+                                    additionalImages: rest
+                                  });
+                                }}
+                                className="absolute top-1 left-1 bg-slate-900/90 hover:bg-orange-600 text-[8px] font-bold text-slate-300 hover:text-white px-1 py-0.5 rounded"
+                                title="Définir comme photo principale"
+                              >
+                                Principale
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => {
                                 const all = [importForm.image, ...importForm.additionalImages].filter(Boolean);
-                                const chosen = all[idx];
-                                const rest = all.filter((_, i) => i !== idx);
+                                const remaining = all.filter((_, i) => i !== idx);
                                 setImportForm({
                                   ...importForm,
-                                  image: chosen,
-                                  additionalImages: rest
+                                  image: remaining[0] || '',
+                                  additionalImages: remaining.slice(1)
                                 });
                               }}
-                              className="absolute top-1 left-1 bg-slate-900/90 hover:bg-orange-600 text-[8px] font-bold text-slate-300 hover:text-white px-1 py-0.5 rounded"
-                              title="Définir comme photo principale"
+                              className="absolute top-1 right-1 p-0.5 bg-black/80 hover:bg-rose-600 text-white rounded cursor-pointer"
+                              title="Supprimer cette photo"
                             >
-                              Principale
+                              <X className="w-3 h-3" />
                             </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const all = [importForm.image, ...importForm.additionalImages].filter(Boolean);
-                              const remaining = all.filter((_, i) => i !== idx);
-                              setImportForm({
-                                ...importForm,
-                                image: remaining[0] || '',
-                                additionalImages: remaining.slice(1)
-                              });
-                            }}
-                            className="absolute top-1 right-1 p-0.5 bg-black/80 hover:bg-rose-600 text-white rounded cursor-pointer"
-                            title="Supprimer cette photo"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
+                          </div>
+                        ))}
+                      </div>
 
-                    <ImageUploadInput
-                      label="Ajouter une image supplémentaire"
-                      value=""
-                      onChange={(newUrl) => {
-                        if (newUrl) {
-                          if (!importForm.image) {
-                            setImportForm({ ...importForm, image: newUrl });
-                          } else {
-                            setImportForm({ ...importForm, additionalImages: [...importForm.additionalImages, newUrl] });
+                      <ImageUploadInput
+                        label="Ajouter une image supplémentaire"
+                        value=""
+                        onChange={(newUrl) => {
+                          if (newUrl) {
+                            if (!importForm.image) {
+                              setImportForm({ ...importForm, image: newUrl });
+                            } else {
+                              setImportForm({ ...importForm, additionalImages: [...importForm.additionalImages, newUrl] });
+                            }
                           }
-                        }
-                      }}
-                      placeholder="Collez une URL d'image..."
-                    />
+                        }}
+                        placeholder="Collez une URL d'image..."
+                      />
+                    </div>
+                    )}
                   </div>
 
-                  {/* 4. Caractéristiques Techniques par défaut (Intégralement traduites en FR & facilement modifiables) */}
-                  <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                          Caractéristiques Techniques par défaut (Traduites en FR & Modifiables)
-                        </label>
-                        <p className="text-[10px] text-slate-400">
-                          Modifiez directement n'importe quel intitulé ou valeur ci-dessous, ou ajoutez les données manquantes
-                        </p>
-                      </div>
+                  {/* 4. Caractéristiques Techniques par défaut (Rideau horizontal plié par défaut) */}
+                  <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleProductCurtain('import_specs')}
+                      className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
+                    >
+                      <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-emerald-400" /> Caractéristiques Techniques par défaut (Traduites en FR)
+                      </span>
                       <div className="flex items-center gap-2">
-                        {Object.keys(importForm.specs || {}).length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const translated = translateSpecsRecordToFrench(importForm.specs || {});
-                              setImportForm({ ...importForm, specs: translated });
-                            }}
-                            className="text-[10px] font-bold text-emerald-300 bg-emerald-950/60 hover:bg-emerald-900/60 border border-emerald-700/50 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
-                          >
-                            Traduire en FR
-                          </button>
-                        )}
+                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-full font-bold">
+                          {Object.keys(importForm.specs || {}).length} caractéristiques
+                        </span>
+                        <span className="text-xs font-bold text-slate-400">
+                          {openProductCurtains['import_specs'] ? '▲ Replier' : '▼ Dérouler'}
+                        </span>
+                      </div>
+                    </button>
+
+                    {openProductCurtains['import_specs'] && (
+                    <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
+                      <div className="flex justify-end">
                         <button
                           type="button"
                           onClick={() => {
@@ -4138,11 +4537,7 @@ export default function Admin() {
                         >
                           <Plus className="w-3 h-3" /> Ligne vide
                         </button>
-                        <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-full font-bold">
-                          {Object.keys(importForm.specs || {}).length} caractéristiques
-                        </span>
                       </div>
-                    </div>
 
                     {Object.entries(importForm.specs || {}).length > 0 ? (
                       <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/70 rounded-lg border border-slate-800 text-xs p-1.5 space-y-1">
@@ -4245,21 +4640,34 @@ export default function Admin() {
                         <Plus className="w-3 h-3" /> Ajouter
                       </button>
                     </div>
+                    </div>
+                    )}
                   </div>
 
-                  {/* 4.1 Options & Déclinaisons Réelles Extraites (Design épuré et compact) */}
-                  <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                          Options & Déclinaisons Disponibles (Variantes)
-                        </label>
-                        <p className="text-[10px] text-slate-400">
-                          Prix d'achat par variant (marge auto), image réduite et bouton de caractéristiques propres.
-                        </p>
-                      </div>
+                  {/* 4.1 Options & Déclinaisons Réelles Extraites (Rideau horizontal plié par défaut) */}
+                  <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleProductCurtain('import_variants')}
+                      className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
+                    >
+                      <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                        <Package className="w-3.5 h-3.5 text-orange-400" /> Options & Déclinaisons Disponibles (Variantes)
+                      </span>
                       <div className="flex items-center gap-2">
-                        {(importForm.options || []).length > 0 && (
+                        <span className="text-[10px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full font-bold">
+                          {(importForm.options || []).length} option{(importForm.options || []).length > 1 ? 's' : ''}
+                        </span>
+                        <span className="text-xs font-bold text-slate-400">
+                          {openProductCurtains['import_variants'] ? '▲ Replier' : '▼ Dérouler'}
+                        </span>
+                      </div>
+                    </button>
+
+                    {openProductCurtains['import_variants'] && (
+                    <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
+                      {(importForm.options || []).length > 0 && (
+                        <div className="flex justify-end">
                           <button
                             type="button"
                             onClick={() => setImportForm({ ...importForm, supplierPrice: 0 })}
@@ -4273,12 +4681,8 @@ export default function Admin() {
                               ? '✓ Prix principal à 0 (Variant min actif)'
                               : '↺ Remettre prix principal à 0'}
                           </button>
-                        )}
-                        <span className="text-[10px] font-mono text-orange-400 bg-orange-950/40 border border-orange-800/40 px-2 py-0.5 rounded-full font-bold">
-                          {(importForm.options || []).length} option{(importForm.options || []).length > 1 ? 's' : ''}
-                        </span>
-                      </div>
-                    </div>
+                        </div>
+                      )}
 
                     {/* Liste compacte des options extraites */}
                     <div className="space-y-2 min-h-10 p-2.5 bg-slate-900/60 rounded-xl border border-slate-800 max-h-96 overflow-y-auto">
@@ -4764,6 +5168,8 @@ export default function Admin() {
                         </div>
                       )}
                     </div>
+                    </div>
+                    )}
                   </div>
 
                   {/* 5. Saisie Prix réel, Devise, Poids et Dimensions */}
@@ -4808,14 +5214,27 @@ export default function Admin() {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                        Poids Brut (kg) *
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] font-semibold text-slate-400">
+                          Poids (kg, g, lb, oz, t) *
+                        </label>
+                        <span className="text-[10px] font-mono text-emerald-400 font-bold">
+                          = {importForm.weightInput ? (parseWeightToKg(importForm.weightInput) || importForm.weight || 0) : (importForm.weight || 0)} kg
+                        </span>
+                      </div>
                       <input
-                        type="number"
-                        step="0.1"
-                        value={importForm.weight}
-                        onChange={(e) => setImportForm({ ...importForm, weight: parseFloat(e.target.value) || 1 })}
+                        type="text"
+                        placeholder="Ex: 8.2 kg, 500 g, 18 lbs"
+                        value={importForm.weightInput !== undefined ? importForm.weightInput : String(importForm.weight || '')}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          const kgVal = parseWeightToKg(raw);
+                          setImportForm({
+                            ...importForm,
+                            weightInput: raw,
+                            weight: kgVal > 0 ? kgVal : 0
+                          });
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono"
                       />
                     </div>
@@ -4834,140 +5253,265 @@ export default function Admin() {
                     </div>
                   </div>
 
-                  {/* 6. MOTEUR TRANSPARENT DE CALCUL DU FRET MARITIME (POIDS ET VOLUME) */}
-                  <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <Truck className="w-3.5 h-3.5" /> Barème & Calcul du Fret Maritime ({siteSettings.seaFreightDurationDays || '30 - 45 jours'})
-                      </label>
-                      <span className="text-[10px] text-slate-400">
-                        Tarif Poids: <strong>{(siteSettings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg</strong> • Tarif Volume: <strong>{Math.round((siteSettings.seaFreightPerCbmUSD || 220) * (siteSettings.exchangeRates.USD || 610)).toLocaleString('fr-FR')} F/m³ ({siteSettings.seaFreightPerCbmUSD || 220} $/m³)</strong>
+                  {/* 5.1 CATALOGUE PDF & FICHE TECHNIQUE CONSTRUCTEUR EXTRAITS (Rideau horizontal plié par défaut) */}
+                  <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleProductCurtain('import_pdf')}
+                      className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
+                    >
+                      <span className="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5" /> Catalogue PDF & Fiche Technique Constructeur
                       </span>
-                    </div>
-
-                    {/* Toggles pour cocher/décocher ou ignorer l'un ou l'autre */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <label className="flex items-center gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 cursor-pointer text-xs">
-                        <input
-                          type="checkbox"
-                          checked={!importForm.ignoreSeaWeight}
-                          onChange={(e) => setImportForm({ ...importForm, ignoreSeaWeight: !e.target.checked })}
-                          className="w-4 h-4 accent-orange-500 rounded"
-                        />
-                        <div>
-                          <span className="text-white font-bold block">Calcul Maritime au Poids ({(siteSettings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg)</span>
-                          <span className="text-[10px] text-slate-400">
-                            Coût estimé : {((importCalculatedPricing.seaCostByWeightXOF || 0)).toLocaleString('fr-FR')} FCFA
+                      <div className="flex items-center gap-2">
+                        {(importForm.catalogPdfUrl || (importForm.pdfUrls && importForm.pdfUrls.length > 0)) && (
+                          <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2 py-0.5 rounded-full font-bold">
+                            1 Catalogue PDF
                           </span>
-                        </div>
-                      </label>
-
-                      <label className="flex items-center gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 cursor-pointer text-xs">
+                        )}
+                        <span className="text-xs font-bold text-slate-400">
+                          {openProductCurtains['import_pdf'] ? '▲ Replier' : '▼ Dérouler'}
+                        </span>
+                      </div>
+                    </button>
+                    {openProductCurtains['import_pdf'] && (
+                      <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-2.5">
+                        {(importForm.catalogPdfUrl || (importForm.pdfUrls && importForm.pdfUrls[0]?.url)) && (
+                          <div className="flex items-center justify-between bg-slate-900 border border-slate-700 px-3 py-2 rounded-lg">
+                            <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5 truncate">
+                              <FileText className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                              {((importForm.pdfUrls && importForm.pdfUrls[0]?.title) || importForm.name || 'Fiche Technique & Catalogue Constructeur').replace(/grainger/gi, '').trim()}
+                            </span>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <a
+                                href={`/api/download-pdf?url=${encodeURIComponent(importForm.catalogPdfUrl || importForm.pdfUrls?.[0]?.url || '')}&filename=${encodeURIComponent((importForm.name || 'Catalogue-Technique').replace(/grainger/gi, '').trim())}`}
+                                download
+                                className="text-[11px] font-bold text-emerald-400 bg-emerald-950/50 border border-emerald-700/50 px-2.5 py-1 rounded-md hover:bg-emerald-900/60 flex items-center gap-1"
+                              >
+                                <FileText className="w-3 h-3" /> Télécharger directement le PDF
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => setImportForm({ ...importForm, catalogPdfUrl: '', pdfUrls: [] })}
+                                className="text-rose-400 hover:text-rose-300 p-1 cursor-pointer"
+                                title="Retirer ce catalogue"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        )}
                         <input
-                          type="checkbox"
-                          checked={!importForm.ignoreSeaVolume}
-                          onChange={(e) => setImportForm({ ...importForm, ignoreSeaVolume: !e.target.checked })}
-                          className="w-4 h-4 accent-orange-500 rounded"
+                          type="text"
+                          value={(importForm.catalogPdfUrl || '').replace(/https?:\/\/[^/]*grainger\.com[^\s]*/gi, `/api/catalog-pdf/${encodeURIComponent(importForm.model || 'REF')}`)}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setImportForm({
+                              ...importForm,
+                              catalogPdfUrl: v,
+                              pdfUrls: v.trim() ? [{ title: 'Fiche Technique & Catalogue PDF', url: v.trim() }] : []
+                            });
+                          }}
+                          placeholder="URL du Catalogue PDF ou Fiche Technique Constructeur..."
+                          className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
                         />
-                        <div>
-                          <span className="text-white font-bold block">Calcul Maritime au Volume ({siteSettings.seaFreightPerCbmUSD || 220} $/m³)</span>
-                          <span className="text-[10px] text-slate-400">
-                            Coût estimé : {((importCalculatedPricing.seaCostByVolumeXOF || 0)).toLocaleString('fr-FR')} FCFA (~{(importCalculatedPricing.computedVolumeCbm || 0)} m³)
-                          </span>
-                        </div>
-                      </label>
-                    </div>
-
-                    <div className="p-2.5 bg-slate-900/60 rounded-lg border border-slate-800 flex items-center justify-between text-xs">
-                      <span className="text-slate-300">
-                        Base de calcul maritime appliquée : <strong className="text-amber-400">{importCalculatedPricing.seaCalculationBasis}</strong>
-                      </span>
-                      <span className="font-mono font-black text-white text-sm">
-                        {importCalculatedPricing.seaFreightCostXOF.toLocaleString('fr-FR')} FCFA
-                      </span>
-                    </div>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Toggle TVA & Acompte */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
-                      <div>
-                        <span className="text-xs text-slate-300 font-semibold block">TVA Légale ({Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%)</span>
-                        <span className="text-[10px] text-slate-500">Activer ou ignorer la TVA</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setImportForm({ ...importForm, applyVat: !importForm.applyVat })}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                          importForm.applyVat ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {importForm.applyVat ? `TVA ${Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}% Active` : 'TVA 0%'}
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
-                      <div>
-                        <span className="text-xs text-slate-300 font-semibold block">Option Acompte</span>
-                        <span className="text-[10px] text-slate-500">Pour produits de valeur</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setImportForm({ ...importForm, showDeposit: !importForm.showDeposit })}
-                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                          importForm.showDeposit ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {importForm.showDeposit ? 'Acompte 30%' : 'Désactivé'}
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800 sm:col-span-2">
-                      <div>
-                        <span className="text-xs text-slate-300 font-semibold block">Option de Réduction sur ce Produit (%)</span>
-                        <span className="text-[10px] text-slate-500">Appliquer une remise en % sur ce matériel importé</span>
-                      </div>
+                  {/* 5.2 OPTIONS AVANCÉES (TVA, Acompte, Remise & Calcul Poids/Volume) - Rideau horizontal plié par défaut */}
+                  <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleProductCurtain('import_advanced')}
+                      className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
+                    >
+                      <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                        <Settings className="w-3.5 h-3.5 text-orange-400" /> Options Financières & Calcul Logistique (TVA, Acompte, Remise, Poids/Vol)
+                      </span>
                       <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-mono text-slate-400">
+                          {importForm.applyVat ? `TVA ${Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%` : 'TVA 0%'}
+                        </span>
+                        <span className="text-xs font-bold text-slate-400">
+                          {openProductCurtains['import_advanced'] ? '▲ Replier' : '▼ Dérouler'}
+                        </span>
+                      </div>
+                    </button>
+                    {openProductCurtains['import_advanced'] && (
+                      <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <label className="flex items-center gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={!importForm.ignoreSeaWeight}
+                              onChange={(e) => setImportForm({ ...importForm, ignoreSeaWeight: !e.target.checked })}
+                              className="w-4 h-4 accent-orange-500 rounded"
+                            />
+                            <div>
+                              <span className="text-white font-bold block">Calcul Maritime au Poids</span>
+                              <span className="text-[10px] text-slate-400">
+                                Estimé : {((importCalculatedPricing.seaCostByWeightXOF || 0)).toLocaleString('fr-FR')} F
+                              </span>
+                            </div>
+                          </label>
+
+                          <label className="flex items-center gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 cursor-pointer text-xs">
+                            <input
+                              type="checkbox"
+                              checked={!importForm.ignoreSeaVolume}
+                              onChange={(e) => setImportForm({ ...importForm, ignoreSeaVolume: !e.target.checked })}
+                              className="w-4 h-4 accent-orange-500 rounded"
+                            />
+                            <div>
+                              <span className="text-white font-bold block">Calcul Maritime au Volume</span>
+                              <span className="text-[10px] text-slate-400">
+                                Estimé : {((importCalculatedPricing.seaCostByVolumeXOF || 0)).toLocaleString('fr-FR')} F (~{(importCalculatedPricing.computedVolumeCbm || 0)} m³)
+                              </span>
+                            </div>
+                          </label>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                            <span className="text-xs text-slate-300 font-semibold">TVA ({Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%)</span>
+                            <button
+                              type="button"
+                              onClick={() => setImportForm({ ...importForm, applyVat: !importForm.applyVat })}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                                importForm.applyVat ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              {importForm.applyVat ? 'Active' : 'TVA 0%'}
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-xl border border-slate-800">
+                            <span className="text-xs text-slate-300 font-semibold">Acompte 30%</span>
+                            <button
+                              type="button"
+                              onClick={() => setImportForm({ ...importForm, showDeposit: !importForm.showDeposit })}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                                importForm.showDeposit ? 'bg-amber-600 text-white' : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              {importForm.showDeposit ? 'Actif' : 'Non'}
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-xl border border-slate-800 gap-2">
+                            <span className="text-xs text-slate-300 font-semibold">Remise %</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="80"
+                              step="1"
+                              placeholder="0%"
+                              value={importForm.discountPercent ?? ''}
+                              onChange={(e) => setImportForm({ ...importForm, discountPercent: e.target.value ? parseInt(e.target.value) : undefined })}
+                              className="w-16 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white font-mono"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* SYNTHÈSE FINALE FUSIONNÉE : Coût Achat + Fret Maritime + Fret Aérien + Prix Vente TTC */}
+                  <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                        Synthèse Finale & Option de Fret par défaut sur la Fiche Produit
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setImportForm({ ...importForm, defaultShippingMethod: 'neutral' })}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer ${
+                          (!importForm.defaultShippingMethod || importForm.defaultShippingMethod === 'neutral')
+                            ? 'bg-orange-500/20 border-orange-500 text-orange-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        ⚪ Fret Neutre par défaut (Au choix du client)
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                      <div className="p-2.5 bg-slate-900/70 rounded-xl border border-slate-800 flex flex-col justify-center">
+                        <span className="text-[10px] text-slate-400 block uppercase">Coût Achat</span>
+                        <span className="text-xs font-bold text-white font-mono mt-0.5">
+                          {importCalculatedPricing.supplierPriceXOF.toLocaleString('fr-FR')} F
+                        </span>
+                      </div>
+
+                      <div
+                        onClick={() => setImportForm({ ...importForm, defaultShippingMethod: 'sea' })}
+                        className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                          importForm.defaultShippingMethod === 'sea'
+                            ? 'bg-emerald-950/60 border-emerald-500 ring-1 ring-emerald-500/40'
+                            : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                        }`}
+                        title="Cliquez pour pré-sélectionner le Fret Maritime par défaut"
+                      >
+                        <span className="text-[10px] text-slate-300 block uppercase font-semibold">
+                          🚢 Fret Maritime ({siteSettings.seaFreightDurationDays || '30 à 55 jours'})
+                        </span>
+                        <span className="text-xs font-bold text-emerald-400 font-mono block mt-0.5">
+                          {Math.round(importCalculatedPricing.seaFreightCostXOF).toLocaleString('fr-FR')} F
+                        </span>
                         <input
                           type="number"
                           min="0"
-                          max="80"
-                          step="1"
-                          placeholder="0% (Aucune)"
-                          value={importForm.discountPercent ?? ''}
-                          onChange={(e) => setImportForm({ ...importForm, discountPercent: e.target.value ? parseInt(e.target.value) : undefined })}
-                          className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-mono"
+                          step="500"
+                          onClick={(e) => e.stopPropagation()}
+                          placeholder="Auto (ou saisir)"
+                          value={importForm.customSeaFreightCost ?? ''}
+                          onChange={(e) => setImportForm({
+                            ...importForm,
+                            customSeaFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
+                          })}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-emerald-300 font-mono text-center"
                         />
-                        <span className="text-xs font-bold text-orange-400 font-mono">%</span>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Résultat Calcul en temps réel */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center p-3.5 bg-slate-950 rounded-xl border border-slate-800">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block uppercase">Coût Achat</span>
-                      <span className="text-xs font-bold text-white font-mono">
-                        {importCalculatedPricing.supplierPriceXOF.toLocaleString('fr-FR')} F
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block uppercase">Fret Maritime ({siteSettings.seaFreightDurationDays || '30 - 45 jours'})</span>
-                      <span className="text-xs font-bold text-emerald-400 font-mono">
-                        {Math.round(importCalculatedPricing.seaFreightCostXOF).toLocaleString('fr-FR')} F
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block uppercase">Fret Aérien ({siteSettings.airFreightDurationDays || '5 - 10 jours'})</span>
-                      <span className="text-xs font-bold text-blue-400 font-mono">
-                        {Math.round(importCalculatedPricing.airFreightCostXOF).toLocaleString('fr-FR')} F
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-orange-400 block font-bold uppercase">Prix Vente TTC</span>
-                      <span className="text-sm font-black text-orange-400 font-mono">
-                        {importCalculatedPricing.priceTTC.toLocaleString('fr-FR')} F
-                      </span>
+                      <div
+                        onClick={() => setImportForm({ ...importForm, defaultShippingMethod: 'air' })}
+                        className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                          importForm.defaultShippingMethod === 'air'
+                            ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/40'
+                            : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                        }`}
+                        title="Cliquez pour pré-sélectionner le Fret Aérien par défaut"
+                      >
+                        <span className="text-[10px] text-slate-300 block uppercase font-semibold">
+                          ✈️ Fret Aérien ({siteSettings.airFreightDurationDays || '7 à 14 jours'})
+                        </span>
+                        <span className="text-xs font-bold text-blue-400 font-mono block mt-0.5">
+                          {Math.round(importCalculatedPricing.airFreightCostXOF).toLocaleString('fr-FR')} F
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="500"
+                          onClick={(e) => e.stopPropagation()}
+                          placeholder="Auto (ou saisir)"
+                          value={importForm.customAirFreightCost ?? ''}
+                          onChange={(e) => setImportForm({
+                            ...importForm,
+                            customAirFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
+                          })}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-blue-300 font-mono text-center"
+                        />
+                      </div>
+
+                      <div className="p-2.5 bg-slate-900/70 rounded-xl border border-orange-500/30 flex flex-col justify-center">
+                        <span className="text-[10px] text-orange-400 block font-bold uppercase">
+                          Prix Vente {importForm.applyVat ? 'TTC' : 'Net'}
+                        </span>
+                        <span className="text-sm font-black text-orange-400 font-mono mt-0.5">
+                          {importCalculatedPricing.priceTTC.toLocaleString('fr-FR')} F
+                        </span>
+                      </div>
                     </div>
                   </div>
 

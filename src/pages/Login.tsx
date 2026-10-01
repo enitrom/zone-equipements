@@ -1,13 +1,22 @@
 import { useState, FormEvent } from 'react';
 import { auth, db } from '../firebase';
-import { signInWithPopup, GoogleAuthProvider, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import {
+  signInWithPopup,
+  GoogleAuthProvider,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  fetchSignInMethodsForEmail,
+  sendPasswordResetEmail
+} from 'firebase/auth';
+import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import {
-  Mail, Lock, LogIn, UserPlus, AlertCircle, Copy, Check,
-  ExternalLink, KeyRound, RefreshCw, ArrowLeft, ShieldCheck, User
+  Mail, Lock, LogIn, AlertCircle, Copy, Check,
+  KeyRound, RefreshCw, ArrowLeft, ShieldCheck, User, Info
 } from 'lucide-react';
-import { ADMIN_EMAILS } from '../AuthContext';
+import { isUserAdmin } from '../AuthContext';
+import { siteSettingsService } from '../services/siteSettingsService';
 
 export default function Login() {
   const [isLogin, setIsLogin] = useState(true);
@@ -16,6 +25,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [emailAlreadyUsed, setEmailAlreadyUsed] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [copiedDomain, setCopiedDomain] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -23,7 +33,8 @@ export default function Login() {
   // Email OTP verification state for registration
   const [step, setStep] = useState<'form' | 'verify_otp'>('form');
   const [otpCode, setOtpCode] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
+  const [generatedFallbackCode, setGeneratedFallbackCode] = useState('');
+  const [isSimulatedEmail, setIsSimulatedEmail] = useState(false);
   const [resendCountdown, setResendCountdown] = useState(0);
 
   const navigate = useNavigate();
@@ -34,17 +45,56 @@ export default function Login() {
       navigate('/account');
       return;
     }
-    const cleanEmail = userEmail.toLowerCase().trim();
-    if (ADMIN_EMAILS.some(adminEmail => adminEmail.toLowerCase() === cleanEmail)) {
+    if (isUserAdmin(userEmail)) {
       navigate('/admin');
     } else {
       navigate('/account');
     }
   };
 
+  // Vérifie si une adresse email est déjà utilisée dans Firebase Auth ou dans la base Firestore (users / admins)
+  const checkIfEmailExists = async (rawEmail: string): Promise<boolean> => {
+    const cleanEmail = rawEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) return false;
+
+    try {
+      // 1. Vérification dans la liste des administrateurs connus
+      const adminEmails = (siteSettingsService.getSettings().adminEmails || []).map(e => e.toLowerCase().trim());
+      if (adminEmails.includes(cleanEmail) || cleanEmail === 'enitrom@gmail.com') {
+        return true;
+      }
+
+      // 2. Vérification via Firebase Auth fetchSignInMethodsForEmail
+      try {
+        const methods = await fetchSignInMethodsForEmail(auth, cleanEmail);
+        if (Array.isArray(methods) && methods.length > 0) {
+          return true;
+        }
+      } catch {
+        // Ignore Enumeration Protection fallback
+      }
+
+      // 3. Vérification dans la collection Firestore 'users' et 'registered_emails'
+      const usersSnap = await getDocs(collection(db, 'users'));
+      let foundInUsers = false;
+      usersSnap.forEach((docSnap) => {
+        const d = docSnap.data();
+        const docEmail = String(d?.email || d?.emailLower || '').toLowerCase().trim();
+        if (docEmail === cleanEmail) {
+          foundInUsers = true;
+        }
+      });
+      if (foundInUsers) return true;
+    } catch (e) {
+      console.warn('Email existence check notice:', e);
+    }
+    return false;
+  };
+
   const handleGoogleLogin = async () => {
     try {
       setError('');
+      setEmailAlreadyUsed(false);
       setIsLoading(true);
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
@@ -64,6 +114,24 @@ export default function Login() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setError('Veuillez saisir votre adresse email ci-dessus pour recevoir le lien de réinitialisation.');
+      return;
+    }
+    try {
+      setIsLoading(true);
+      setError('');
+      await sendPasswordResetEmail(auth, cleanEmail);
+      setSuccessMsg(`Un lien de réinitialisation du mot de passe a été envoyé à ${cleanEmail}. Vérifiez votre boîte de réception (et vos spams).`);
+    } catch (err: any) {
+      setError(parseFirebaseError(err));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const sendOtp = async () => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
@@ -74,20 +142,24 @@ export default function Login() {
     try {
       setIsLoading(true);
       setError('');
-      const resp = await fetch('/api/auth/send-verification-code', {
+      const resp = await fetch('/api/auth/send-verification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: cleanEmail, purpose: 'registration' })
       });
       const data = await resp.json();
       if (data.success) {
-        setOtpSent(true);
         setStep('verify_otp');
-        if (data.debugCode) {
-          setOtpCode(data.debugCode);
-          setSuccessMsg(`Code de vérification généré : ${data.debugCode}. (Également transmis à ${cleanEmail})`);
+        const directCode = data.fallbackCode || data.debugCode || '';
+        if (directCode) {
+          setGeneratedFallbackCode(directCode);
+          setOtpCode(directCode);
+          setIsSimulatedEmail(Boolean(data.simulated));
+          setSuccessMsg(`Code de confirmation généré avec succès pour ${cleanEmail}.`);
         } else {
-          setSuccessMsg(`Un code de vérification à 6 chiffres a été envoyé à ${cleanEmail}.`);
+          setGeneratedFallbackCode('');
+          setIsSimulatedEmail(false);
+          setSuccessMsg(`Un code de vérification à 6 chiffres a été envoyé par email à ${cleanEmail}.`);
         }
         setResendCountdown(60);
         const timer = setInterval(() => {
@@ -119,9 +191,9 @@ export default function Login() {
       return "L'authentification par email/mot de passe n'est pas encore activée dans la console Firebase. Veuillez utiliser le bouton 'Continuer avec Google' ci-dessous.";
     }
     if (code === 'auth/email-already-in-use' || msg.includes('auth/email-already-in-use')) {
-      setIsLogin(true);
+      setEmailAlreadyUsed(true);
       setStep('form');
-      return "Cette adresse email est déjà enregistrée. Veuillez saisir votre mot de passe pour vous connecter.";
+      return "Cette adresse email est déjà utilisée par un compte existant. Veuillez vous connecter ou réinitialiser votre mot de passe.";
     }
     if (code === 'auth/invalid-credential' || code === 'auth/user-not-found' || code === 'auth/wrong-password' || msg.includes('auth/invalid-credential')) {
       return "Identifiants incorrects (email ou mot de passe invalide). Si vous n'avez pas de compte, cliquez sur 'Créer un compte'.";
@@ -136,12 +208,15 @@ export default function Login() {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
+    setEmailAlreadyUsed(false);
+
+    const cleanEmail = email.trim().toLowerCase();
 
     if (isLogin) {
       // Direct Login
       try {
         setIsLoading(true);
-        const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
         checkAdminAndRedirect(cred.user.email);
       } catch (err: any) {
         setError(parseFirebaseError(err));
@@ -159,6 +234,16 @@ export default function Login() {
         return;
       }
 
+      // Vérification immédiate si l'adresse email est déjà enregistrée AVANT d'envoyer le code OTP
+      setIsLoading(true);
+      const alreadyExists = await checkIfEmailExists(cleanEmail);
+      if (alreadyExists) {
+        setIsLoading(false);
+        setEmailAlreadyUsed(true);
+        setError(`L'adresse email "${cleanEmail}" est déjà utilisée par un compte existant.`);
+        return;
+      }
+
       // Trigger Email OTP step
       await sendOtp();
     }
@@ -168,16 +253,18 @@ export default function Login() {
     e.preventDefault();
     setError('');
     if (!otpCode || otpCode.trim().length < 6) {
-      setError('Veuillez saisir le code à 6 chiffres reçu par email.');
+      setError('Veuillez saisir le code à 6 chiffres.');
       return;
     }
+
+    const cleanEmail = email.trim().toLowerCase();
 
     try {
       setIsLoading(true);
       const verifyResp = await fetch('/api/auth/verify-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), code: otpCode.trim() })
+        body: JSON.stringify({ email: cleanEmail, code: otpCode.trim() })
       });
       const verifyData = await verifyResp.json();
 
@@ -188,19 +275,24 @@ export default function Login() {
       }
 
       // Code is valid - Create user account in Firebase Auth
-      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+
       if (displayName.trim()) {
         await updateProfile(cred.user, { displayName: displayName.trim() }).catch(() => {});
       }
 
-      // Create user profile in Firestore
+      const role = isUserAdmin(cleanEmail) ? 'admin' : 'client';
+
+      // Create user profile in Firestore with normalized email for future duplicate checks
       if (cred.user.uid) {
         await setDoc(doc(db, 'users', cred.user.uid), {
           uid: cred.user.uid,
-          email: cred.user.email,
-          displayName: displayName.trim() || cred.user.displayName || '',
+          email: cleanEmail,
+          emailLower: cleanEmail,
+          displayName: displayName.trim() || cred.user.displayName || cleanEmail.split('@')[0],
+          role,
           emailVerified: true,
+          emailVerifiedCustom: true,
           createdAt: new Date().toISOString()
         }, { merge: true }).catch(() => {});
       }
@@ -260,9 +352,35 @@ export default function Login() {
             </p>
           </div>
         ) : error ? (
-          <div className="bg-red-50 text-red-600 p-3 rounded-xl text-xs mb-6 font-semibold flex items-center gap-2 border border-red-200">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{error}</span>
+          <div className="bg-red-50 text-red-700 p-4 rounded-xl text-xs mb-6 font-semibold space-y-2.5 border border-red-200">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+              <span>{error}</span>
+            </div>
+            {emailAlreadyUsed && (
+              <div className="pt-2 border-t border-red-200/80 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLogin(true);
+                    setStep('form');
+                    setError('');
+                    setEmailAlreadyUsed(false);
+                  }}
+                  className="px-3 py-1.5 bg-[#003366] hover:bg-[#002244] text-white rounded-lg font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Se connecter avec cet email</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  className="px-3 py-1.5 bg-white hover:bg-red-100 text-red-700 border border-red-300 rounded-lg font-bold text-[11px] cursor-pointer transition-colors"
+                >
+                  Mot de passe oublié ?
+                </button>
+              </div>
+            )}
           </div>
         ) : null}
 
@@ -299,8 +417,22 @@ export default function Login() {
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#FF6600] focus:border-transparent outline-none text-xs"
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (emailAlreadyUsed) setEmailAlreadyUsed(false);
+                  }}
+                  onBlur={async () => {
+                    if (!isLogin && email.trim().includes('@')) {
+                      const used = await checkIfEmailExists(email);
+                      if (used) {
+                        setEmailAlreadyUsed(true);
+                        setError(`L'adresse email "${email.trim().toLowerCase()}" est déjà associée à un compte existant.`);
+                      }
+                    }
+                  }}
+                  className={`w-full pl-10 pr-4 py-2.5 border rounded-xl focus:ring-2 focus:ring-[#FF6600] focus:border-transparent outline-none text-xs ${
+                    emailAlreadyUsed ? 'border-red-400 bg-red-50/30' : 'border-gray-300'
+                  }`}
                   placeholder="contact@entreprise.sn"
                   required
                 />
@@ -308,7 +440,18 @@ export default function Login() {
             </div>
 
             <div>
-              <label className="block font-bold text-gray-700 uppercase mb-1">Mot de passe *</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block font-bold text-gray-700 uppercase">Mot de passe *</label>
+                {isLogin && (
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="text-[11px] font-bold text-[#FF6600] hover:underline cursor-pointer"
+                  >
+                    Mot de passe oublié ?
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                 <input
@@ -377,9 +520,35 @@ export default function Login() {
             <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl text-center space-y-2">
               <ShieldCheck className="w-8 h-8 text-[#003366] mx-auto" />
               <p className="text-gray-700 text-xs">
-                Saisissez le code de validation à 6 chiffres envoyé à <strong>{email}</strong>
+                Saisissez le code de validation à 6 chiffres pour <strong>{email}</strong>
               </p>
             </div>
+
+            {generatedFallbackCode && (
+              <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
+                    <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                    Code de validation directe :
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setOtpCode(generatedFallbackCode)}
+                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-mono font-black text-xs tracking-widest cursor-pointer"
+                  >
+                    {generatedFallbackCode} (Appliqué)
+                  </button>
+                </div>
+                {isSimulatedEmail && (
+                  <p className="text-[10px] text-amber-800 leading-relaxed flex items-start gap-1.5">
+                    <Info className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Aucun service payant n'est requis (0 FCFA) :</strong> pour recevoir aussi ce code par email sur Gmail, configurez simplement un <em>Mot de passe d'application Google gratuit</em> dans <strong>Admin &gt; Sécurité</strong>.
+                    </span>
+                  </p>
+                )}
+              </div>
+            )}
 
             <div>
               <label className="block font-bold text-gray-700 uppercase mb-1 text-center">Code de Vérification Email</label>

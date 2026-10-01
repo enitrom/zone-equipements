@@ -1,4 +1,10 @@
 import React, { createContext, useContext, useState } from 'react';
+import {
+  translateSpecsRecordToFrench,
+  smartTranslateProductTitleToFrench,
+  smartTranslateProductDescriptionToFrench,
+  translateSpecValueToFrenchClient
+} from './services/catalogService';
 
 export type Language = 'fr' | 'en' | 'es' | 'zh';
 
@@ -1493,9 +1499,12 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const translateText = (rawText: string): string => {
     if (!rawText || typeof rawText !== 'string') return rawText || '';
-    if (language === 'fr') return rawText;
+    if (language === 'fr') {
+      return translateSpecValueToFrenchClient(rawText);
+    }
 
-    const trimmed = rawText.trim();
+    const normalizedFr = translateSpecValueToFrenchClient(rawText);
+    const trimmed = normalizedFr.trim();
     // 1. Check exact category match first
     if (CATEGORY_MAP[trimmed]?.[language]) {
       return CATEGORY_MAP[trimmed][language];
@@ -1510,7 +1519,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     // 3. Multi-term replacement (sorted longest French phrase first so compound terms match before single words)
-    let result = rawText;
+    let result = normalizedFr;
     const sortedTerms = [...INDUSTRIAL_TERMS].sort((a, b) => b.fr.length - a.fr.length);
     for (const term of sortedTerms) {
       if (term.fr.length < 3) continue;
@@ -1524,9 +1533,11 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const translateSpecs = (specs: Record<string, string>): Record<string, string> => {
-    if (!specs || typeof specs !== 'object' || language === 'fr') return specs || {};
+    if (!specs || typeof specs !== 'object') return specs || {};
+    const frenchSpecs = translateSpecsRecordToFrench(specs);
+    if (language === 'fr') return frenchSpecs;
     const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(specs)) {
+    for (const [k, v] of Object.entries(frenchSpecs)) {
       const tk = translateText(k);
       const tv = translateText(String(v));
       out[tk] = tv;
@@ -1535,12 +1546,28 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const translateProduct = <T extends Record<string, any>>(product: T): T => {
-    if (!product || language === 'fr') return product;
+    if (!product) return product;
+    const frenchSpecs = product.specs ? translateSpecsRecordToFrench(product.specs) : product.specs;
+    const frenchName = smartTranslateProductTitleToFrench(product.name || '', product.brand || '');
+    const frenchDesc = product.description
+      ? smartTranslateProductDescriptionToFrench(product.description, frenchName, frenchSpecs)
+      : product.description;
+
+    if (language === 'fr') {
+      return {
+        ...product,
+        name: frenchName || product.name,
+        description: frenchDesc || product.description,
+        origin: product.origin ? translateSpecValueToFrenchClient(product.origin) : product.origin,
+        specs: frenchSpecs,
+      };
+    }
+
     const customTranslations = (product as any).translations?.[language];
     return {
       ...product,
-      name: customTranslations?.name || translateText(product.name || ''),
-      description: customTranslations?.description || translateText(product.description || ''),
+      name: customTranslations?.name || translateText(frenchName || product.name || ''),
+      description: customTranslations?.description || translateText(frenchDesc || product.description || ''),
       extendedDescription: customTranslations?.extendedDescription || (product.extendedDescription ? translateText(product.extendedDescription) : product.extendedDescription),
       category: product.category ? translateCategory(product.category) : product.category,
       subcategory: product.subcategory ? translateCategory(product.subcategory) : product.subcategory,
@@ -1548,7 +1575,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       origin: product.origin ? translateText(product.origin) : product.origin,
       warranty: product.warranty ? translateText(product.warranty) : product.warranty,
       leadTime: product.leadTime ? translateText(product.leadTime) : product.leadTime,
-      specs: product.specs ? translateSpecs(product.specs) : product.specs,
+      specs: frenchSpecs ? translateSpecs(frenchSpecs) : product.specs,
     };
   };
 

@@ -1,6 +1,6 @@
 import { CATEGORIES } from '../constants';
 import { db, auth } from '../firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, collection, getDocs, query, where, updateDoc } from 'firebase/firestore';
 
 export interface SubcategoryItem {
   name: string;
@@ -34,6 +34,8 @@ export interface TestimonialItem {
   id: string;
   name: string;
   role: string;
+  company?: string;
+  sector?: string;
   text: string;
   rating: number;
 }
@@ -126,6 +128,7 @@ export interface SiteSettings {
   heroSubtitle: string;
   heroBgImage: string;
   vatRate: number; // En pourcentage ex: 18
+  vatEnabled?: boolean; // Si false ou vatRate <= 0, désactive automatiquement la TVA sur l'import de produit
   defaultVatRate?: number; // En décimal ex: 0.18 (synchronisé automatiquement avec vatRate)
   applyVatByDefault?: boolean;
   defaultMarginPercentage: number;
@@ -159,6 +162,7 @@ export interface SiteSettings {
   rccm: string;
   ninea: string;
   adminEmails: string[];
+  deletedAdminEmails?: string[];
   enableGlobalDiscount?: boolean;
   globalDiscountPercent?: number;
   globalDiscountLabel?: string;
@@ -271,6 +275,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   heroSubtitle: "Sourcing direct auprès des plus grands fabricants mondiaux. Livraison dédouanée (DDP) à Dakar et dans toute la sous-région.",
   heroBgImage: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=1920&auto=format&fit=crop&q=80",
   vatRate: 18,
+  vatEnabled: true,
   defaultVatRate: 0.18,
   applyVatByDefault: true,
   defaultMarginPercentage: 35,
@@ -310,9 +315,9 @@ const DEFAULT_SETTINGS: SiteSettings = {
   rccm: 'SN-DKR-2024-B-14892',
   ninea: '009482716 2G3',
   adminEmails: [
-    'enitrom@gmail.com',
-    'tinemor89@gmail.com'
+    'enitrom@gmail.com'
   ],
+  deletedAdminEmails: [],
   enableGlobalDiscount: false,
   globalDiscountPercent: 0,
   globalDiscountLabel: 'Remise Catalogue',
@@ -397,12 +402,13 @@ const DEFAULT_SETTINGS: SiteSettings = {
   }
 };
 
-function normalizeSiteSettings(raw: Partial<SiteSettings>, extraDeletedPromos: string[] = []): SiteSettings {
+function normalizeSiteSettings(raw: Partial<SiteSettings>, extraDeletedPromos: string[] = [], extraDeletedAdmins: string[] = []): SiteSettings {
   const vatRate = raw.vatRate !== undefined
     ? Number(raw.vatRate)
     : (raw.defaultVatRate !== undefined ? Math.round(Number(raw.defaultVatRate) * 100) : DEFAULT_SETTINGS.vatRate);
-  const defaultVatRate = vatRate / 100;
-  const applyVatByDefault = raw.applyVatByDefault ?? true;
+  const vatEnabled = raw.vatEnabled !== undefined ? Boolean(raw.vatEnabled) && vatRate > 0 : vatRate > 0;
+  const defaultVatRate = vatEnabled ? vatRate / 100 : 0;
+  const applyVatByDefault = vatEnabled && (raw.applyVatByDefault ?? true);
 
   const airFreightPerKg = Number(raw.airFreightPerKg ?? raw.airFreightPerKgXOF ?? DEFAULT_SETTINGS.airFreightPerKg);
   const airFreightMin = Number(raw.airFreightMin ?? DEFAULT_SETTINGS.airFreightMin);
@@ -452,10 +458,30 @@ function normalizeSiteSettings(raw: Partial<SiteSettings>, extraDeletedPromos: s
     .filter(p => p && p.code && !deletedPromos.includes(p.code.trim().toUpperCase()))
     .map(p => normalizePromoCode(p));
 
+  const deletedAdminEmails = Array.from(
+    new Set([
+      ...(raw.deletedAdminEmails || []),
+      ...extraDeletedAdmins
+    ].map(e => String(e).trim().toLowerCase()).filter(e => Boolean(e) && e !== 'enitrom@gmail.com'))
+  );
+
+  const rawAdminList = Array.isArray(raw.adminEmails) ? raw.adminEmails : ['enitrom@gmail.com'];
+  const normalizedAdminEmails = Array.from(
+    new Set([
+      'enitrom@gmail.com',
+      ...rawAdminList
+        .map(e => String(e).trim().toLowerCase())
+        .filter(e => Boolean(e) && e.includes('@') && !deletedAdminEmails.includes(e))
+    ])
+  );
+
   return {
     ...DEFAULT_SETTINGS,
     ...raw,
+    adminEmails: normalizedAdminEmails,
+    deletedAdminEmails,
     vatRate,
+    vatEnabled,
     defaultVatRate,
     applyVatByDefault,
     airFreightPerKg,
@@ -734,7 +760,12 @@ class SiteSettingsService {
           if (snap.exists()) {
             const remoteSettings = snap.data() as SiteSettings;
             const localCurrent = this.getSettings();
-            const merged = normalizeSiteSettings(remoteSettings, localCurrent.deletedPromoCodes || []);
+            // Remote deletedAdminEmails and adminEmails are authoritative when updated
+            const mergedDeletedAdmins = Array.from(new Set([
+              ...(remoteSettings.deletedAdminEmails || []),
+              ...((localCurrent.deletedAdminEmails || []).filter(e => !(remoteSettings.adminEmails || []).map(a => a.toLowerCase().trim()).includes(e)))
+            ]));
+            const merged = normalizeSiteSettings(remoteSettings, localCurrent.deletedPromoCodes || [], mergedDeletedAdmins);
             Object.assign(DEFAULT_SETTINGS, merged);
 
             this.isSyncingFromRemote = true;
@@ -898,7 +929,8 @@ class SiteSettingsService {
         ...(partial.exchangeRates || {})
       },
       promoCodes: partial.promoCodes !== undefined ? partial.promoCodes : current.promoCodes,
-      deletedPromoCodes: partial.deletedPromoCodes !== undefined ? partial.deletedPromoCodes : (current.deletedPromoCodes || [])
+      deletedPromoCodes: partial.deletedPromoCodes !== undefined ? partial.deletedPromoCodes : (current.deletedPromoCodes || []),
+      deletedAdminEmails: partial.deletedAdminEmails !== undefined ? partial.deletedAdminEmails : (current.deletedAdminEmails || [])
     };
     const updated = normalizeSiteSettings(mergedRaw);
     Object.assign(DEFAULT_SETTINGS, updated);
@@ -916,6 +948,96 @@ class SiteSettingsService {
       } catch (e) {
         console.warn('Firestore setDoc error:', e);
       }
+    }
+
+    return updated;
+  }
+
+  async removeAdminEmailAndDemote(emailToRemove: string): Promise<SiteSettings> {
+    const cleanTarget = String(emailToRemove || '').toLowerCase().trim();
+    if (!cleanTarget || cleanTarget === 'enitrom@gmail.com') {
+      return this.getSettings();
+    }
+
+    const current = this.getSettings();
+    const deletedSet = new Set<string>((current.deletedAdminEmails || []).map(e => e.toLowerCase().trim()));
+    deletedSet.add(cleanTarget);
+
+    const updatedAdmins = (current.adminEmails || [])
+      .map(e => e.toLowerCase().trim())
+      .filter(e => e && e !== cleanTarget);
+
+    const updated = this.updateSettings({
+      adminEmails: updatedAdmins.includes('enitrom@gmail.com') ? updatedAdmins : ['enitrom@gmail.com', ...updatedAdmins],
+      deletedAdminEmails: Array.from(deletedSet)
+    });
+
+    // Immediately demote any matching user profile in Firestore 'users' collection
+    try {
+      const usersRef = collection(db, 'users');
+      const snap = await getDocs(usersRef);
+      const demotePromises: Promise<any>[] = [];
+      snap.forEach((userDoc) => {
+        const data = userDoc.data();
+        const docEmail = String(data?.email || '').toLowerCase().trim();
+        if (docEmail === cleanTarget && data?.role === 'admin') {
+          demotePromises.push(
+            updateDoc(doc(db, 'users', userDoc.id), {
+              role: 'client',
+              demotedAt: new Date().toISOString()
+            })
+          );
+        }
+      });
+      await Promise.all(demotePromises);
+    } catch (err) {
+      console.warn('Error demoting user role in Firestore:', err);
+    }
+
+    return updated;
+  }
+
+  async addAdminEmailAndPromote(emailToAdd: string): Promise<SiteSettings> {
+    const cleanTarget = String(emailToAdd || '').toLowerCase().trim();
+    if (!cleanTarget || !cleanTarget.includes('@')) {
+      return this.getSettings();
+    }
+
+    const current = this.getSettings();
+    const deletedSet = new Set<string>((current.deletedAdminEmails || []).map(e => e.toLowerCase().trim()));
+    deletedSet.delete(cleanTarget);
+
+    const updatedAdmins = Array.from(new Set([
+      'enitrom@gmail.com',
+      ...(current.adminEmails || []).map(e => e.toLowerCase().trim()),
+      cleanTarget
+    ]));
+
+    const updated = this.updateSettings({
+      adminEmails: updatedAdmins,
+      deletedAdminEmails: Array.from(deletedSet)
+    });
+
+    // Promote matching user in Firestore if they already have an account
+    try {
+      const usersRef = collection(db, 'users');
+      const snap = await getDocs(usersRef);
+      const promotePromises: Promise<any>[] = [];
+      snap.forEach((userDoc) => {
+        const data = userDoc.data();
+        const docEmail = String(data?.email || '').toLowerCase().trim();
+        if (docEmail === cleanTarget && data?.role !== 'admin') {
+          promotePromises.push(
+            updateDoc(doc(db, 'users', userDoc.id), {
+              role: 'admin',
+              promotedAt: new Date().toISOString()
+            })
+          );
+        }
+      });
+      await Promise.all(promotePromises);
+    } catch (err) {
+      console.warn('Error promoting user role in Firestore:', err);
     }
 
     return updated;

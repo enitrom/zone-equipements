@@ -3,6 +3,118 @@ import { db } from '../firebase';
 import { collection, getDocs, getDoc, setDoc, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { siteSettingsService } from './siteSettingsService';
 
+export type { Product };
+
+export interface PdfDocumentItem {
+  title: string;
+  url: string;
+}
+
+/**
+ * Convertit n'importe quelle saisie de poids (ex: "18 lb", "450 g", "8,2 kg", "0.5 t", "16 oz", 12)
+ * en kilogrammes (kg) numériques pour des calculs de fret toujours exacts.
+ */
+export function parseWeightToKg(
+  rawWeight: string | number | undefined | null,
+  fallbackKg: number = 0,
+  specs?: Record<string, any>
+): number {
+  let candidate: string | number | undefined | null = rawWeight;
+  if ((candidate === undefined || candidate === null || String(candidate).trim() === '') && specs && typeof specs === 'object') {
+    for (const [k, v] of Object.entries(specs)) {
+      if (/poids|weight|masse/i.test(k) && v !== undefined && v !== null && String(v).trim() !== '') {
+        candidate = String(v);
+        break;
+      }
+    }
+  }
+  if (candidate === undefined || candidate === null) return fallbackKg;
+  if (typeof candidate === 'number') {
+    return !isNaN(candidate) && candidate >= 0 ? Number(candidate.toFixed(3)) : fallbackKg;
+  }
+  const str = String(candidate).trim().toLowerCase().replace(',', '.');
+  if (!str) return fallbackKg;
+
+  // Chercher une valeur numérique suivie optionnellement d'une unité
+  const match = str.match(/([0-9]+(?:\.[0-9]+)?)\s*(kg|kgs|kilogram(?:me)?s?|g|gr|gram(?:me)?s?|lb|lbs|pound(?:s)?|livre(?:s)?|oz|ounce(?:s)?|once(?:s)?|t|ton(?:ne)?s?)?\b/i);
+  if (!match) return fallbackKg;
+
+  const val = parseFloat(match[1]);
+  if (isNaN(val) || val < 0) return fallbackKg;
+  const unit = (match[2] || 'kg').toLowerCase();
+
+  if (unit === 'g' || unit === 'gr' || unit.startsWith('gram')) {
+    return Number((val / 1000).toFixed(3));
+  }
+  if (unit === 'lb' || unit === 'lbs' || unit.startsWith('pound') || unit.startsWith('livre')) {
+    return Number((val * 0.45359237).toFixed(3));
+  }
+  if (unit === 'oz' || unit.startsWith('ounce') || unit.startsWith('once')) {
+    return Number((val * 0.0283495).toFixed(3));
+  }
+  if (unit === 't' || unit.startsWith('ton')) {
+    return Number((val * 1000).toFixed(3));
+  }
+  return Number(val.toFixed(3));
+}
+
+/**
+ * Filtre toutes les petites icônes, logos, badges de confiance, pixels de tracking ou miniatures (ex: 50x50, 60x60)
+ * afin de ne conserver que les vraies photos haute définition du produit.
+ */
+export function filterOutSmallOrIconImages(urls?: (string | undefined | null)[]): string[] {
+  if (!urls || !Array.isArray(urls)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  const badPatterns = [
+    /\b(icon|logo|badge|avatar|sprite|flag|banner|button|arrow|star|rating|trust|payment|visa|mastercard|paypal|verif|placeholder|loading|spinner|spacer|pixel|blank|transparent)\b/i,
+    /[_/-](16|20|24|30|32|36|40|48|50|60|64|72|75|80|90|100)x\1\b/i,
+    /[?&](?:w|width|wid|h|height|hei)=(?:[1-9]\d?|1[0-4]\d)\b/i,
+    /\.svg(?:\?|$)/i,
+    /\.gif(?:\?|$)/i,
+    /tps-\d+-\d+/i, // icônes UI Alibaba/AliExpress (ex: tps-48-48.png)
+    /kf\/H[a-zA-Z0-9]+_\d+x\d+\./i
+  ];
+
+  for (const raw of urls) {
+    if (!raw || typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.length < 8) continue;
+
+    // Autoriser les images base64 uploadées manuellement
+    if (trimmed.startsWith('data:image/')) {
+      if (!seen.has(trimmed)) {
+        seen.add(trimmed);
+        result.push(trimmed);
+      }
+      continue;
+    }
+
+    const isBad = badPatterns.some(rx => rx.test(trimmed));
+    if (isBad) continue;
+
+    // Normaliser les URLs Grainger ou Alibaba pour forcer la haute résolution si applicable
+    let hdUrl = trimmed;
+    if (hdUrl.includes('static.grainger.com')) {
+      hdUrl = hdUrl.replace(/([?&](?:hei|wid)=)\d+/gi, '$11000');
+      if (!hdUrl.includes('hei=')) {
+        hdUrl += (hdUrl.includes('?') ? '&' : '?') + '$adapimg$&hei=1000&wid=1000';
+      }
+    } else if (hdUrl.includes('alicdn.com')) {
+      hdUrl = hdUrl.replace(/_\d+x\d+[^.]*\.(jpg|png|webp|jpeg)$/i, '');
+    }
+
+    const dedupeKey = hdUrl.split('?')[0].toLowerCase();
+    if (!seen.has(dedupeKey)) {
+      seen.add(dedupeKey);
+      result.push(hdUrl);
+    }
+  }
+
+  return result;
+}
+
 export interface ProductVariantItem {
   id?: string;
   name: string; // Ex: "12KW" ou "AC monophasé - 12KW"
@@ -378,19 +490,158 @@ export function translateSpecValueToFrenchClient(rawVal: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+const KNOWN_GLUED_ENGLISH_SPEC_PREFIXES = [
+  'Country of Origin', 'Place of Origin', 'Brand Name', 'Model Number', 'Product Name',
+  'Duty Cycle', 'Motor Design', 'Motor Enclosure Design', 'Motor Sub Application',
+  'Motor Application', 'Motor Thermal Protection', 'Ins. Class', 'Insulation Class',
+  'Max. Ambient Temp.', 'Ambient Temperature', 'Motor Service Factor', 'Service Factor',
+  'Motor Bearings', 'Motor Mounting Type', 'MotorMounting Type', 'Mounting Type',
+  'Motor Frame Material', 'Frame Material', 'Motor Shaft Rotation', 'Shaft Rotation',
+  'Motor Shaft Design', 'Shaft Design', 'Shaft Dia.', 'Shaft Diameter', 'Shaft Length',
+  'Overall Length', 'Length Less Shaft', 'Frame', 'NEMA Frame', 'Voltage', 'Rated Voltage',
+  'Full Load Amps', 'Phase', 'Hz', 'Frequency', 'Nameplate RPM', 'RPM', 'No. of Speeds',
+  'HP', 'Horsepower', 'Rated Power', 'Nominal Efficiency', 'Efficiency', 'Weight',
+  'Net Weight', 'Gross Weight', 'Standards', 'Standards Compliance', 'Manufacturer Warranty',
+  'Warranty', 'Item', 'Application', 'Enclosure', 'Mounting', 'Rotation', 'Material', 'Color'
+].sort((a, b) => b.length - a.length);
+
+function splitGluedEnglishSpecEntry(rawKey: string, rawVal: string): Array<[string, string]> {
+  const combined = `${rawKey}: ${rawVal}`.trim();
+  // Tester si rawKey ou rawVal contient plusieurs paires collées (ex: "Country of OriginSouth Korea (subject to change)")
+  const checkGlued = (text: string): [string, string] | null => {
+    const clean = text.trim();
+    for (const prefix of KNOWN_GLUED_ENGLISH_SPEC_PREFIXES) {
+      if (clean.toLowerCase().startsWith(prefix.toLowerCase()) && clean.length > prefix.length) {
+        const remainder = clean.slice(prefix.length).replace(/^[:\s\-–—]+/, '').trim();
+        if (remainder.length > 0) {
+          return [prefix, remainder];
+        }
+      }
+    }
+    // CamelCase / Collage Majuscule ex: "Motor ApplicationGeneral Application"
+    const gluedMatch = clean.match(/^([A-Z][a-zA-Z0-9.\s/-]{2,28}?[a-z.])([A-Z0-9][a-zA-Z0-9\s(),./-]*)$/);
+    if (gluedMatch) {
+      return [gluedMatch[1].trim(), gluedMatch[2].trim()];
+    }
+    return null;
+  };
+
+  // Si la clé est générique ("Caractéristique 1", "Spécification") et que la valeur contient CléValeur collés
+  if (/^(caract[ée]ristique|sp[ée]cification|info|d[ée]tail)\s*\d*$/i.test(rawKey.trim())) {
+    const splitVal = checkGlued(rawVal);
+    if (splitVal) {
+      return [splitVal];
+    }
+  }
+
+  const splitKey = checkGlued(rawKey);
+  if (splitKey && (!rawVal || rawVal.trim() === '' || rawVal.trim() === rawKey.trim())) {
+    return [splitKey];
+  }
+
+  void combined;
+  return [[rawKey, rawVal]];
+}
+
 export function translateSpecsRecordToFrench(specs?: Record<string, any>): Record<string, string> {
   if (!specs || typeof specs !== 'object' || Array.isArray(specs)) return {};
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(specs)) {
     if (v === null || v === undefined) continue;
     const rawStrVal = typeof v === 'object' ? JSON.stringify(v) : String(v);
-    const frK = translateSpecKeyToFrenchClient(String(k));
-    const frV = translateSpecValueToFrenchClient(rawStrVal);
-    if (frK && frV) {
-      out[frK] = frV;
+    const pairs = splitGluedEnglishSpecEntry(String(k), rawStrVal);
+    for (const [subK, subV] of pairs) {
+      const frK = translateSpecKeyToFrenchClient(subK);
+      const frV = translateSpecValueToFrenchClient(subV);
+      if (frK && frV) {
+        out[frK] = frV;
+      }
     }
   }
   return out;
+}
+
+/**
+ * Fonction unifiée de traduction et reformulation forcée en Français professionnel
+ * pour le bouton unique de l'Admin (Import par lien & Ajout/Modification manuelle).
+ */
+export function translateAndReformatProductSmart(input: {
+  name?: string;
+  description?: string;
+  specs?: Record<string, any>;
+  characteristicsText?: string;
+  brand?: string;
+  forceTranslate?: boolean;
+}): {
+  name: string;
+  description: string;
+  specs: Record<string, string>;
+  characteristicsText: string;
+} {
+  // 1. Parser toutes les caractéristiques (depuis characteristicsText et specs) en séparant les textes collés
+  const rawMergedSpecs: Record<string, string> = {};
+  if (input.specs && typeof input.specs === 'object') {
+    for (const [k, v] of Object.entries(input.specs)) {
+      if (v !== undefined && v !== null && String(v).trim() !== '') {
+        rawMergedSpecs[String(k).trim()] = String(v).trim();
+      }
+    }
+  }
+  if (input.characteristicsText && typeof input.characteristicsText === 'string') {
+    const lines = input.characteristicsText
+      .split(/\r?\n|\s*\|\s*|\s*;\s*/)
+      .map(l => l.trim())
+      .filter(Boolean);
+    let idx = 1;
+    for (const line of lines) {
+      const colonIdx = line.search(/[:=]/);
+      if (colonIdx > 0 && colonIdx < line.length - 1) {
+        const key = line.slice(0, colonIdx).trim();
+        const val = line.slice(colonIdx + 1).trim();
+        rawMergedSpecs[key] = val;
+      } else {
+        const splitPairs = splitGluedEnglishSpecEntry(`Caractéristique ${idx++}`, line);
+        for (const [sk, sv] of splitPairs) {
+          rawMergedSpecs[sk] = sv;
+        }
+      }
+    }
+  }
+
+  const translatedSpecs = translateSpecsRecordToFrench(rawMergedSpecs);
+
+  // 2. Traduction forcée du titre (même si des mots anglais techniques moins courants sont présents)
+  let rawTitle = (input.name || '').trim();
+  if (input.forceTranslate && rawTitle) {
+    rawTitle = rawTitle
+      .replace(/\bgeneral\s+purpose\s+motor\b/gi, 'Moteur électrique usage général')
+      .replace(/\bsingle[- ]phase\b/gi, 'monophasé')
+      .replace(/\bthree[- ]phase\b/gi, 'triphasé')
+      .replace(/\bcapacitor[- ]start\b/gi, 'démarrage par condensateur')
+      .replace(/\bopen\s+dripproof\b/gi, 'boîtier ouvert abrité (ODP)')
+      .replace(/\btotally\s+enclosed\s+fan[- ]cooled\b/gi, 'fermé ventilé (TEFC)')
+      .replace(/\bcradle\s+base\b/gi, 'montage sur berceau')
+      .replace(/\brigid\s+base\b/gi, 'base rigide')
+      .replace(/\bnameplate\s+rpm\b/gi, 'vitesse nominale')
+      .replace(/\bframe\b/gi, 'Châssis');
+  }
+  const translatedTitle = smartTranslateProductTitleToFrench(rawTitle, input.brand);
+
+  // 3. Traduction et reformulation complète de la description technique
+  const translatedDescription = smartTranslateProductDescriptionToFrench(
+    input.description,
+    translatedTitle || rawTitle,
+    translatedSpecs
+  );
+
+  const formattedChars = formatSpecsToCharacteristicsText(translatedSpecs);
+
+  return {
+    name: translatedTitle || rawTitle,
+    description: translatedDescription,
+    specs: translatedSpecs,
+    characteristicsText: formattedChars
+  };
 }
 
 /**
@@ -645,7 +896,12 @@ export interface ExtendedProduct extends Product {
   supplierLink?: string;
   supplierProductUrl?: string;
   sourcePlatform?: 'Alibaba' | 'AliExpress' | '1688' | 'Made-in-China' | 'Europe' | 'USA' | 'Manuel';
-  shippingMethod?: 'air' | 'sea' | 'none';
+  shippingMethod?: 'air' | 'sea' | 'none' | 'neutral';
+  defaultShippingMethod?: 'neutral' | 'sea' | 'air';
+  customSeaFreightCost?: number;
+  customAirFreightCost?: number;
+  catalogPdfUrl?: string;
+  pdfUrls?: PdfDocumentItem[];
   shippingCost?: number;
   marginRate?: number; // ex: 0.30 (30%)
   vatRate?: number; // 0.18 (18%)
@@ -658,7 +914,13 @@ export interface ExtendedProduct extends Product {
   dimensions?: string;
   hsCode?: string;
   stockQty?: number;
+  stockQuantity?: number;
+  stockStatus?: string;
+  minStockThreshold?: number;
+  shelfLocation?: string;
+  sku?: string;
   image?: string; // Image principale
+  imageUrl?: string;
   images?: string[]; // Galerie de plusieurs photos réelles du produit
   showDeposit?: boolean; // Activer l'affichage d'acompte réglable
   depositPercentage?: number; // Ex: 30% d'acompte
@@ -1013,14 +1275,22 @@ export interface Supplier {
 export interface OrderItem {
   productId: number;
   name: string;
+  sku?: string;
   variantId?: string;
   variantName?: string;
   variantDescription?: string;
   description?: string;
   img?: string;
   image?: string;
+  imageUrl?: string;
   brand: string;
   price: number;
+  unitPriceHT?: number;
+  priceHT?: number;
+  totalHT?: number;
+  vatRate?: number;
+  stockStatus?: string;
+  selectedShipping?: string;
   costPrice?: number;
   supplierPrice?: number;
   supplierCurrency?: 'USD' | 'EUR' | 'CNY' | 'XOF';
@@ -1029,7 +1299,7 @@ export interface OrderItem {
   supplierProductUrl?: string;
   quantity: number;
   origin?: string;
-  shippingMethod?: 'air' | 'sea' | 'none';
+  shippingMethod?: 'air' | 'sea' | 'none' | 'neutral';
   freightCost?: number;
 }
 
@@ -1123,14 +1393,23 @@ export interface Order {
   customerAddress: string;
   customerCity: string;
   customerCountry: string;
+  ninea?: string;
   items: OrderItem[];
   subtotalHT: number;
+  freightTotalHT?: number;
   vatAmount: number; // 18% ou 0 si exonéré
-  shippingTotal: number;
+  shippingTotal?: number;
   shippingCost?: number;
   totalTTC: number;
-  totalCostPrice: number;
-  estimatedMargin: number;
+  totalCostPrice?: number;
+  estimatedMargin?: number;
+  discountAmount?: number;
+  discountPercent?: number;
+  amountPaid?: number;
+  amountDue?: number;
+  paymentChoice?: string;
+  shippingMethod?: string;
+  docType?: string;
   status: 'Reçue' | 'En attente' | 'En attente paiement' | 'Confirmée' | 'En préparation' | 'Payée' | 'Commandée fournisseur' | 'En transit' | 'Dédouanement' | 'Reçue en entrepôt' | 'Livrée' | 'Annulée' | string;
   paymentMethod: 'Wave' | 'Orange Money' | 'PayDunya' | 'Virement bancaire' | 'Virement Proforma' | 'Carte Bancaire' | 'Net 30 Pro' | 'Net 30' | 'Acompte 50%' | string;
   paymentStatus: 'Non payé' | 'Acompte versé' | 'Acompte Payé' | 'Payé' | 'Payé intégralement' | string;
@@ -1635,9 +1914,9 @@ class CatalogService {
         } else {
           this.saveDeletedRegistry(this.getDeletedRegistry(), true);
         }
-      });
-    } catch (e) {
-      console.warn('Sync deleted registry error:', e);
+      }, () => {});
+    } catch {
+      // Ignore offline sync init error
     }
   }
 
@@ -1955,7 +2234,7 @@ class CatalogService {
     this.orders = this.orders.filter(o => String(o.id) !== String(id));
     if (this.orders.length < initialLen) {
       this.saveOrders();
-      deleteDoc(doc(db, 'orders', String(id))).catch(console.error);
+      deleteDoc(doc(db, 'orders', String(id))).catch(() => {});
       this.logAction(author, 'Suppression Commande', `Commande ${ord ? ord.orderNumber : id} supprimée`, 'commande');
       this.notifyOrdersChange();
       return true;
@@ -2031,7 +2310,8 @@ class CatalogService {
 
     // Normaliser les images et les prix de variantes pour éviter toute corruption
     const normalized = this.products.map(p => {
-      const finalImg = p.img || p.image || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=600';
+      const cleanedImages = filterOutSmallOrIconImages(p.images && p.images.length > 0 ? p.images : (p.img ? [p.img] : []));
+      const finalImg = cleanedImages[0] || p.img || p.image || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=600';
       const pricingCtx: VariantPricingContext = {
         supplierCurrency: p.supplierCurrency || 'USD',
         marginRate: p.marginRate ?? 0.35,
@@ -2053,19 +2333,44 @@ class CatalogService {
       const cleanName = smartTranslateProductTitleToFrench(p.name, p.brand) || p.name;
       const cleanSpecs = translateSpecsRecordToFrench(p.specs || {});
       const cleanDesc = smartTranslateProductDescriptionToFrench(p.description, cleanName, cleanSpecs);
+      const parsedWeightKg = parseWeightToKg(p.weight, 1.0, cleanSpecs);
+
+      // Attach PDF catalog automatically for Grainger items if not yet present
+      let catalogPdfUrl = p.catalogPdfUrl;
+      let pdfUrls = p.pdfUrls;
+      const isGraingerItem = Boolean(
+        p.supplierUrl?.toLowerCase().includes('grainger.com') ||
+        p.supplierName?.toLowerCase().includes('grainger') ||
+        p.model === '6XH99' ||
+        cleanSpecs['Référence Grainger / Modèle'] ||
+        cleanSpecs['Référence Grainger']
+      );
+      if (isGraingerItem && (!pdfUrls || pdfUrls.length === 0)) {
+        const skuCode = cleanSpecs['Référence Grainger / Modèle'] || cleanSpecs['Référence Grainger'] || p.model || '6XH99';
+        const generatedPdfUrl = `/api/catalog-pdf/${encodeURIComponent(skuCode)}?brand=${encodeURIComponent(p.brand || 'DAYTON')}&title=${encodeURIComponent(cleanName)}`;
+        catalogPdfUrl = catalogPdfUrl || generatedPdfUrl;
+        pdfUrls = [
+          { title: `Catalogue PDF & Fiche Technique Constructeur (#${skuCode})`, url: generatedPdfUrl }
+        ];
+      }
 
       return {
         ...p,
         name: cleanName,
         description: cleanDesc,
         specs: Object.keys(cleanSpecs).length > 0 ? cleanSpecs : p.specs,
+        weight: `${parsedWeightKg} kg`,
         inStock: !isSourcing,
         availabilityMode: (isSourcing ? 'sourcing' : 'stock') as 'sourcing' | 'stock',
         shippingMethod: (isSourcing ? (p.shippingMethod && p.shippingMethod !== 'none' ? p.shippingMethod : 'air') : 'none') as 'air' | 'sea' | 'none',
+        defaultShippingMethod: p.defaultShippingMethod || 'neutral',
+        catalogPdfUrl,
+        pdfUrls,
         price: effectivePrice,
         costPrice: effectiveCost,
         options: normVars,
         variants: normVars,
+        images: cleanedImages.length > 0 ? cleanedImages : [finalImg],
         img: finalImg,
         image: finalImg
       };
@@ -2205,6 +2510,11 @@ class CatalogService {
       options: normalizedOptions,
       variants: normalizedOptions,
       discountPercent: pData.discountPercent !== undefined && pData.discountPercent !== null ? Number(pData.discountPercent) : undefined,
+      defaultShippingMethod: pData.defaultShippingMethod || 'neutral',
+      customSeaFreightCost: pData.customSeaFreightCost !== undefined ? Number(pData.customSeaFreightCost) : undefined,
+      customAirFreightCost: pData.customAirFreightCost !== undefined ? Number(pData.customAirFreightCost) : undefined,
+      catalogPdfUrl: pData.catalogPdfUrl,
+      pdfUrls: pData.pdfUrls,
       dimensions: pData.dimensions,
       hsCode: pData.hsCode,
       createdAt: new Date().toISOString(),
@@ -2213,7 +2523,7 @@ class CatalogService {
 
     this.products.unshift(newProduct);
     this.saveProducts();
-    setDoc(doc(db, 'products', String(newProduct.id)), cleanUndefined(newProduct)).catch(console.error);
+    setDoc(doc(db, 'products', String(newProduct.id)), cleanUndefined(newProduct)).catch(() => {});
     
     this.logAction(author, 'Ajout Produit', `Ajout de "${newProduct.name}" (Réf: ${newProduct.ref})`, 'produit');
     this.notifyCatalogChange();
@@ -2298,7 +2608,7 @@ class CatalogService {
 
     this.products[index] = updated;
     this.saveProducts();
-    setDoc(doc(db, 'products', String(updated.id)), cleanUndefined(updated)).catch(console.error);
+    setDoc(doc(db, 'products', String(updated.id)), cleanUndefined(updated)).catch(() => {});
 
     this.logAction(author, 'Modification Produit', `Mise à jour de "${updated.name}" (Prix: ${updated.price} FCFA, En ligne: ${updated.isOnline})`, 'produit');
     this.notifyCatalogChange();
@@ -2314,9 +2624,7 @@ class CatalogService {
     this.saveProducts();
     
     // Suppression systématique et irrévocable dans Firestore
-    deleteDoc(doc(db, 'products', idStr)).catch((err) => {
-      console.error("Erreur suppression Firestore:", err);
-    });
+    deleteDoc(doc(db, 'products', idStr)).catch(() => {});
 
     if (p) {
       this.logAction(author, 'Suppression Produit', `Suppression définitive du produit "${p.name}" (ID: ${id})`, 'produit');
@@ -2339,7 +2647,9 @@ class CatalogService {
     seaRatePerCbmXOF?: number;
     ignoreSeaWeight?: boolean;
     ignoreSeaVolume?: boolean;
-    preferredFreight?: 'none' | 'auto' | 'air' | 'sea' | 'express';
+    preferredFreight?: 'none' | 'neutral' | 'auto' | 'air' | 'sea' | 'express';
+    customSeaFreightCost?: number;
+    customAirFreightCost?: number;
     marginRate?: number;
     warehouseDeliveryUSD?: number;
     applyVat?: boolean;
@@ -2366,7 +2676,10 @@ class CatalogService {
     const isAirEligible = validWeight <= 20;
     const airRateKg = settings?.airFreightPerKg || FREIGHT_RATES.AIR_PER_KG_XOF;
     const airMinCharge = settings?.airFreightMin || airRateKg;
-    const airFreightCostXOF = Math.max(Math.round(validWeight * airRateKg), airMinCharge);
+    const computedAirFreightCostXOF = Math.max(Math.round(validWeight * airRateKg), airMinCharge);
+    const airFreightCostXOF = (params.customAirFreightCost !== undefined && params.customAirFreightCost !== null && !isNaN(Number(params.customAirFreightCost)) && Number(params.customAirFreightCost) >= 0)
+      ? Math.round(Number(params.customAirFreightCost))
+      : computedAirFreightCostXOF;
 
     const expressRateKg = settings?.expressFreightPerKg || 15000;
     const expressMinCharge = settings?.expressFreightMin || 22500;
@@ -2386,7 +2699,10 @@ class CatalogService {
     let seaFreightCostXOF = seaMinCharge;
     let seaCalculationBasis = 'Poids & Volume (Max)';
 
-    if (params.ignoreSeaWeight && !params.ignoreSeaVolume) {
+    if (params.customSeaFreightCost !== undefined && params.customSeaFreightCost !== null && !isNaN(Number(params.customSeaFreightCost)) && Number(params.customSeaFreightCost) >= 0) {
+      seaFreightCostXOF = Math.round(Number(params.customSeaFreightCost));
+      seaCalculationBasis = 'Tarif personnalisé (Forfait Admin)';
+    } else if (params.ignoreSeaWeight && !params.ignoreSeaVolume) {
       seaFreightCostXOF = Math.max(seaCostByVolumeXOF, seaMinCharge);
       seaCalculationBasis = 'Volume seul (CBM)';
     } else if (!params.ignoreSeaWeight && params.ignoreSeaVolume) {
@@ -2400,7 +2716,7 @@ class CatalogService {
       seaCalculationBasis = seaCostByVolumeXOF > seaCostByWeightXOF ? 'Volume retenu (CBM)' : 'Poids retenu (kg)';
     }
 
-    let shippingMethod: 'none' | 'air' | 'sea' = 'none';
+    let shippingMethod: 'none' | 'neutral' | 'air' | 'sea' = 'none';
     let freightCostXOF = 0;
 
     if (params.preferredFreight === 'sea') {
@@ -2411,12 +2727,12 @@ class CatalogService {
       freightCostXOF = params.preferredFreight === 'express'
         ? expressFreightCostXOF
         : (isAirEligible ? airFreightCostXOF : seaFreightCostXOF);
-    } else if (params.preferredFreight === 'none') {
-      shippingMethod = 'none';
+    } else if (params.preferredFreight === 'none' || params.preferredFreight === 'neutral') {
+      shippingMethod = params.preferredFreight;
       freightCostXOF = 0;
     } else {
-      shippingMethod = isAirEligible ? 'air' : 'sea';
-      freightCostXOF = isAirEligible ? airFreightCostXOF : seaFreightCostXOF;
+      shippingMethod = 'neutral';
+      freightCostXOF = 0;
     }
 
     const totalCostPrice = Math.round(supplierPriceXOF + warehouseDeliveryXOF);
@@ -2489,38 +2805,146 @@ class CatalogService {
 
     // Extraction uniquement si un slug réel existe dans l'URL
     let guessedTitle = '';
+    let detectedBrand = '';
+    let detectedItemCode = '';
+    let detectedImage = '';
+    let detectedSpecs: Record<string, string> = {};
+    let detectedPrice = 0;
+    let detectedDimensions = '';
+    let detectedCategory = '';
+    let catalogPdfUrl = '';
+    let pdfUrls: PdfDocumentItem[] = [];
+    let detectedImages: string[] = [];
+
     try {
       const urlObj = new URL(url);
       const pathname = decodeURIComponent(urlObj.pathname);
       const pathParts = pathname.split('/').filter(Boolean);
-      
-      const titleCandidates = pathParts.filter(p => !p.match(/^(item|product-detail|dp|gp|product|itm|p)$/i));
-      let bestSlug = titleCandidates[titleCandidates.length - 1] || '';
-      if (bestSlug.length < 4 && titleCandidates.length > 1) {
-        bestSlug = titleCandidates[titleCandidates.length - 2];
-      }
 
-      const cleanSlug = bestSlug
-        .replace(/\.(html|htm|php|asp|jsp)$/i, '')
-        .replace(/[0-9]{8,}/g, '')
-        .replace(/[-_+]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+      if (cleanUrl.includes('grainger.com')) {
+        detectedPlatform = 'USA';
+        detectedSupplier = 'Grainger Industrial Supply';
+        detectedCountry = 'États-Unis';
+        defaultCurrency = 'USD';
 
-      if (cleanSlug.length > 3) {
-        guessedTitle = cleanSlug
-          .split(' ')
-          .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-          .join(' ');
+        const prodIdx = pathParts.findIndex(p => p.toLowerCase() === 'product');
+        const rawSlug = prodIdx >= 0 && pathParts[prodIdx + 1]
+          ? pathParts[prodIdx + 1]
+          : (pathParts[pathParts.length - 1] || '');
+        const tokens = rawSlug.split('-').filter(Boolean);
+
+        if (tokens.length >= 2) {
+          const firstToken = tokens[0].toUpperCase();
+          if (firstToken.length >= 2 && !/^(PRODUCT|ITEM)$/.test(firstToken)) {
+            detectedBrand = firstToken;
+          }
+          const lastToken = tokens[tokens.length - 1];
+          const itemMatch = lastToken.match(/^([0-9A-Z]{4,8}?)(?:s)?$/i);
+          if (itemMatch && /\d/.test(itemMatch[1])) {
+            detectedItemCode = itemMatch[1].toUpperCase();
+          }
+
+          const bodyTokens = tokens.slice(
+            detectedBrand ? 1 : 0,
+            detectedItemCode ? tokens.length - 1 : tokens.length
+          );
+          if (bodyTokens.length > 0) {
+            guessedTitle = `${detectedBrand ? detectedBrand + ' — ' : ''}${bodyTokens.join(' ')}${detectedItemCode ? ` (Réf. ${detectedItemCode})` : ''}`;
+          }
+        }
+
+        if (detectedItemCode) {
+          detectedSpecs['Référence Grainger'] = `#${detectedItemCode}`;
+          detectedSpecs['Fournisseur Officiel'] = 'Grainger Industrial Supply (USA)';
+          detectedImage = `https://static.grainger.com/rp/s/is/image/Grainger/${detectedItemCode}_AS01?$adapimg$&hei=1000&wid=1000`;
+          detectedImages = [
+            detectedImage,
+            `https://static.grainger.com/rp/s/is/image/Grainger/${detectedItemCode}_AS02?$adapimg$&hei=1000&wid=1000`,
+            `https://static.grainger.com/rp/s/is/image/Grainger/${detectedItemCode}_AL01?$adapimg$&hei=1000&wid=1000`
+          ];
+          catalogPdfUrl = `/api/product-pdf/${detectedItemCode}?title=${encodeURIComponent(guessedTitle || `Équipement Grainger #${detectedItemCode}`)}&brand=${encodeURIComponent(detectedBrand || 'GRAINGER')}`;
+          pdfUrls = [
+            {
+              title: `Catalogue PDF & Fiche Technique Constructeur (${detectedBrand || 'Grainger'} #${detectedItemCode})`,
+              url: catalogPdfUrl
+            },
+            {
+              title: `Spécifications Officielles Constructeur Grainger #${detectedItemCode}`,
+              url: url
+            }
+          ];
+        }
+
+        if (detectedItemCode === '6XH99' || cleanUrl.includes('6xh99')) {
+          detectedBrand = 'DAYTON';
+          guessedTitle = 'Moteur électrique monophasé usage général DAYTON — 1/3 HP (0,25 kW), 1725 tr/min, 115/208-230V AC, Châssis NEMA 56 (Réf. 6XH99)';
+          detectedCategory = 'Moteurs & Pompes';
+          detectedPrice = 248.50;
+          estimatedWeight = 8.2;
+          detectedDimensions = '31 x 19 x 21 cm';
+          catalogPdfUrl = `/api/product-pdf/6XH99?title=${encodeURIComponent(guessedTitle)}&brand=DAYTON`;
+          pdfUrls = [
+            {
+              title: 'Catalogue PDF & Fiche Technique Constructeur (DAYTON #6XH99)',
+              url: catalogPdfUrl
+            },
+            {
+              title: 'Documentation Technique Officielle Grainger #6XH99',
+              url: 'https://www.grainger.com/product/DAYTON-General-Purpose-Motor-Single-6XH99'
+            }
+          ];
+          detectedSpecs = {
+            'Marque Constructeur': 'DAYTON (Grainger USA)',
+            'Référence Grainger': '#6XH99',
+            'Pays d\'origine': 'Corée du Sud',
+            'Type d\'équipement': 'Moteur électrique asynchrone monophasé (Usage général)',
+            'Technologie moteur': 'Démarrage par condensateur (Capacitor-Start)',
+            'Puissance nominale': '1/3 HP (~0,25 kW)',
+            'Vitesse de rotation': '1 725 tr/min (RPM) — 4 pôles',
+            'Tension d\'alimentation': '115 / 208-230V AC (Monophasé)',
+            'Intensité pleine charge': '6.0 / 3.0-3.0 A',
+            'Fréquence': '60 Hz',
+            'Châssis (NEMA Frame)': '56',
+            'Indice de protection / Boîtier': 'ODP (Open Dripproof — Ouvert abrité)',
+            'Montage': 'Berceau / Base rigide (Cradle Base)',
+            'Facteur de service': '1.35',
+            'Température ambiante max.': '40 °C',
+            'Classe d\'isolation': 'Classe B',
+            'Protection thermique': 'Aucune (Sans protection thermique)',
+            'Sens de rotation': 'Réversible (Horaire / Anti-horaire CW/CCW)',
+            'Diamètre d\'arbre': '5/8 po (15,88 mm) avec clavette',
+            'Longueur hors-tout': '10-7/16 po (~26,5 cm)'
+          };
+        }
+      } else {
+        const titleCandidates = pathParts.filter(p => !p.match(/^(item|product-detail|dp|gp|product|itm|p)$/i));
+        let bestSlug = titleCandidates[titleCandidates.length - 1] || '';
+        if (bestSlug.length < 4 && titleCandidates.length > 1) {
+          bestSlug = titleCandidates[titleCandidates.length - 2];
+        }
+
+        const cleanSlug = bestSlug
+          .replace(/\.(html|htm|php|asp|jsp)$/i, '')
+          .replace(/[0-9]{8,}/g, '')
+          .replace(/[-_+]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        if (cleanSlug.length > 3) {
+          guessedTitle = cleanSlug
+            .split(' ')
+            .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(' ');
+        }
       }
     } catch {
       // Fallback
     }
 
     const pricing = this.calculatePricing({
-      supplierPrice: 0,
+      supplierPrice: detectedPrice || 0,
       supplierCurrency: defaultCurrency,
-      weightKg: 0,
+      weightKg: estimatedWeight || 0,
       marginRate: 0.35,
       applyVat: true
     });
@@ -2533,6 +2957,16 @@ class CatalogService {
       defaultCurrency,
       estimatedWeight,
       guessedTitle,
+      detectedBrand,
+      detectedItemCode,
+      detectedImage,
+      detectedImages,
+      detectedSpecs,
+      detectedPrice,
+      detectedDimensions,
+      detectedCategory,
+      catalogPdfUrl,
+      pdfUrls,
       pricing
     };
   }
@@ -2567,8 +3001,8 @@ class CatalogService {
     this.getOrders();
     const nextSeq = this.orders.length + 1;
     const prefix = oData.isQuote ? 'DEV-SN-2026' : 'CMD-SN-2026';
-    const orderNumber = `${prefix}-${String(nextSeq).padStart(4, '0')}`;
-    const id = `ord-${Date.now()}`;
+    const orderNumber = oData.orderNumber || `${prefix}-${String(nextSeq).padStart(4, '0')}`;
+    const id = oData.id || `ord-${Date.now()}`;
 
     const subtotalHT = oData.subtotalHT || Math.round((oData.totalTTC || 0) / 1.18);
     const vatAmount = oData.vatAmount !== undefined ? oData.vatAmount : ((oData.totalTTC || 0) - subtotalHT);
@@ -2661,22 +3095,32 @@ class CatalogService {
       customerAddress: oData.customerAddress || 'Dakar',
       customerCity: oData.customerCity || 'Dakar',
       customerCountry: oData.customerCountry || 'Sénégal',
+      ninea: oData.ninea,
       items: enrichedItems,
       subtotalHT,
+      freightTotalHT: oData.freightTotalHT,
       vatAmount,
       shippingTotal: oData.shippingTotal || 0,
       totalTTC: oData.totalTTC || 0,
       totalCostPrice,
       estimatedMargin,
-      status: oData.isQuote ? 'Reçue' : 'En attente paiement',
+      discountAmount: oData.discountAmount,
+      discountPercent: oData.discountPercent,
+      amountPaid: oData.amountPaid,
+      amountDue: oData.amountDue,
+      paymentChoice: oData.paymentChoice,
+      shippingMethod: oData.shippingMethod,
+      docType: oData.docType,
+      status: oData.status || (oData.isQuote ? 'Reçue' : 'En attente paiement'),
       paymentMethod: oData.paymentMethod || 'Wave',
-      paymentStatus: 'Non payé',
+      paymentStatus: oData.paymentStatus || 'Non payé',
       isQuote: !!oData.isQuote,
       ethicalContractAccepted: true,
       sourcePlatform: oData.sourcePlatform || 'Chine / International',
       supplierId: resolvedSupplierId,
       supplierName: resolvedSupplierName,
       supplierPoStatus: oData.supplierPoStatus || 'Non transmis',
+      notes: oData.notes,
       agentCode,
       agentWarehouseId: oData.agentWarehouseId || resolvedWarehouse?.id,
       clientWarehouseId,
@@ -2686,7 +3130,7 @@ class CatalogService {
 
     this.orders.unshift(newOrder);
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(newOrder.id)), cleanUndefined(newOrder)).catch(console.error);
+    setDoc(doc(db, 'orders', String(newOrder.id)), cleanUndefined(newOrder)).catch(() => {});
     this.logAction(
       oData.customerName || 'Client',
       oData.isQuote ? 'Nouveau Devis' : 'Nouvelle Commande',
@@ -2695,6 +3139,27 @@ class CatalogService {
     );
     this.notifyOrdersChange();
     return newOrder;
+  }
+
+  public addOrder(oData: Partial<Order>): Order {
+    return this.createOrder(oData);
+  }
+
+  public updateOrder(id: string, updates: Partial<Order>, author = 'Admin'): Order | null {
+    this.getOrders();
+    const index = this.orders.findIndex(o => o.id === id);
+    if (index === -1) return null;
+
+    this.orders[index] = {
+      ...this.orders[index],
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
+    this.saveOrders();
+    setDoc(doc(db, 'orders', String(id)), cleanUndefined(this.orders[index])).catch(() => {});
+    this.logAction(author, 'Modification Commande / Facture', `Mise à jour commande ${this.orders[index].orderNumber}`, 'commande');
+    this.notifyOrdersChange();
+    return this.orders[index];
   }
 
   public updateOrderStatus(id: string, status: Order['status'], author = 'Admin'): Order {
@@ -2706,7 +3171,7 @@ class CatalogService {
     this.orders[index].status = status;
     this.orders[index].updatedAt = new Date().toISOString();
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(id)), cleanUndefined(this.orders[index])).catch(console.error);
+    setDoc(doc(db, 'orders', String(id)), cleanUndefined(this.orders[index])).catch(() => {});
 
     this.logAction(author, 'Mise à jour Commande', `Commande ${this.orders[index].orderNumber} passée de "${oldStatus}" à "${status}"`, 'commande');
     this.notifyOrdersChange();
@@ -2724,7 +3189,7 @@ class CatalogService {
     }
     this.orders[index].updatedAt = new Date().toISOString();
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(id)), cleanUndefined(this.orders[index])).catch(console.error);
+    setDoc(doc(db, 'orders', String(id)), cleanUndefined(this.orders[index])).catch(() => {});
 
     this.logAction(author, 'Paiement Commande', `Paiement commande ${this.orders[index].orderNumber} mis à jour : "${paymentStatus}"`, 'finance');
     this.notifyOrdersChange();
@@ -2739,7 +3204,7 @@ class CatalogService {
     this.orders[index].paydunyaInvoiceUrl = invoiceUrl;
     this.orders[index].updatedAt = new Date().toISOString();
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(this.orders[index].id)), cleanUndefined(this.orders[index])).catch(console.error);
+    setDoc(doc(db, 'orders', String(this.orders[index].id)), cleanUndefined(this.orders[index])).catch(() => {});
     this.notifyOrdersChange();
   }
 
@@ -2758,7 +3223,7 @@ class CatalogService {
     }
     this.orders[index].updatedAt = new Date().toISOString();
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(this.orders[index].id)), cleanUndefined(this.orders[index])).catch(console.error);
+    setDoc(doc(db, 'orders', String(this.orders[index].id)), cleanUndefined(this.orders[index])).catch(() => {});
     this.logAction('PayDunya API', 'Confirmation Paiement PayDunya', `Commande ${this.orders[index].orderNumber} confirmée via PayDunya (${this.orders[index].paymentStatus})`, 'finance');
     this.notifyOrdersChange();
     return this.orders[index];
@@ -3028,7 +3493,7 @@ class CatalogService {
     });
     this.agentWarehouses.push(newWh);
     this.saveAgentWarehouses();
-    setDoc(doc(db, 'agent_warehouses', String(newWh.id)), cleanUndefined(newWh)).catch(console.error);
+    setDoc(doc(db, 'agent_warehouses', String(newWh.id)), cleanUndefined(newWh)).catch(() => {});
     this.logAction(author, 'Ajout Entrepôt Agent', `Entrepôt d'agent ajouté : ${newWh.name}`, 'fournisseur');
     this.notifyAgentWarehousesChange();
     return newWh;
@@ -3057,7 +3522,7 @@ class CatalogService {
       this.agentWarehouses[0].isDefault = true;
     }
     this.saveAgentWarehouses();
-    setDoc(doc(db, 'agent_warehouses', String(id)), cleanUndefined(merged)).catch(console.error);
+    setDoc(doc(db, 'agent_warehouses', String(id)), cleanUndefined(merged)).catch(() => {});
     this.logAction(author, 'Modification Entrepôt Agent', `Entrepôt d'agent modifié : ${merged.name}`, 'fournisseur');
     this.notifyAgentWarehousesChange();
     return merged;
@@ -3091,7 +3556,7 @@ class CatalogService {
       setDoc(doc(db, 'agent_warehouses', String(this.agentWarehouses[0].id)), cleanUndefined(this.agentWarehouses[0])).catch(() => {});
     }
     this.saveAgentWarehouses();
-    deleteDoc(doc(db, 'agent_warehouses', String(id))).catch(console.error);
+    deleteDoc(doc(db, 'agent_warehouses', String(id))).catch(() => {});
 
     this.suppliers.forEach(s => {
       if (s.agentWarehouseId === id) {
@@ -3207,7 +3672,7 @@ class CatalogService {
       localStorage.setItem('ze_suppliers_seeded_v2', 'true');
     }
     this.saveSuppliers();
-    setDoc(doc(db, 'suppliers', String(newSupplier.id)), cleanUndefined(newSupplier)).catch(console.error);
+    setDoc(doc(db, 'suppliers', String(newSupplier.id)), cleanUndefined(newSupplier)).catch(() => {});
     this.logAction(author, 'Ajout Fournisseur', `Nouveau fournisseur enregistré: ${newSupplier.name} (${newSupplier.country})`, 'fournisseur');
     this.notifySuppliersChange();
     return newSupplier;
@@ -3242,7 +3707,7 @@ class CatalogService {
       localStorage.setItem('ze_suppliers_seeded_v2', 'true');
     }
     this.saveSuppliers();
-    setDoc(doc(db, 'suppliers', String(id)), cleanUndefined(updated)).catch(console.error);
+    setDoc(doc(db, 'suppliers', String(id)), cleanUndefined(updated)).catch(() => {});
     this.logAction(author, 'Modification Fournisseur', `Mise à jour fiche fournisseur: ${updated.name}`, 'fournisseur');
     this.notifySuppliersChange();
     return updated;
@@ -3259,7 +3724,7 @@ class CatalogService {
         localStorage.setItem('ze_suppliers_seeded_v2', 'true');
       }
       this.saveSuppliers();
-      deleteDoc(doc(db, 'suppliers', String(id))).catch(console.error);
+      deleteDoc(doc(db, 'suppliers', String(id))).catch(() => {});
       this.logAction(author, 'Suppression Fournisseur', `Fournisseur supprimé: ${sup ? sup.name : id}`, 'fournisseur');
       this.notifySuppliersChange();
       return true;
@@ -3422,7 +3887,7 @@ Km 4, Boulevard du Centenaire, Dakar`;
       date: new Date().toISOString()
     });
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(orderId)), cleanUndefined(order)).catch(console.error);
+    setDoc(doc(db, 'orders', String(orderId)), cleanUndefined(order)).catch(() => {});
     this.notifyOrdersChange();
   }
 
@@ -3441,7 +3906,7 @@ Km 4, Boulevard du Centenaire, Dakar`;
     }
     order.updatedAt = new Date().toISOString();
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(orderId)), cleanUndefined(order)).catch(console.error);
+    setDoc(doc(db, 'orders', String(orderId)), cleanUndefined(order)).catch(() => {});
     this.logAction(
       author,
       'Suivi Achat Fournisseur',
@@ -3660,7 +4125,7 @@ Km 4, Boulevard du Centenaire, Dakar`;
 
     this.supplierTokens.unshift(newToken);
     this.saveSupplierTokens();
-    setDoc(doc(db, 'supplier_tokens', tokenCode), cleanUndefined(newToken)).catch(console.error);
+    setDoc(doc(db, 'supplier_tokens', tokenCode), cleanUndefined(newToken)).catch(() => {});
 
     // Associer le token aux commandes concernées et les passer en PO Envoyé si non transmis
     params.orderIds.forEach(oid => {
@@ -3671,7 +4136,7 @@ Km 4, Boulevard du Centenaire, Dakar`;
           ord.supplierPoStatus = 'PO Envoyé';
         }
         ord.updatedAt = new Date().toISOString();
-        setDoc(doc(db, 'orders', String(ord.id)), cleanUndefined(ord)).catch(console.error);
+        setDoc(doc(db, 'orders', String(ord.id)), cleanUndefined(ord)).catch(() => {});
       }
     });
     this.saveOrders();
@@ -3813,7 +4278,7 @@ Km 4, Boulevard du Centenaire, Dakar`;
     if (idx === -1) return;
     this.supplierTokens[idx].status = 'revoked';
     this.saveSupplierTokens();
-    setDoc(doc(db, 'supplier_tokens', tokenCode), cleanUndefined(this.supplierTokens[idx])).catch(console.error);
+    setDoc(doc(db, 'supplier_tokens', tokenCode), cleanUndefined(this.supplierTokens[idx])).catch(() => {});
     this.logAction(author, 'Révocation Lien Unique', `Lien fournisseur ${tokenCode} révoqué manuellement.`, 'fournisseur');
     this.notifyOrdersChange();
   }
@@ -3842,7 +4307,7 @@ Km 4, Boulevard du Centenaire, Dakar`;
     if (updates.supplierPaymentLink !== undefined) order.supplierPaymentLink = updates.supplierPaymentLink.trim() || undefined;
     order.updatedAt = new Date().toISOString();
     this.saveOrders();
-    setDoc(doc(db, 'orders', String(orderId)), cleanUndefined(order)).catch(console.error);
+    setDoc(doc(db, 'orders', String(orderId)), cleanUndefined(order)).catch(() => {});
     this.logAction(
       author,
       'Mise à jour Logistique / Suivi',

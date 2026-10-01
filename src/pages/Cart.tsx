@@ -169,23 +169,38 @@ export default function Cart() {
     if (item.availabilityMode === 'stock') return false;
     if (item.availabilityMode === 'sourcing') return true;
     if (item.inStock !== undefined) return !item.inStock;
-    return item.shippingMethod === 'air' || item.shippingMethod === 'sea';
+    return item.shippingMethod === 'air' || item.shippingMethod === 'sea' || item.shippingMethod === 'neutral';
   };
 
   const sourcingItemsCount = items.filter(it => isCartItemSourcing(it)).length;
   const localStockItemsCount = items.length - sourcingItemsCount;
 
-  // Helper for dynamic unit freight cost calculation using live siteSettings
-  const getItemUnitFreight = (item: any, method?: 'sea' | 'air') => {
+  // Helper for dynamic unit freight cost calculation using live siteSettings & custom product overrides
+  const getItemUnitFreight = (item: any, method?: 'neutral' | 'sea' | 'air') => {
     if (!isCartItemSourcing(item) && !method) {
       return 0;
     }
+    const currentMethod = method || (item.shippingMethod === 'air' ? 'air' : item.shippingMethod === 'sea' ? 'sea' : 'neutral');
+    if (currentMethod === 'neutral') {
+      return 0;
+    }
+    const prod = allProducts.find(p => String(p.id) === String(item.productId));
     const weightKg = item.weightKg || 1.0;
-    const currentMethod = method || (item.shippingMethod === 'air' ? 'air' : 'sea');
+    const seaRate = siteSettings.seaFreightPerKgXOF || siteSettings.seaFreightPerKg || 1800;
+    const airRate = siteSettings.airFreightPerKgXOF || siteSettings.airFreightPerKg || 7500;
+
     if (currentMethod === 'air') {
-      return Math.max(siteSettings.airFreightMin || 7000, Math.round(weightKg * (siteSettings.airFreightPerKg || 7000)));
+      const customAir = item.customAirFreightCost ?? prod?.customAirFreightCost;
+      if (customAir !== undefined && customAir !== null && Number(customAir) >= 0) {
+        return Math.round(Number(customAir));
+      }
+      return Math.max(siteSettings.airFreightMin || 7000, Math.round(weightKg * airRate));
     } else {
-      return Math.max(siteSettings.seaFreightMin || 8000, Math.round(weightKg * (siteSettings.seaFreightPerKg || 1800)));
+      const customSea = item.customSeaFreightCost ?? prod?.customSeaFreightCost;
+      if (customSea !== undefined && customSea !== null && Number(customSea) >= 0) {
+        return Math.round(Number(customSea));
+      }
+      return Math.max(siteSettings.seaFreightMin || 8000, Math.round(weightKg * seaRate));
     }
   };
 
@@ -724,27 +739,43 @@ export default function Cart() {
                       <div className={`bg-slate-50 p-3 rounded-xl border border-slate-200/80 text-xs ${!available ? 'opacity-30 pointer-events-none' : ''}`}>
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
-                            <Truck className="w-3.5 h-3.5 text-[#003366]" /> Mode de transport & fret international :
+                            <Truck className="w-3.5 h-3.5 text-[#003366]" /> Mode de transport & fret international (Optionnel) :
                           </span>
                           <span className="text-[10px] font-mono text-gray-600 font-bold">
-                            +{currentTotalFreight.toLocaleString('fr-FR')} FCFA
+                            {currentTotalFreight > 0 ? `+${currentTotalFreight.toLocaleString('fr-FR')} FCFA` : '0 FCFA (Sans fret pré-choisi)'}
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <button
+                            type="button"
+                            disabled={!available}
+                            onClick={() => item.id && updateItemFreight(item.id, 'neutral', 0)}
+                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                              item.shippingMethod !== 'sea' && item.shippingMethod !== 'air'
+                                ? 'bg-[#003366] text-white border-[#003366] font-bold'
+                                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                            }`}
+                          >
+                            <span className="block font-bold">Neutre (Sans fret)</span>
+                            <span className={`text-[9px] block ${item.shippingMethod !== 'sea' && item.shippingMethod !== 'air' ? 'text-slate-200' : 'text-gray-400'}`}>
+                              0 FCFA • À définir / Sur devis
+                            </span>
+                          </button>
+
                           <button
                             type="button"
                             disabled={!available}
                             onClick={() => item.id && updateItemFreight(item.id, 'sea', seaUnitCost)}
                             className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
-                              item.shippingMethod !== 'air'
+                              item.shippingMethod === 'sea'
                                 ? 'bg-[#003366] text-white border-[#003366] font-bold'
                                 : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                             }`}
                           >
-                            <span className="block font-bold">Maritime Éco ({siteSettings.seaFreightDurationDays || '30 - 45 jours'})</span>
-                            <span className={`text-[9px] block ${item.shippingMethod !== 'air' ? 'text-emerald-300' : 'text-gray-400'}`}>
-                              +{(seaUnitCost * item.quantity).toLocaleString('fr-FR')} F ({(siteSettings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg)
+                            <span className="block font-bold">Maritime ({siteSettings.seaFreightDurationDays || '30 - 45 j'})</span>
+                            <span className={`text-[9px] block ${item.shippingMethod === 'sea' ? 'text-emerald-300' : 'text-gray-400'}`}>
+                              +{(seaUnitCost * item.quantity).toLocaleString('fr-FR')} F
                             </span>
                           </button>
 
@@ -758,9 +789,9 @@ export default function Cart() {
                                 : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                             }`}
                           >
-                            <span className="block font-bold">Aérien Express ({siteSettings.airFreightDurationDays || '5 - 10 jours'})</span>
+                            <span className="block font-bold">Aérien ({siteSettings.airFreightDurationDays || '5 - 10 j'})</span>
                             <span className={`text-[9px] block ${item.shippingMethod === 'air' ? 'text-orange-300' : 'text-gray-400'}`}>
-                              +{(airUnitCost * item.quantity).toLocaleString('fr-FR')} F ({(siteSettings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} F/kg)
+                              +{(airUnitCost * item.quantity).toLocaleString('fr-FR')} F
                             </span>
                           </button>
                         </div>
@@ -1277,7 +1308,7 @@ export default function Cart() {
               </p>
               <p>
                 <strong>Article 3 : Origine & Délais</strong><br />
-                L'origine des équipements (Chine, Europe, Amérique) est rigoureusement spécifiée. Les délais moyens de transit DAP sont de {siteSettings.airFreightDurationDays || '5 - 10 jours'} en aérien express ({(siteSettings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} F/kg) et {siteSettings.seaFreightDurationDays || '30 - 45 jours'} en fret maritime ({(siteSettings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg).
+                L'origine des équipements (Chine, Europe, Amérique) est rigoureusement spécifiée. Les délais moyens de transit DAP sont de {siteSettings.airFreightDurationDays || '5 - 10 jours'} en aérien express et {siteSettings.seaFreightDurationDays || '30 - 45 jours'} en fret maritime.
               </p>
               <p>
                 <strong>Article 4 : Tarification & TVA</strong><br />

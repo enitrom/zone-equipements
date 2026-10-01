@@ -67,6 +67,50 @@ export default function Home() {
   const [newBrandForm, setNewBrandForm] = useState({ name: '', sub: '', iconName: 'ShieldCheck' });
   const [showNewBrandForm, setShowNewBrandForm] = useState(false);
 
+  // Real-Time User Testimonial Submission State
+  const [showTestimonialForm, setShowTestimonialForm] = useState(false);
+  const [testimonialForm, setTestimonialForm] = useState({
+    name: '',
+    role: '',
+    company: '',
+    sector: 'Industrie & Maintenance',
+    rating: 5,
+    text: ''
+  });
+  const [testimonialSuccessMsg, setTestimonialSuccessMsg] = useState<string | null>(null);
+
+  const handleUserSubmitTestimonial = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testimonialForm.name.trim() || !testimonialForm.text.trim()) return;
+    const roleWithCompany = [testimonialForm.role.trim(), testimonialForm.company.trim()]
+      .filter(Boolean)
+      .join(' — ') || 'Client Professionnel';
+    siteSettingsService.addTestimonial({
+      name: testimonialForm.name.trim(),
+      role: roleWithCompany,
+      company: testimonialForm.company.trim() || undefined,
+      sector: testimonialForm.sector,
+      rating: testimonialForm.rating,
+      text: testimonialForm.text.trim()
+    });
+    const updated = siteSettingsService.getTestimonials();
+    setTestimonials(updated);
+    if (updated.length > 0) {
+      setTestimonialIndex(updated.length - 1);
+    }
+    setTestimonialForm({
+      name: '',
+      role: '',
+      company: '',
+      sector: 'Industrie & Maintenance',
+      rating: 5,
+      text: ''
+    });
+    setShowTestimonialForm(false);
+    setTestimonialSuccessMsg('Merci ! Votre témoignage a été publié en temps réel.');
+    setTimeout(() => setTestimonialSuccessMsg(null), 4500);
+  };
+
   // Confirmation Modal
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -593,17 +637,137 @@ export default function Home() {
           </div>
         )}
 
-        <div className="flex justify-center gap-1.5 mt-6">
-          {Array.from({ length: testimonials.length }).map((_, idx) => (
-            <button
-              key={idx}
-              onClick={() => setTestimonialIndex(idx)}
-              className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                testimonialIndex === idx ? 'w-5 bg-[#FF6600]' : 'bg-gray-200 hover:bg-gray-300'
-              }`}
-              aria-label={`Aller au témoignage ${idx + 1}`}
-            />
-          ))}
+        <div className="flex flex-col items-center gap-4 mt-6">
+          <div className="flex justify-center gap-1.5">
+            {Array.from({ length: testimonials.length }).map((_, idx) => (
+              <button
+                key={idx}
+                onClick={() => setTestimonialIndex(idx)}
+                className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                  testimonialIndex === idx ? 'w-5 bg-[#FF6600]' : 'bg-gray-200 hover:bg-gray-300'
+                }`}
+                aria-label={`Aller au témoignage ${idx + 1}`}
+              />
+            ))}
+          </div>
+
+          {testimonialSuccessMsg && (
+            <div className="px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2 shadow-sm">
+              <span>✓</span>
+              <span>{testimonialSuccessMsg}</span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setShowTestimonialForm(prev => !prev)}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#003366] hover:bg-[#FF6600] text-white text-xs sm:text-sm font-bold shadow-md transition-all cursor-pointer"
+          >
+            <span>✍️ {showTestimonialForm ? 'Fermer le formulaire' : 'Laisser votre témoignage en temps réel'}</span>
+          </button>
+
+          {showTestimonialForm && (
+            <form
+              onSubmit={handleUserSubmitTestimonial}
+              className="w-full max-w-2xl bg-slate-50 border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-lg text-left space-y-4 mt-2"
+            >
+              <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                <div>
+                  <h3 className="text-sm sm:text-base font-extrabold text-[#003366]">
+                    Partagez votre expérience avec Zone Équipements
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Votre avis sera affiché immédiatement en temps réel dans les témoignages clients.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1">
+                  {[1, 2, 3, 4, 5].map(star => (
+                    <button
+                      key={star}
+                      type="button"
+                      onClick={() => setTestimonialForm(prev => ({ ...prev, rating: star }))}
+                      className={`text-lg transition-transform hover:scale-110 cursor-pointer ${
+                        star <= testimonialForm.rating ? 'opacity-100' : 'opacity-30 grayscale'
+                      }`}
+                      title={`${star} étoile(s)`}
+                    >
+                      ⭐
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Votre Nom & Prénom *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Moussa Ndiaye"
+                    value={testimonialForm.name}
+                    onChange={e => setTestimonialForm(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-[#FF6600]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Fonction / Poste
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Responsable Maintenance"
+                    value={testimonialForm.role}
+                    onChange={e => setTestimonialForm(prev => ({ ...prev, role: e.target.value }))}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-[#FF6600]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Entreprise / Structure
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: SENELEC / Chantier BTP"
+                    value={testimonialForm.company}
+                    onChange={e => setTestimonialForm(prev => ({ ...prev, company: e.target.value }))}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-[#FF6600]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Votre Témoignage *
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  placeholder="Décrivez la qualité du matériel reçu, le respect des délais ou l'accompagnement technique..."
+                  value={testimonialForm.text}
+                  onChange={e => setTestimonialForm(prev => ({ ...prev, text: e.target.value }))}
+                  className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-[#FF6600]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowTestimonialForm(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-[#FF6600] hover:bg-orange-600 text-white text-xs font-bold shadow-md cursor-pointer"
+                >
+                  Publier mon témoignage
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </div>
     </section>

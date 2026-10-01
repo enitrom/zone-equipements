@@ -158,7 +158,7 @@ export default function Services() {
       compRows: [
         ["Badge sur le site", "🟢 Disponible immédiatement (En Stock)", "🟠 Article à sourcer (✈️ Aérien)", "🟠 Article à sourcer (🚢 Maritime)"],
         ["Délai de livraison", "24h à 48h (Dakar & régions)", settings.airFreightDurationDays || "5 à 10 jours ouvrés", settings.seaFreightDurationDays || "30 à 45 jours"],
-        ["Frais de fret international", "0 FCFA (Déjà dédouané à Dakar)", `${(settings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} FCFA / kg`, `${(settings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} FCFA / kg ou au m³`],
+        ["Frais de fret international", "0 FCFA (Déjà dédouané à Dakar)", "Calculé sur chaque fiche produit & au panier", "Calculé sur chaque fiche produit & au panier"],
         ["Idéal pour", "Urgences chantier, EPI, outillage standard", "Pièces détachées critiques, automates, pompes < 20 kg", "Groupes électrogènes, machines lourdes, commandes volumineuses"]
       ],
       stepsTitle: "Comment Fonctionne Votre Approvisionnement en 5 Étapes ?",
@@ -285,7 +285,7 @@ export default function Services() {
       compRows: [
         ["Site Badge", "🟢 Available Immediately (In Stock)", "🟠 Sourcing Item (✈️ Air)", "🟠 Sourcing Item (🚢 Sea)"],
         ["Delivery Lead Time", "24h to 48h (Dakar & Senegal)", settings.airFreightDurationDays || "5 to 10 business days", settings.seaFreightDurationDays || "30 to 45 days"],
-        ["International Freight", "0 FCFA (Already cleared in Dakar)", `${(settings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} FCFA / kg`, `${(settings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} FCFA / kg or CBM`],
+        ["International Freight", "0 FCFA (Already cleared in Dakar)", "Calculated automatically per product", "Calculated automatically per product"],
         ["Best Suited For", "Urgent site needs, PPE, standard tools", "Critical spare parts, PLCs, pumps < 20 kg", "Generators, heavy machinery, bulk orders"]
       ],
       stepsTitle: "How Your 5-Step Procurement Works",
@@ -412,7 +412,7 @@ export default function Services() {
       compRows: [
         ["Etiqueta", "🟢 Disponible inmediatamente", "🟠 Artículo bajo pedido (✈️ Aéreo)", "🟠 Artículo bajo pedido (🚢 Marítimo)"],
         ["Plazo de entrega", "24h a 48h (Dakar y Senegal)", settings.airFreightDurationDays || "5 a 10 días hábiles", settings.seaFreightDurationDays || "30 a 45 días"],
-        ["Flete internacional", "0 FCFA (Stock en Dakar)", `${(settings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} FCFA / kg`, `${(settings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} FCFA / kg o m³`],
+        ["Flete internacional", "0 FCFA (Stock en Dakar)", "Calculado automáticamente por producto", "Calculado automáticamente por producto"],
         ["Ideal para", "Urgencias de obra, EPI, herramientas", "Repuestos críticos, PLC, bombas < 20 kg", "Generadores, maquinaria pesada, contenedores"]
       ],
       stepsTitle: "¿Cómo Funciona su Suministro en 5 Pasos?",
@@ -539,7 +539,7 @@ export default function Services() {
       compRows: [
         ["网站标识", "🟢 立即可发（达喀尔现货）", "🟠 按需直采（✈️ 空运）", "🟠 按需直采（🚢 海运）"],
         ["交付周期", "24至48小时（达喀尔及周边）", settings.airFreightDurationDays || "5至10个工作日", settings.seaFreightDurationDays || "30至45天"],
-        ["国际运费", "0 FCFA（已在达喀尔完税入库）", `${(settings.airFreightPerKgXOF || 7500).toLocaleString('fr-FR')} FCFA / kg`, `${(settings.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} FCFA / kg 或按立方米`],
+        ["国际运费", "0 FCFA（已在达喀尔完税入库）", "按商品自动核算", "按商品自动核算"],
         ["适用场景", "工地急需、安全劳保、常规工具", "紧急维修备件、PLC、20kg以内水泵仪表", "发电机组、重型机械、大宗批量集采"]
       ],
       stepsTitle: "B2B工业集采 5 步标准流程",

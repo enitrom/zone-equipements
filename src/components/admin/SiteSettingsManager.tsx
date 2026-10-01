@@ -27,6 +27,13 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
   const [showPaydunyaSecrets, setShowPaydunyaSecrets] = useState(false);
   const [copiedIpn, setCopiedIpn] = useState(false);
 
+  // Free Gmail SMTP configuration state for OTP confirmation codes
+  const [smtpUser, setSmtpUser] = useState('enitrom@gmail.com');
+  const [smtpPass, setSmtpPass] = useState('');
+  const [smtpConfigured, setSmtpConfigured] = useState(false);
+  const [isSavingSmtp, setIsSavingSmtp] = useState(false);
+  const [isTestingSmtp, setIsTestingSmtp] = useState(false);
+
   const ipnEndpointUrl = typeof window !== 'undefined'
     ? `${window.location.origin}/api/paydunya/ipn`
     : 'https://zoneequipements.sn/api/paydunya/ipn';
@@ -45,6 +52,15 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
     };
     const unsub = siteSettingsService.subscribe(handleUpdate);
     window.addEventListener('ze_settings_updated', handleUpdate);
+
+    fetch('/api/auth/smtp-config')
+      .then(r => r.json())
+      .then(data => {
+        if (data?.user) setSmtpUser(data.user);
+        setSmtpConfigured(Boolean(data?.configured));
+      })
+      .catch(() => {});
+
     return () => {
       unsub();
       window.removeEventListener('ze_settings_updated', handleUpdate);
@@ -64,32 +80,81 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
     onNotify('Paramètres globaux, TVA, barèmes de fret et devises sauvegardés avec succès.');
   };
 
-  const handleAddAdmin = () => {
+  const handleAddAdmin = async () => {
     const email = newAdminEmail.trim().toLowerCase();
     if (!email || !email.includes('@')) {
       onNotify('Veuillez saisir une adresse email valide.');
       return;
     }
-    if (settings.adminEmails.includes(email)) {
+    if (settings.adminEmails.map(e => e.toLowerCase().trim()).includes(email)) {
       onNotify('Cet email est déjà administrateur.');
       return;
     }
-    updateAndPersist({
-      adminEmails: [...settings.adminEmails, email]
-    });
+    const updated = await siteSettingsService.addAdminEmailAndPromote(email);
+    setSettings(updated);
     setNewAdminEmail('');
-    onNotify(`Administrateur ${email} ajouté et sauvegardé.`);
+    onNotify(`Administrateur ${email} ajouté et promu avec succès.`);
   };
 
-  const handleRemoveAdmin = (email: string) => {
+  const handleRemoveAdmin = async (email: string) => {
+    const cleanTarget = email.trim().toLowerCase();
+    if (cleanTarget === 'enitrom@gmail.com') {
+      onNotify('Le compte propriétaire principal (enitrom@gmail.com) ne peut pas être supprimé.');
+      return;
+    }
     if (settings.adminEmails.length <= 1) {
       onNotify('Impossible de supprimer le dernier administrateur.');
       return;
     }
-    updateAndPersist({
-      adminEmails: settings.adminEmails.filter(e => e !== email)
-    });
-    onNotify(`Administrateur ${email} retiré.`);
+    const updated = await siteSettingsService.removeAdminEmailAndDemote(cleanTarget);
+    setSettings(updated);
+    onNotify(`Administrateur ${cleanTarget} supprimé et droits révoqués immédiatement.`);
+  };
+
+  const handleSaveSmtpConfig = async () => {
+    try {
+      setIsSavingSmtp(true);
+      const res = await fetch('/api/auth/smtp-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user: smtpUser.trim(),
+          pass: smtpPass.replace(/\s+/g, '').trim()
+        })
+      });
+      const data = await res.json();
+      setSmtpConfigured(Boolean(data?.configured));
+      setSmtpPass('');
+      onNotify(data?.configured
+        ? 'Configuration Gmail gratuite activée ! Les codes de confirmation seront envoyés par email.'
+        : 'Paramètres SMTP mis à jour (Mode code direct actif si aucun mot de passe d\'application n\'est fourni).'
+      );
+    } catch {
+      onNotify('Erreur lors de la sauvegarde SMTP.');
+    } finally {
+      setIsSavingSmtp(false);
+    }
+  };
+
+  const handleTestSmtpEmail = async () => {
+    try {
+      setIsTestingSmtp(true);
+      const res = await fetch('/api/auth/send-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: smtpUser.trim() || 'enitrom@gmail.com', purpose: 'test_admin' })
+      });
+      const data = await res.json();
+      if (data?.success && !data?.simulated) {
+        onNotify(`Email de test envoyé avec succès à ${smtpUser} !`);
+      } else if (data?.fallbackCode) {
+        onNotify(`Mode secours actif (Code généré : ${data.fallbackCode}). Ajoutez un mot de passe d'application Gmail gratuit pour l'envoi par mail.`);
+      }
+    } catch {
+      onNotify('Erreur lors du test d\'envoi.');
+    } finally {
+      setIsTestingSmtp(false);
+    }
   };
 
   const resetPromoForm = () => {
@@ -222,9 +287,33 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 1. Fiscalité & Marges par défaut */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
-          <div className="flex items-center gap-2.5 pb-3 border-b border-slate-800">
-            <Percent className="w-5 h-5 text-[#FF6600]" />
-            <h3 className="font-bold text-white text-base">Fiscalité (TVA) & Marge Commerciale</h3>
+          <div className="flex items-center justify-between gap-2 pb-3 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <Percent className="w-5 h-5 text-[#FF6600]" />
+              <h3 className="font-bold text-white text-base">Fiscalité (TVA) & Marge Commerciale</h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const currentlyActive = settings.vatEnabled !== false && (settings.vatRate ?? 18) > 0;
+                if (currentlyActive) {
+                  updateAndPersist({ vatEnabled: false, vatRate: 0, defaultVatRate: 0 });
+                  onNotify('TVA globale désactivée (0%). Les produits importés auront automatiquement la TVA désactivée.');
+                } else {
+                  updateAndPersist({ vatEnabled: true, vatRate: 18, defaultVatRate: 0.18 });
+                  onNotify('TVA globale activée (18%).');
+                }
+              }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                settings.vatEnabled !== false && (settings.vatRate ?? 18) > 0
+                  ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-rose-600/20 text-rose-300 border border-rose-500/40'
+              }`}
+            >
+              {settings.vatEnabled !== false && (settings.vatRate ?? 18) > 0
+                ? `✓ TVA Active (${settings.vatRate}%)`
+                : '✕ TVA Désactivée (0%)'}
+            </button>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -235,11 +324,23 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
               <input
                 type="number"
                 step="0.1"
+                min="0"
                 value={settings.vatRate}
-                onChange={e => updateAndPersist({ vatRate: Number(e.target.value) })}
+                onChange={e => {
+                  const val = Math.max(0, Number(e.target.value));
+                  updateAndPersist({
+                    vatRate: val,
+                    vatEnabled: val > 0,
+                    defaultVatRate: val / 100
+                  });
+                }}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:border-[#FF6600] outline-none font-mono"
               />
-              <span className="text-[11px] text-slate-500 mt-1 block">Standard UEMOA / Sénégal : 18%</span>
+              <span className="text-[11px] text-slate-500 mt-1 block">
+                {settings.vatEnabled !== false && settings.vatRate > 0
+                  ? 'Appliquée par défaut lors des imports'
+                  : 'TVA désactivée automatiquement sur les imports'}
+              </span>
             </div>
 
             <div>
@@ -619,25 +720,106 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
             </div>
 
             <div className="space-y-2">
-              {settings.adminEmails.map(email => (
-                <div
-                  key={email}
-                  className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    <span className="text-xs font-mono text-slate-200">{email}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveAdmin(email)}
-                    className="text-slate-500 hover:text-red-400 p-1 cursor-pointer"
-                    title="Retirer cet administrateur"
+              {settings.adminEmails.map(email => {
+                const isPrimaryOwner = email.toLowerCase().trim() === 'enitrom@gmail.com';
+                return (
+                  <div
+                    key={email}
+                    className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${isPrimaryOwner ? 'bg-orange-400' : 'bg-emerald-400'}`}></span>
+                      <span className="text-xs font-mono text-slate-200">{email}</span>
+                      {isPrimaryOwner && (
+                        <span className="px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[10px] font-bold">
+                          Propriétaire Principal
+                        </span>
+                      )}
+                    </div>
+                    {!isPrimaryOwner && (
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveAdmin(email)}
+                        className="text-rose-400 hover:text-white bg-rose-500/10 hover:bg-rose-600 px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Supprimer cet administrateur et révoquer ses accès immédiatement"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Supprimer</span>
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Configuration des Codes de Confirmation par Email (100% Gratuit) */}
+            <div className="mt-4 pt-4 border-t border-slate-800 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Mail className="w-4 h-4 text-orange-400" />
+                  <h4 className="text-xs font-black uppercase tracking-wider text-white">
+                    Codes de Confirmation Email (100% Gratuit — 0 FCFA)
+                  </h4>
                 </div>
-              ))}
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  smtpConfigured
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                }`}>
+                  {smtpConfigured ? '✓ Envoi Gmail Actif' : '⚡ Mode Code Direct Actif'}
+                </span>
+              </div>
+
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-[11px] text-slate-300 leading-relaxed space-y-1.5">
+                <p className="text-emerald-300 font-bold">
+                  ❓ Faut-il un service payant pour envoyer les codes par email ? NON (0 FCFA).
+                </p>
+                <p>
+                  Vous n'avez besoin d'aucun abonnement payant. Il suffit d'utiliser votre adresse Gmail habituelle avec un <strong>Mot de passe d'application Google gratuit</strong> (16 lettres générées dans <em>Compte Google &gt; Sécurité &gt; Validation en 2 étapes &gt; Mots de passe des applications</em>). Tant qu'il n'est pas renseigné, le code s'affiche directement à l'écran pour ne jamais bloquer vos clients.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Adresse Gmail d'envoi</label>
+                  <input
+                    type="email"
+                    value={smtpUser}
+                    onChange={e => setSmtpUser(e.target.value)}
+                    placeholder="enitrom@gmail.com"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Mot de passe d'application Google (16 car.)</label>
+                  <input
+                    type="password"
+                    value={smtpPass}
+                    onChange={e => setSmtpPass(e.target.value)}
+                    placeholder={smtpConfigured ? '•••••••••••••••• (Déjà configuré)' : 'xxxx xxxx xxxx xxxx'}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isSavingSmtp}
+                  onClick={handleSaveSmtpConfig}
+                  className="px-3 py-1.5 bg-[#FF6600] hover:bg-orange-600 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                >
+                  {isSavingSmtp ? 'Enregistrement...' : 'Activer l\'envoi Gmail Gratuit'}
+                </button>
+                <button
+                  type="button"
+                  disabled={isTestingSmtp}
+                  onClick={handleTestSmtpEmail}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-bold cursor-pointer transition-colors"
+                >
+                  {isTestingSmtp ? 'Test en cours...' : 'Tester la réception d\'un code'}
+                </button>
+              </div>
             </div>
           </div>
 
