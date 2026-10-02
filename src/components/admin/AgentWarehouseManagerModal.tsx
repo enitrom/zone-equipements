@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   X, Plus, Edit3, Trash2, Save, Warehouse, Star, CheckCircle2,
-  MapPin, Phone, User, Hash, FileText, Copy, Check, Building2
+  MapPin, Phone, User, Hash, FileText, Copy, Check, Building2, Plane, Ship, Globe
 } from 'lucide-react';
 import {
   catalogService,
@@ -11,6 +11,13 @@ import {
   formatWarehouseConsigneeLine,
   formatWarehouseFullAddress
 } from '../../services/catalogService';
+import {
+  WORLD_COUNTRIES,
+  DEFAULT_SUPPORTED_DELIVERY_COUNTRIES,
+  resolveCanonicalCountryName,
+  getSupportedDeliveryCountriesForWarehouse
+} from '../../utils/countries';
+import { siteSettingsService } from '../../services/siteSettingsService';
 
 interface AgentWarehouseManagerModalProps {
   isOpen: boolean;
@@ -39,9 +46,26 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
+  const [country, setCountry] = useState('Chine');
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
   const [isDefault, setIsDefault] = useState(false);
+
+  // Per-warehouse supported delivery countries
+  const [supportedDeliveryCountries, setSupportedDeliveryCountries] = useState<string[]>(() => {
+    const siteList = siteSettingsService.getSettings().supportedDeliveryCountries;
+    return Array.isArray(siteList) && siteList.length > 0 ? siteList : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES;
+  });
+  const [newDeliveryCountry, setNewDeliveryCountry] = useState('Sénégal');
+
+  // Per-warehouse freight services & tariffs
+  const [offersAirFreight, setOffersAirFreight] = useState(true);
+  const [offersSeaFreight, setOffersSeaFreight] = useState(true);
+  const [airFreightPerKgXOF, setAirFreightPerKgXOF] = useState<number>(7000);
+  const [airFreightDurationDays, setAirFreightDurationDays] = useState('7 à 12 jours');
+  const [seaFreightPerKgXOF, setSeaFreightPerKgXOF] = useState<number>(1800);
+  const [seaFreightPerCbmXOF, setSeaFreightPerCbmXOF] = useState<number>(240000);
+  const [seaFreightDurationDays, setSeaFreightDurationDays] = useState('35 à 50 jours');
 
   useEffect(() => {
     if (isOpen || inline) {
@@ -72,9 +96,20 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
     setFirstName('');
     setLastName('');
     setPhone('');
+    setCountry('Chine');
     setAddress('');
     setNotes('');
-    setIsDefault(false);
+    setIsDefault(warehouses.length === 0);
+    const siteList = siteSettingsService.getSettings().supportedDeliveryCountries;
+    setSupportedDeliveryCountries(Array.isArray(siteList) && siteList.length > 0 ? siteList : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES);
+    setNewDeliveryCountry('Sénégal');
+    setOffersAirFreight(true);
+    setOffersSeaFreight(true);
+    setAirFreightPerKgXOF(7000);
+    setAirFreightDurationDays('7 à 12 jours');
+    setSeaFreightPerKgXOF(1800);
+    setSeaFreightPerCbmXOF(240000);
+    setSeaFreightDurationDays('35 à 50 jours');
     setEditingId(null);
     setIsAdding(false);
   };
@@ -92,9 +127,21 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
     setFirstName(wh.firstName || '');
     setLastName(wh.lastName || '');
     setPhone(wh.phone || '');
-    setAddress(formatWarehouseFullAddress(wh));
+    setCountry(resolveCanonicalCountryName(wh.country) || wh.country || '');
+    setAddress(wh.address || formatWarehouseFullAddress(wh));
     setNotes(wh.notes || '');
     setIsDefault(Boolean(wh.isDefault));
+    setSupportedDeliveryCountries(
+      getSupportedDeliveryCountriesForWarehouse(wh, siteSettingsService.getSettings().supportedDeliveryCountries)
+    );
+    setNewDeliveryCountry('Sénégal');
+    setOffersAirFreight(wh.offersAirFreight !== false);
+    setOffersSeaFreight(wh.offersSeaFreight !== false);
+    setAirFreightPerKgXOF(wh.airFreightPerKgXOF || 7000);
+    setAirFreightDurationDays(wh.airFreightDurationDays || '7 à 12 jours');
+    setSeaFreightPerKgXOF(wh.seaFreightPerKgXOF || 1800);
+    setSeaFreightPerCbmXOF(wh.seaFreightPerCbmXOF || 240000);
+    setSeaFreightDurationDays(wh.seaFreightDurationDays || '35 à 50 jours');
     setEditingId(wh.id);
     setIsAdding(false);
   };
@@ -102,6 +149,16 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !address.trim()) return;
+
+    const liveGeo = catalogService.inferWarehouseGeoProfile({
+      name: name.trim(),
+      address: address.trim(),
+      phone: phone.trim(),
+      country: country.trim()
+    });
+    const effectiveCountry = liveGeo.aiConfident
+      ? liveGeo.country
+      : (resolveCanonicalCountryName(country) || country.trim() || liveGeo.country || undefined);
 
     const payload: Omit<AgentWarehouse, 'id'> = {
       name: name.trim(),
@@ -113,11 +170,21 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
       phone: phone.trim(),
       email: undefined,
       address: address.trim(),
-      city: undefined,
+      city: liveGeo.city || undefined,
       postalCode: undefined,
-      country: undefined,
+      country: effectiveCountry,
+      supportedDeliveryCountries: supportedDeliveryCountries.length > 0
+        ? supportedDeliveryCountries
+        : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES,
       notes: notes.trim() || undefined,
-      isDefault
+      isDefault,
+      offersAirFreight,
+      offersSeaFreight: !offersAirFreight && !offersSeaFreight ? true : offersSeaFreight,
+      airFreightPerKgXOF: Number(airFreightPerKgXOF) || 7000,
+      airFreightDurationDays: airFreightDurationDays.trim() || '7 à 12 jours',
+      seaFreightPerKgXOF: Number(seaFreightPerKgXOF) || 1800,
+      seaFreightPerCbmXOF: Number(seaFreightPerCbmXOF) || 240000,
+      seaFreightDurationDays: seaFreightDurationDays.trim() || '35 à 50 jours'
     };
 
     if (isAdding) {
@@ -197,18 +264,10 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
             <button
               type="button"
               onClick={() => handleStartAdd('agent_code')}
-              className="inline-flex items-center gap-2 bg-[#003366] hover:bg-[#002244] text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer"
-            >
-              <Hash className="w-4 h-4 text-[#FF6600]" />
-              + Avec Code Agent
-            </button>
-            <button
-              type="button"
-              onClick={() => handleStartAdd('standard_address')}
               className="inline-flex items-center gap-2 bg-[#FF6600] hover:bg-[#e65c00] text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-sm transition-all cursor-pointer"
             >
-              <User className="w-4 h-4" />
-              + Standard (Nom, Prénom, Adresse)
+              <Plus className="w-4 h-4" />
+              + Nouvel Entrepôt
             </button>
           </div>
         </div>
@@ -216,7 +275,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
 
       {/* Add / Edit Form */}
       {(isAdding || editingId) && (
-        <form onSubmit={handleSave} className="bg-white p-6 rounded-2xl border-2 border-[#003366]/20 shadow-sm space-y-5">
+        <form onSubmit={handleSave} className="bg-white text-black p-6 rounded-2xl border-2 border-[#003366]/20 shadow-sm space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
             <h3 className="text-sm font-black text-[#003366] uppercase tracking-wider flex items-center gap-2">
               <Warehouse className="w-4 h-4 text-[#FF6600]" />
@@ -297,7 +356,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                 value={name}
                 onChange={e => setName(e.target.value)}
                 placeholder={identificationMode === 'agent_code' ? 'Ex: Cargo Guangzhou' : 'Ex: Entrepôt Paris'}
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
+                className="w-full px-3 py-2 text-sm text-black placeholder:text-slate-400 border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
               />
             </div>
 
@@ -312,7 +371,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                   value={agentCode}
                   onChange={e => setAgentCode(e.target.value)}
                   placeholder="Ex: DKR628"
-                  className="w-full px-3 py-2 text-sm font-mono font-bold border-2 border-[#003366]/40 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
+                  className="w-full px-3 py-2 text-sm text-black placeholder:text-slate-400 font-mono font-bold border-2 border-[#003366]/40 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
                 />
               </div>
             )}
@@ -327,7 +386,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                 value={firstName}
                 onChange={e => setFirstName(e.target.value)}
                 placeholder="Ex: Moussa"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
+                className="w-full px-3 py-2 text-sm text-black placeholder:text-slate-400 border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
               />
             </div>
 
@@ -341,7 +400,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                 value={lastName}
                 onChange={e => setLastName(e.target.value)}
                 placeholder="Ex: Diop"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
+                className="w-full px-3 py-2 text-sm text-black placeholder:text-slate-400 border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
               />
             </div>
 
@@ -355,21 +414,55 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                 value={phone}
                 onChange={e => setPhone(e.target.value)}
                 placeholder="Ex: +86 138 0000 0000"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
+                className="w-full px-3 py-2 text-sm text-black placeholder:text-slate-400 border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
               />
             </div>
 
-            <div className={identificationMode === 'agent_code' ? 'sm:col-span-2 lg:col-span-3' : 'sm:col-span-2 lg:col-span-4'}>
+            <div className="sm:col-span-2 lg:col-span-1">
+              <label className="block text-xs font-bold text-[#003366] mb-1 flex items-center gap-1">
+                <Globe className="w-3.5 h-3.5 text-[#FF6600]" />
+                Pays (Secours si l'IA est confuse)
+              </label>
+              <select
+                value={resolveCanonicalCountryName(country) || country || ''}
+                onChange={e => setCountry(e.target.value)}
+                className="w-full px-3 py-2 text-sm font-bold border-2 border-[#003366]/30 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white text-black"
+              >
+                <option value="">🤖 Auto (Détection IA prioritaire)</option>
+                {WORLD_COUNTRIES.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              {(() => {
+                const liveWhGeo = catalogService.inferWarehouseGeoProfile({
+                  name,
+                  address,
+                  phone,
+                  country
+                });
+                return liveWhGeo.aiConfident ? (
+                  <span className="text-[10px] text-emerald-700 font-semibold block mt-0.5">
+                    🤖 IA : <strong>{liveWhGeo.country} ({liveWhGeo.city})</strong> trouvé via l'adresse/tél.
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-amber-700 font-semibold block mt-0.5">
+                    ⚠️ IA sans indice clair : le pays sélectionné ({country || 'à choisir'}) sert de secours.
+                  </span>
+                );
+              })()}
+            </div>
+
+            <div className={identificationMode === 'agent_code' ? 'sm:col-span-2 lg:col-span-2' : 'sm:col-span-2 lg:col-span-3'}>
               <label className="block text-xs font-bold text-slate-700 mb-1">
-                Adresse complète (Rue, Code postal, Ville, Pays) *
+                Adresse complète (Rue, Code postal, Ville) *
               </label>
               <input
                 type="text"
                 required
                 value={address}
                 onChange={e => setAddress(e.target.value)}
-                placeholder="Ex: Room 102, Baiyun Logistics Park, Guangzhou, Chine (ou 14 Rue de l'Industrie, 75011 Paris, France)"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
+                placeholder="Ex: Room 102, Baiyun Logistics Park, Guangzhou (ou 14 Rue de l'Industrie, 75011 Paris)"
+                className="w-full px-3 py-2 text-sm text-black placeholder:text-slate-400 border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
               />
             </div>
 
@@ -382,8 +475,193 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                 value={notes}
                 onChange={e => setNotes(e.target.value)}
                 placeholder="Ex: Mentionner l'étiquette sur le carton extérieur avant expédition"
-                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
+                className="w-full px-3 py-2 text-sm text-black placeholder:text-slate-400 border border-slate-300 rounded-xl focus:ring-2 focus:ring-[#003366] focus:outline-none bg-white"
               />
+            </div>
+          </div>
+
+          {/* Supported Delivery Countries for this Warehouse */}
+          <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-emerald-950 flex items-center gap-1.5">
+                  <Globe className="w-4 h-4 text-emerald-600" />
+                  Pays Livrés par cet Entrepôt ({supportedDeliveryCountries.length} pays pris en charge)
+                </h4>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  Définissez les pays de destination finale dans lesquels cet entrepôt assure la livraison aux clients. Le pays par défaut du client est vérifié automatiquement lors de l'achat.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const siteList = siteSettingsService.getSettings().supportedDeliveryCountries;
+                  setSupportedDeliveryCountries(Array.isArray(siteList) && siteList.length > 0 ? siteList : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES);
+                }}
+                className="text-[11px] font-bold text-emerald-800 hover:text-emerald-950 bg-white border border-emerald-300 px-2.5 py-1 rounded-lg cursor-pointer"
+              >
+                ↺ Réinitialiser aux pays par défaut
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              {supportedDeliveryCountries.map(destCountry => (
+                <span
+                  key={destCountry}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-900 text-xs font-bold shadow-2xs"
+                >
+                  <span>🌍 {destCountry}</span>
+                  <button
+                    type="button"
+                    onClick={() => setSupportedDeliveryCountries(prev => prev.filter(c => c !== destCountry))}
+                    className="text-slate-400 hover:text-red-600 cursor-pointer"
+                    title={`Retirer ${destCountry}`}
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              ))}
+              {supportedDeliveryCountries.length === 0 && (
+                <span className="text-xs text-amber-700 italic">
+                  Aucun pays sélectionné — veuillez ajouter au moins un pays de livraison pris en charge.
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <select
+                value={newDeliveryCountry}
+                onChange={e => setNewDeliveryCountry(e.target.value)}
+                className="px-3 py-1.5 text-xs font-semibold border border-emerald-300 rounded-xl bg-white text-black focus:outline-none focus:ring-2 focus:ring-emerald-600"
+              >
+                {WORLD_COUNTRIES.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  if (newDeliveryCountry && !supportedDeliveryCountries.includes(newDeliveryCountry)) {
+                    setSupportedDeliveryCountries(prev => [...prev, newDeliveryCountry]);
+                  }
+                }}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" /> Ajouter ce pays à livrer
+              </button>
+            </div>
+          </div>
+
+          {/* Per-Warehouse Services & Tariffs */}
+          <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-black uppercase tracking-wider text-[#003366]">
+                  Services de Fret & Tarifs Propres à cet Entrepôt
+                </h4>
+                <p className="text-[11px] text-slate-500">
+                  Lors de l'ajout d'un produit rattaché à cet entrepôt, ces tarifs et modes de transport s'appliquent automatiquement sans re-paramétrage.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Air Freight Service Box */}
+              <div className={`rounded-xl border-2 p-3.5 transition-all ${
+                offersAirFreight ? 'border-orange-300 bg-orange-50/40' : 'border-slate-200 bg-white opacity-60'
+              }`}>
+                <label className="flex items-center justify-between cursor-pointer mb-2.5">
+                  <span className="inline-flex items-center gap-2 text-xs font-extrabold text-slate-900">
+                    <Plane className="w-4 h-4 text-[#FF6600]" />
+                    Propose le Fret Aérien Express
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={offersAirFreight}
+                    onChange={e => setOffersAirFreight(e.target.checked)}
+                    className="rounded text-[#FF6600] focus:ring-[#FF6600]"
+                  />
+                </label>
+                {offersAirFreight && (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Tarif Aérien (FCFA / kg)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="100"
+                        value={airFreightPerKgXOF}
+                        onChange={e => setAirFreightPerKgXOF(Number(e.target.value))}
+                        className="w-full px-2.5 py-1.5 text-xs text-black placeholder:text-slate-400 font-bold border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Délai Aérien estimé</label>
+                      <input
+                        type="text"
+                        value={airFreightDurationDays}
+                        onChange={e => setAirFreightDurationDays(e.target.value)}
+                        placeholder="7 à 12 jours"
+                        className="w-full px-2.5 py-1.5 text-xs text-black placeholder:text-slate-400 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Sea Freight Service Box */}
+              <div className={`rounded-xl border-2 p-3.5 transition-all ${
+                offersSeaFreight ? 'border-blue-300 bg-blue-50/40' : 'border-slate-200 bg-white opacity-60'
+              }`}>
+                <label className="flex items-center justify-between cursor-pointer mb-2.5">
+                  <span className="inline-flex items-center gap-2 text-xs font-extrabold text-slate-900">
+                    <Ship className="w-4 h-4 text-blue-600" />
+                    Propose le Fret Maritime Conteneur
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={offersSeaFreight}
+                    onChange={e => setOffersSeaFreight(e.target.checked)}
+                    className="rounded text-blue-600 focus:ring-blue-600"
+                  />
+                </label>
+                {offersSeaFreight && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Tarif / kg (FCFA)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="100"
+                        value={seaFreightPerKgXOF}
+                        onChange={e => setSeaFreightPerKgXOF(Number(e.target.value))}
+                        className="w-full px-2 py-1.5 text-xs text-black placeholder:text-slate-400 font-bold border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Tarif / m³ (FCFA)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="5000"
+                        value={seaFreightPerCbmXOF}
+                        onChange={e => setSeaFreightPerCbmXOF(Number(e.target.value))}
+                        className="w-full px-2 py-1.5 text-xs text-black placeholder:text-slate-400 font-bold border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Délai Maritime</label>
+                      <input
+                        type="text"
+                        value={seaFreightDurationDays}
+                        onChange={e => setSeaFreightDurationDays(e.target.value)}
+                        placeholder="35 à 50 jours"
+                        className="w-full px-2 py-1.5 text-xs text-black placeholder:text-slate-400 border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -427,11 +705,29 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
       )}
 
       {/* Warehouses List */}
+      {warehouses.length === 0 && !isAdding && !editingId && (
+        <div className="bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl p-8 text-center space-y-3">
+          <Warehouse className="w-10 h-10 text-slate-400 mx-auto" />
+          <div className="space-y-1">
+            <h3 className="text-sm font-extrabold text-slate-800">
+              Aucun entrepôt d'agent configuré (Zéro entrepôt fictif)
+            </h3>
+            <p className="text-xs text-slate-500 max-w-lg mx-auto">
+              Tous les entrepôts sont 100% réels et persistants. Cliquez sur « + Nouvel Entrepôt » ci-dessus pour créer votre premier entrepôt de transit avec son pays et ses tarifs propres.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {warehouses.map(wh => {
           const linkedSuppliers = suppliers.filter(s => s.agentWarehouseId === wh.id);
           const isStandard = wh.identificationMode === 'standard_address' || !wh.agentCode;
           const sampleLabel = formatSupplierParcelLabel(wh.agentCode, 'sea', 'CMD-101', wh);
+          const whSupportedCountries = getSupportedDeliveryCountriesForWarehouse(
+            wh,
+            siteSettingsService.getSettings().supportedDeliveryCountries
+          );
 
           return (
             <div
@@ -447,6 +743,11 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="font-extrabold text-slate-900 text-base">{wh.name}</h4>
+                      {wh.country && (
+                        <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-black px-2.5 py-0.5 rounded-full">
+                          <Globe className="w-3 h-3 text-emerald-600" /> {wh.country}
+                        </span>
+                      )}
                       {wh.isDefault && (
                         <span className="inline-flex items-center gap-1 bg-[#003366] text-white text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full">
                           <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> Par Défaut
@@ -483,7 +784,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                     >
                       <Edit3 className="w-4 h-4" />
                     </button>
-                    {warehouses.length > 1 && (
+                    {warehouses.length >= 1 && (
                       deleteConfirmId === wh.id ? (
                         <div className="flex items-center gap-1">
                           <button
@@ -536,6 +837,13 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                     <span className="font-bold text-slate-700">Téléphone : </span>
                     <span className="font-mono font-bold text-slate-900">{wh.phone || 'Non renseigné'}</span>
                   </div>
+                  <div className="flex items-start gap-2 pt-1 border-t border-slate-200/60">
+                    <Globe className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-slate-700">Pays livrés ({whSupportedCountries.length}) : </span>
+                      <span className="text-slate-800">{whSupportedCountries.join(', ')}</span>
+                    </div>
+                  </div>
                   {wh.notes && (
                     <div className="flex items-start gap-2 pt-1 border-t border-slate-200/60 text-slate-600">
                       <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
@@ -552,6 +860,45 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                   <span className="font-mono text-xs font-black text-slate-900 truncate">
                     {sampleLabel}
                   </span>
+                </div>
+
+                {/* Services & Tariffs Badges */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className={`rounded-xl px-3 py-2 border text-[11px] flex items-center justify-between ${
+                    wh.offersAirFreight !== false
+                      ? 'bg-orange-50/70 border-orange-200 text-orange-950'
+                      : 'bg-slate-50 border-slate-200 text-slate-400 line-through'
+                  }`}>
+                    <span className="font-bold inline-flex items-center gap-1.5">
+                      <Plane className="w-3.5 h-3.5 text-[#FF6600]" />
+                      Fret Aérien
+                    </span>
+                    {wh.offersAirFreight !== false ? (
+                      <span className="font-extrabold text-[#FF6600]">
+                        {(wh.airFreightPerKgXOF || 7000).toLocaleString('fr-FR')} F/kg • {wh.airFreightDurationDays || '7-12j'}
+                      </span>
+                    ) : (
+                      <span>Non proposé</span>
+                    )}
+                  </div>
+
+                  <div className={`rounded-xl px-3 py-2 border text-[11px] flex items-center justify-between ${
+                    wh.offersSeaFreight !== false
+                      ? 'bg-blue-50/70 border-blue-200 text-blue-950'
+                      : 'bg-slate-50 border-slate-200 text-slate-400 line-through'
+                  }`}>
+                    <span className="font-bold inline-flex items-center gap-1.5">
+                      <Ship className="w-3.5 h-3.5 text-blue-600" />
+                      Fret Maritime
+                    </span>
+                    {wh.offersSeaFreight !== false ? (
+                      <span className="font-extrabold text-blue-700">
+                        {(wh.seaFreightPerKgXOF || 1800).toLocaleString('fr-FR')} F/kg • {wh.seaFreightDurationDays || '35-50j'}
+                      </span>
+                    ) : (
+                      <span>Non proposé</span>
+                    )}
+                  </div>
                 </div>
               </div>
 

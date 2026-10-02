@@ -3,13 +3,20 @@ import { useCart } from '../CartContext';
 import { useAuth } from '../AuthContext';
 import { 
   Trash2, Plus, Minus, ShoppingBag, ArrowRight, ShieldCheck, CheckCircle2, 
-  FileText, Truck, AlertTriangle, Lock, Tag, X, Check, AlertCircle, LogIn 
+  FileText, Truck, AlertTriangle, Lock, Tag, X, Check, AlertCircle, LogIn, Globe 
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { catalogService, ExtendedProduct, isProductSourcing } from '../services/catalogService';
+import { catalogService, ExtendedProduct, isProductSourcing, getCleanProvenanceDisplay } from '../services/catalogService';
 import { siteSettingsService, PromoCode } from '../services/siteSettingsService';
 import { getProductImageUrl, handleImageError } from '../constants';
+import { downloadOrderPdf } from '../utils/printDocument';
 import { useLanguage } from '../LanguageContext';
+import {
+  WORLD_COUNTRIES,
+  DEFAULT_SUPPORTED_DELIVERY_COUNTRIES,
+  resolveCanonicalCountryName,
+  isDeliveryCountrySupported
+} from '../utils/countries';
 
 export default function Cart() {
   const { items, updateQuantity, updateItemFreight, removeItem, clearCart, equipmentTotal, freightTotal, total } = useCart();
@@ -58,6 +65,14 @@ export default function Cart() {
     }
   }, [user]);
 
+  const defaultClientCountry = useMemo(() => {
+    const accountCountry = (profile as any)?.country || savedLocalProfile?.country;
+    if (accountCountry && String(accountCountry).trim()) {
+      return resolveCanonicalCountryName(String(accountCountry).trim());
+    }
+    return catalogService.getEffectiveClientCountry(profile);
+  }, [profile, savedLocalProfile]);
+
   const [customerName, setCustomerName] = useState(
     profile?.displayName || user?.displayName || savedLocalProfile.displayName || ''
   );
@@ -73,10 +88,32 @@ export default function Cart() {
   const [customerCity, setCustomerCity] = useState(
     (profile as any)?.city || savedLocalProfile.city || 'Dakar'
   );
+  const [customerCountry, setCustomerCountry] = useState<string>(
+    () => catalogService.getEffectiveClientCountry(profile)
+  );
   const [paymentMethod, setPaymentMethod] = useState<'PayDunya' | 'Virement Proforma'>('PayDunya');
   const [orderType, setOrderType] = useState<'order' | 'quote'>('order');
   const [paymentChoice, setPaymentChoice] = useState<'full' | 'deposit'>('full');
   const [useSavedAddress, setUseSavedAddress] = useState<boolean>(true);
+  const [showSupportedCountries, setShowSupportedCountries] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (useSavedAddress) {
+      setCustomerCountry(defaultClientCountry);
+      if (profile || savedLocalProfile) {
+        setCustomerName((prev: string) => profile?.displayName || user?.displayName || savedLocalProfile.displayName || prev);
+        setCustomerPhone((prev: string) => (profile as any)?.phone || savedLocalProfile.phone || prev);
+        setCustomerCompany((prev: string) => (profile as any)?.company || savedLocalProfile.company || prev);
+        setCustomerAddress((prev: string) => (profile as any)?.address || savedLocalProfile.address || prev);
+        setCustomerCity((prev: string) => (profile as any)?.city || savedLocalProfile.city || prev || 'Dakar');
+      }
+    }
+  }, [profile, user, defaultClientCountry, useSavedAddress, savedLocalProfile]);
+
+  const effectiveDeliveryCountry = useMemo(() => {
+    const chosen = useSavedAddress ? defaultClientCountry : (customerCountry || defaultClientCountry);
+    return resolveCanonicalCountryName(chosen) || defaultClientCountry || 'Sénégal';
+  }, [useSavedAddress, customerCountry, defaultClientCountry]);
   const [createdOrderSnapshot, setCreatedOrderSnapshot] = useState<{
     orderNumber: string;
     totalTTC: number;
@@ -153,6 +190,16 @@ export default function Cart() {
   const unavailableItems = items.filter(it => !isItemAvailable(it));
   const hasUnavailableItems = unavailableItems.length > 0;
 
+  // Vérification de la prise en charge du pays de livraison par l'entrepôt de chaque produit
+  const undeliverableItemsForCountry = useMemo(() => {
+    return items.filter(it => {
+      const prod = allProducts.find(p => String(p.id) === String(it.productId));
+      const check = catalogService.isCountryDeliverableForProduct(effectiveDeliveryCountry, (prod || it) as any);
+      return !check.deliverable;
+    });
+  }, [items, allProducts, effectiveDeliveryCountry]);
+  const hasUndeliverableCountryItems = undeliverableItemsForCountry.length > 0;
+
   // Total weight
   const totalWeightKg = items.reduce((acc, it) => acc + ((it.weightKg || 1.0) * it.quantity), 0);
   const hasHeavyAirItems = items.some(it => it.shippingMethod === 'air' && (it.weightKg || 1.0) > 20);
@@ -175,32 +222,68 @@ export default function Cart() {
   const sourcingItemsCount = items.filter(it => isCartItemSourcing(it)).length;
   const localStockItemsCount = items.length - sourcingItemsCount;
 
-  // Helper for dynamic unit freight cost calculation using live siteSettings & custom product overrides
-  const getItemUnitFreight = (item: any, method?: 'neutral' | 'sea' | 'air') => {
+  // Regroupement de tous les produits à sourcer sous un seul entrepôt de transit adapté au pays de destination
+  const unifiedCartWarehouse = useMemo(() => {
+    const firstSourcingItem = items.find(it => isCartItemSourcing(it)) || items[0];
+    const prod = firstSourcingItem
+      ? allProducts.find(p => String(p.id) === String(firstSourcingItem.productId))
+      : undefined;
+    const baseInfo = catalogService.getProductWarehouseAndFreight((prod || firstSourcingItem || {}) as any, 1.0);
+
+    // Nouvelle approche : si le client choisit ou change son pays de livraison (effectiveDeliveryCountry)
+    // et que ce pays est pris en charge par l'un des entrepôts du continent (le plus proche),
+    // basculer intégralement l'entrepôt du panier !
+    const destinationRouting = catalogService.findClosestContinentalWarehouseForDestination(
+      effectiveDeliveryCountry,
+      baseInfo.warehouse,
+      items
+    );
+
+    if (destinationRouting.warehouse && destinationRouting.warehouse.id !== baseInfo.warehouse?.id) {
+      const reassignedProd = {
+        ...(prod || firstSourcingItem || {}),
+        agentWarehouseId: destinationRouting.warehouse.id
+      };
+      const reroutedInfo = catalogService.getProductWarehouseAndFreight(reassignedProd as any, 1.0);
+      return {
+        ...reroutedInfo,
+        matchReason: destinationRouting.matchReason
+      };
+    }
+
+    return baseInfo;
+  }, [items, allProducts, siteSettings, effectiveDeliveryCountry]);
+
+  // Helper for resolving individual product freight using the unified cart warehouse
+  const getItemWarehouseFreight = (item: any) => {
+    const prod = allProducts.find(p => String(p.id) === String(item.productId));
+    const weightKg = item.weightKg || 1.0;
+    const primaryWhId = unifiedCartWarehouse?.warehouse?.id;
+    const draft = {
+      ...(prod || item),
+      ...(primaryWhId && primaryWhId !== 'aw-unconfigured' ? { agentWarehouseId: primaryWhId } : {})
+    };
+    return catalogService.getProductWarehouseAndFreight(draft, weightKg);
+  };
+
+  // Helper for dynamic unit freight cost calculation using the product's assigned warehouse tariffs
+  const getItemUnitFreight = (item: any, method?: 'sea' | 'air') => {
     if (!isCartItemSourcing(item) && !method) {
       return 0;
     }
-    const currentMethod = method || (item.shippingMethod === 'air' ? 'air' : item.shippingMethod === 'sea' ? 'sea' : 'neutral');
-    if (currentMethod === 'neutral') {
-      return 0;
-    }
-    const prod = allProducts.find(p => String(p.id) === String(item.productId));
-    const weightKg = item.weightKg || 1.0;
-    const seaRate = siteSettings.seaFreightPerKgXOF || siteSettings.seaFreightPerKg || 1800;
-    const airRate = siteSettings.airFreightPerKgXOF || siteSettings.airFreightPerKg || 7500;
+    const whFreight = getItemWarehouseFreight(item);
+    const currentMethod = method || (
+      item.shippingMethod === 'air' && whFreight.offersAirFreight
+        ? 'air'
+        : item.shippingMethod === 'sea' && whFreight.offersSeaFreight
+          ? 'sea'
+          : whFreight.defaultClientMethod
+    );
 
     if (currentMethod === 'air') {
-      const customAir = item.customAirFreightCost ?? prod?.customAirFreightCost;
-      if (customAir !== undefined && customAir !== null && Number(customAir) >= 0) {
-        return Math.round(Number(customAir));
-      }
-      return Math.max(siteSettings.airFreightMin || 7000, Math.round(weightKg * airRate));
+      return whFreight.airFreightCost;
     } else {
-      const customSea = item.customSeaFreightCost ?? prod?.customSeaFreightCost;
-      if (customSea !== undefined && customSea !== null && Number(customSea) >= 0) {
-        return Math.round(Number(customSea));
-      }
-      return Math.max(siteSettings.seaFreightMin || 8000, Math.round(weightKg * seaRate));
+      return whFreight.seaFreightCost;
     }
   };
 
@@ -285,11 +368,16 @@ export default function Cart() {
       setCheckoutError("Votre panier contient des articles actuellement indisponibles ou retirés du catalogue. Veuillez les supprimer du panier avant de pouvoir valider votre commande.");
       return;
     }
+    if (hasUndeliverableCountryItems) {
+      setCheckoutError(`Certains articles de votre panier proviennent d'un entrepôt qui ne livre pas vers "${effectiveDeliveryCountry}". Veuillez sélectionner un pays pris en charge ou retirer ces articles.`);
+      return;
+    }
     if (!contractAccepted) {
       setCheckoutError("Veuillez cocher et accepter le contrat de mandat de sourcing et de transparence commerciale pour continuer.");
       return;
     }
     if (!customerPhone.trim()) {
+      setUseSavedAddress(false);
       setCheckoutError("Veuillez renseigner un numéro de téléphone joignable (Wave / Orange Money).");
       return;
     }
@@ -347,7 +435,7 @@ export default function Cart() {
         supplierName: it.supplierName ?? prod?.supplierName,
         quantity: it.quantity,
         brand: it.brand || prod?.brand || 'Constructeur Certifié',
-        origin: it.origin || prod?.origin || 'International',
+        origin: getCleanProvenanceDisplay(it.origin || prod?.origin, (prod as any)?.supplierCountry, (prod as any)?.sourcePlatform) || (it.origin && !/^(international|inconnu)$/i.test(it.origin) ? it.origin : undefined),
         shippingMethod: it.shippingMethod || 'none',
         freightCost: unitFreight,
         image: it.img || matchedVariant?.image || prod?.image,
@@ -372,7 +460,7 @@ export default function Cart() {
       customerPhone: customerPhone || (profile as any)?.phone || '',
       customerAddress: customerAddress || (profile as any)?.address || 'Dakar Plateau / Zone Industrielle',
       customerCity: customerCity || (profile as any)?.city || 'Dakar',
-      customerCountry: 'Sénégal',
+      customerCountry: effectiveDeliveryCountry,
       items: orderItems,
       subtotalHT: discountedSubtotalHT,
       vatAmount: vatAmount,
@@ -495,10 +583,10 @@ export default function Cart() {
               </span>
             </div>
             <h3 className="text-base font-black mb-1">
-              Réglez votre facture en ligne maintenant ({snapPayable.toLocaleString('fr-FR')} FCFA)
+              Réglez votre commande en ligne maintenant ({snapPayable.toLocaleString('fr-FR')} FCFA)
             </h3>
             <p className="text-xs text-blue-100 mb-4 leading-relaxed">
-              Votre facture de paiement sécurisée est prête (Wave, Orange Money, Free Money, Djamo, Carte Bancaire Visa/Mastercard).
+              Votre session de paiement sécurisée PayDunya est active (Wave, Orange Money, Yas / Free Money, Cartes Visa & Mastercard).
             </p>
             <div className="flex flex-col sm:flex-row gap-3">
               <a
@@ -533,12 +621,80 @@ export default function Cart() {
           </div>
         )}
 
+        {/* Bloc Spécifique Virement Bancaire B2B pour que le client et l'entreprise soient parfaitement à l'aise */}
+        {paymentMethod === 'Virement Proforma' && (
+          <div className="bg-slate-900 border border-slate-700 text-white p-6 rounded-2xl shadow-xl max-w-lg mx-auto mb-8 text-left space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                <span className="font-bold text-sm text-white">Instructions de Virement Bancaire B2B</span>
+              </div>
+              <span className="px-2 py-0.5 rounded bg-blue-900/60 border border-blue-700 text-blue-200 text-[10px] font-bold">
+                Facture Proforma Émise
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Veuillez ordonner votre virement bancaire auprès de votre institution financière en indiquant scrupuleusement la référence de commande :
+            </p>
+            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-1.5 text-xs font-mono">
+              <div><span className="text-slate-400">Bénéficiaire :</span> <strong className="text-white">ZONE ÉQUIPEMENTS SÉNÉGAL</strong></div>
+              <div><span className="text-slate-400">Banque :</span> <strong className="text-white">CBAO Groupe Attijariwafa / BOA Sénégal</strong></div>
+              <div><span className="text-slate-400">IBAN / RIB :</span> <strong className="text-orange-400">SN012 01001 036187920182 45</strong></div>
+              <div><span className="text-slate-400">Code SWIFT / BIC :</span> <strong className="text-white">CBAOSNDA</strong></div>
+              <div><span className="text-slate-400">Objet / Motif obligatoire :</span> <strong className="text-emerald-400">{orderCreatedSuccess}</strong></div>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <a
+                href={`https://wa.me/221766538384?text=${encodeURIComponent(`Bonjour Zone Équipements, voici le justificatif de virement bancaire pour la commande ${orderCreatedSuccess} (Montant: ${snapTotal.toLocaleString('fr-FR')} FCFA).`)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs text-center flex items-center justify-center gap-2 shadow-md transition-all"
+              >
+                <span>Envoyer justificatif via WhatsApp</span>
+              </a>
+            </div>
+            <div className="text-[11px] text-slate-400 border-t border-slate-800 pt-2.5">
+              ✅ Dès réception de votre ordre de virement ou bordereau, votre commande passe immédiatement au statut validé et la préparation logistique est enclenchée.
+            </div>
+          </div>
+        )}
+
         {paydunyaVerified && (
           <div className="bg-emerald-50 border-2 border-emerald-400 text-emerald-900 p-4 rounded-2xl max-w-lg mx-auto mb-6 text-xs font-bold flex items-center justify-center gap-2">
             <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-            <span>{paydunyaVerifyMsg || 'Paiement PayDunya confirmé et synchronisé avec votre commande !'}</span>
+            <span>{paydunyaVerifyMsg || 'Paiement PayDunya confirmé ! Votre Facture Définitive Acquittée est disponible ci-dessous.'}</span>
           </div>
         )}
+
+        {/* Bouton de Téléchargement Immédiat de Facture Définitive ou Devis Proforma (PDF) */}
+        {(() => {
+          const resolvedOrder = catalogService.getOrders().find(o => o.orderNumber === orderCreatedSuccess || o.id === orderCreatedSuccess);
+          if (!resolvedOrder) return null;
+          const isFullyPaid = paydunyaVerified || resolvedOrder.paymentStatus === 'Payé' || resolvedOrder.paymentStatus === 'Payé intégralement';
+          return (
+            <div className="max-w-lg mx-auto mb-8 bg-blue-50/80 border border-blue-200 rounded-2xl p-5 text-center space-y-3">
+              <div className="text-xs font-bold text-[#003366] flex items-center justify-center gap-2">
+                <FileText className="w-4 h-4 text-[#FF6600]" />
+                <span>{isFullyPaid ? 'Facture Définitive Officielle Générée' : 'Facture Proforma Officielle Disponible'}</span>
+              </div>
+              <p className="text-[11px] text-gray-600">
+                {isFullyPaid 
+                  ? 'Téléchargez instantanément votre Facture Définitive acquittée avec quittance de règlement et mentions légales.'
+                  : 'Téléchargez votre devis proforma officiel avec coordonnées bancaires complètes, NINEA et RCCM pour votre comptabilité.'}
+              </p>
+              <button
+                type="button"
+                onClick={() => downloadOrderPdf(resolvedOrder, isFullyPaid ? 'invoice' : 'quote')}
+                className={`w-full py-3 px-4 rounded-xl text-xs font-black uppercase tracking-wider text-white shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  isFullyPaid ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-[#003366] hover:bg-blue-900'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                <span>{isFullyPaid ? 'Télécharger Facture Définitive (PDF)' : 'Télécharger Devis Proforma (PDF)'}</span>
+              </button>
+            </div>
+          );
+        })()}
         
         <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-md mx-auto text-left text-xs text-gray-700 space-y-2 mb-8">
           <p><strong>Bénéficiaire :</strong> {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'}</p>
@@ -643,13 +799,90 @@ export default function Cart() {
               </div>
             </div>
 
+            {/* Bandeau unique d'entrepôt de regroupement + option unique pour afficher les pays pris en charge */}
+            {sourcingItemsCount > 0 && (
+              <div className="mb-4 p-3 bg-slate-50 border border-slate-200/90 rounded-xl text-xs space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-gray-700">
+                    <Truck className="w-4 h-4 text-[#003366] shrink-0" />
+                    <span>
+                      Expédition regroupée via :{' '}
+                      <strong className="text-[#003366]">
+                        {unifiedCartWarehouse.hasAssignedWarehouse
+                          ? `${unifiedCartWarehouse.warehouse.name}${unifiedCartWarehouse.warehouse.country ? ` (${unifiedCartWarehouse.warehouse.country})` : ''}`
+                          : 'Transit International Standard'}
+                      </strong>
+                      <span className="text-gray-400 ml-1.5 text-[11px]">
+                        (calcul de fret individuel par article)
+                      </span>
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {isDeliveryCountrySupported(effectiveDeliveryCountry, unifiedCartWarehouse.supportedDeliveryCountries) ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                        ✓ Livré vers {effectiveDeliveryCountry}
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-800 border border-red-300 text-[10px] font-bold">
+                        ✕ Non livré vers {effectiveDeliveryCountry}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowSupportedCountries(prev => !prev)}
+                      className="text-[10px] font-bold text-[#003366] hover:text-[#FF6600] bg-white border border-slate-200 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <Globe className="w-3 h-3 text-[#FF6600]" />
+                      <span>
+                        {showSupportedCountries
+                          ? 'Masquer les pays pris en charge ▲'
+                          : `Pays pris en charge (${unifiedCartWarehouse.supportedDeliveryCountries.length}) ▼`}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {showSupportedCountries && (
+                  <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center gap-1.5 text-[10px]">
+                    <span className="font-bold text-gray-500 mr-1">Pays desservis :</span>
+                    {unifiedCartWarehouse.supportedDeliveryCountries.map(country => (
+                      <span
+                        key={country}
+                        className={`px-2 py-0.5 rounded-md font-semibold border ${
+                          country.toLowerCase() === effectiveDeliveryCountry.toLowerCase()
+                            ? 'bg-[#003366] text-white border-[#003366]'
+                            : 'bg-white text-gray-700 border-gray-200'
+                        }`}
+                      >
+                        {country}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-2.5 pt-2 border-t border-slate-200/60 text-[10px] text-gray-500 flex items-start gap-1.5">
+                  <span className="text-[#FF6600] font-bold">ℹ</span>
+                  <span>
+                    Les tarifs de fret dépendent des barèmes réels de nos compagnies logistiques partenaires maritimes et aériennes. Le dédouanement maritime est généralement pris en charge et géré par les services logistiques de tous nos agents transitaires. Pour le fret aérien, les expéditions peuvent parfois faire l'objet d'un contrôle ou blocage temporaire en douane pour régularisation des formalités de dédouanement.
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div className="divide-y divide-gray-100">
               {items.map((item) => {
                 const available = isItemAvailable(item);
                 const itemIsSourcing = isCartItemSourcing(item);
                 const itemWeight = item.weightKg || 1.0;
-                const seaUnitCost = getItemUnitFreight(item, 'sea');
-                const airUnitCost = getItemUnitFreight(item, 'air');
+                const whFreight = getItemWarehouseFreight(item);
+                const activeItemMethod = item.shippingMethod === 'air' && whFreight.offersAirFreight
+                  ? 'air'
+                  : item.shippingMethod === 'sea' && whFreight.offersSeaFreight
+                    ? 'sea'
+                    : whFreight.defaultClientMethod;
+                const seaUnitCost = whFreight.seaFreightCost;
+                const airUnitCost = whFreight.airFreightCost;
                 const currentUnitCost = getItemUnitFreight(item);
                 const currentTotalFreight = currentUnitCost * item.quantity;
 
@@ -734,66 +967,58 @@ export default function Cart() {
                       </button>
                     </div>
 
-                    {/* Per-item Transport Block: Sourcing Freight Selector vs Local Immediate Stock Notice */}
+                    {/* Per-item Transport Block: Sourcing Freight Selector (Air / Sea from closest warehouse) vs Local Immediate Stock Notice */}
                     {itemIsSourcing ? (
                       <div className={`bg-slate-50 p-3 rounded-xl border border-slate-200/80 text-xs ${!available ? 'opacity-30 pointer-events-none' : ''}`}>
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
-                            <Truck className="w-3.5 h-3.5 text-[#003366]" /> Mode de transport & fret international (Optionnel) :
+                            <Truck className="w-3.5 h-3.5 text-[#003366]" /> Moyen de fret disponible :
                           </span>
-                          <span className="text-[10px] font-mono text-gray-600 font-bold">
-                            {currentTotalFreight > 0 ? `+${currentTotalFreight.toLocaleString('fr-FR')} FCFA` : '0 FCFA (Sans fret pré-choisi)'}
+                          <span className="text-[10px] font-mono text-[#003366] font-bold">
+                            +{currentTotalFreight.toLocaleString('fr-FR')} FCFA
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          <button
-                            type="button"
-                            disabled={!available}
-                            onClick={() => item.id && updateItemFreight(item.id, 'neutral', 0)}
-                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
-                              item.shippingMethod !== 'sea' && item.shippingMethod !== 'air'
-                                ? 'bg-[#003366] text-white border-[#003366] font-bold'
-                                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                            }`}
-                          >
-                            <span className="block font-bold">Neutre (Sans fret)</span>
-                            <span className={`text-[9px] block ${item.shippingMethod !== 'sea' && item.shippingMethod !== 'air' ? 'text-slate-200' : 'text-gray-400'}`}>
-                              0 FCFA • À définir / Sur devis
-                            </span>
-                          </button>
+                        <div className={`grid grid-cols-1 ${whFreight.offersSeaFreight && whFreight.offersAirFreight ? 'sm:grid-cols-2' : ''} gap-2`}>
+                          {whFreight.offersSeaFreight && (
+                            <button
+                              type="button"
+                              disabled={!available}
+                              onClick={() => item.id && updateItemFreight(item.id, 'sea', seaUnitCost)}
+                              className={`p-2.5 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                                activeItemMethod === 'sea'
+                                  ? 'bg-[#003366] text-white border-[#003366] font-bold'
+                                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold">🚢 Fret Maritime ({whFreight.seaDuration})</span>
+                                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${activeItemMethod === 'sea' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                                  +{(seaUnitCost * item.quantity).toLocaleString('fr-FR')} F
+                                </span>
+                              </div>
+                            </button>
+                          )}
 
-                          <button
-                            type="button"
-                            disabled={!available}
-                            onClick={() => item.id && updateItemFreight(item.id, 'sea', seaUnitCost)}
-                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
-                              item.shippingMethod === 'sea'
-                                ? 'bg-[#003366] text-white border-[#003366] font-bold'
-                                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                            }`}
-                          >
-                            <span className="block font-bold">Maritime ({siteSettings.seaFreightDurationDays || '30 - 45 j'})</span>
-                            <span className={`text-[9px] block ${item.shippingMethod === 'sea' ? 'text-emerald-300' : 'text-gray-400'}`}>
-                              +{(seaUnitCost * item.quantity).toLocaleString('fr-FR')} F
-                            </span>
-                          </button>
-
-                          <button
-                            type="button"
-                            disabled={!available}
-                            onClick={() => item.id && updateItemFreight(item.id, 'air', airUnitCost)}
-                            className={`p-2 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
-                              item.shippingMethod === 'air'
-                                ? 'bg-[#003366] text-white border-[#003366] font-bold'
-                                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                            }`}
-                          >
-                            <span className="block font-bold">Aérien ({siteSettings.airFreightDurationDays || '5 - 10 j'})</span>
-                            <span className={`text-[9px] block ${item.shippingMethod === 'air' ? 'text-orange-300' : 'text-gray-400'}`}>
-                              +{(airUnitCost * item.quantity).toLocaleString('fr-FR')} F
-                            </span>
-                          </button>
+                          {whFreight.offersAirFreight && (
+                            <button
+                              type="button"
+                              disabled={!available}
+                              onClick={() => item.id && updateItemFreight(item.id, 'air', airUnitCost)}
+                              className={`p-2.5 rounded-lg border text-left text-[11px] transition-all cursor-pointer ${
+                                activeItemMethod === 'air'
+                                  ? 'bg-[#003366] text-white border-[#003366] font-bold'
+                                  : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold">✈️ Fret Aérien ({whFreight.airDuration})</span>
+                                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${activeItemMethod === 'air' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                                  +{(airUnitCost * item.quantity).toLocaleString('fr-FR')} F
+                                </span>
+                              </div>
+                            </button>
+                          )}
                         </div>
                       </div>
                     ) : (
@@ -813,12 +1038,17 @@ export default function Cart() {
             </div>
           </div>
 
-          {/* Formulaire Coordonnées Client Sénégal (strictly B2B/Client side, never shared with supplier) */}
+          {/* Formulaire Coordonnées Client (strictly B2B/Client side, never shared with supplier) */}
           <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">
-                Coordonnées de Facturation & Livraison (Sénégal)
-              </h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">
+                  Coordonnées de Facturation & Livraison ({effectiveDeliveryCountry})
+                </h3>
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  Votre pays par défaut (<strong>{defaultClientCountry}</strong>) est appliqué automatiquement si vous n'en renseignez pas un nouveau.
+                </p>
+              </div>
               {user && (
                 <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-[#003366] border border-blue-200 flex items-center gap-1">
                   <CheckCircle2 className="w-3 h-3 text-blue-600" />
@@ -826,6 +1056,18 @@ export default function Cart() {
                 </span>
               )}
             </div>
+
+            {hasUndeliverableCountryItems && (
+              <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block font-bold">Pays de livraison non desservi ({effectiveDeliveryCountry})</strong>
+                  <p className="text-[11px] text-red-800 mt-0.5">
+                    {undeliverableItemsForCountry.length} article(s) de votre panier ne peuvent pas être livrés vers <strong>{effectiveDeliveryCountry}</strong> selon les pays desservis par leur entrepôt d'expédition. Veuillez choisir un pays pris en charge ci-dessous ou retirer ces articles.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {!user ? (
               /* User Account Required Box */
@@ -873,6 +1115,7 @@ export default function Cart() {
                       type="button"
                       onClick={() => {
                         setUseSavedAddress(true);
+                        setCustomerCountry(defaultClientCountry);
                         if (profile || savedLocalProfile) {
                           setCustomerName(profile?.displayName || user.displayName || savedLocalProfile.displayName || customerName);
                           setCustomerPhone((profile as any)?.phone || savedLocalProfile.phone || customerPhone);
@@ -891,10 +1134,10 @@ export default function Cart() {
                         <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${useSavedAddress ? 'border-[#003366] bg-[#003366]' : 'border-gray-300'}`}>
                           {useSavedAddress && <span className="w-1.5 h-1.5 bg-white rounded-full"></span>}
                         </span>
-                        <span className="font-bold text-xs">Utiliser mon profil sauvegardé</span>
+                        <span className="font-bold text-xs">Utiliser mon profil & pays par défaut ({defaultClientCountry})</span>
                       </div>
                       <p className="text-[10px] text-gray-500 pl-5">
-                        {customerName || user.displayName || user.email} {customerPhone ? `• ${customerPhone}` : ''} {customerAddress ? `• ${customerAddress}` : ''}
+                        {customerName || user.displayName || user.email} • Pays : {defaultClientCountry} {customerPhone ? `• ${customerPhone}` : ''} {customerAddress ? `• ${customerAddress}` : ''}
                       </p>
                     </button>
 
@@ -911,17 +1154,17 @@ export default function Cart() {
                         <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${!useSavedAddress ? 'border-[#003366] bg-[#003366]' : 'border-gray-300'}`}>
                           {!useSavedAddress && <span className="w-1.5 h-1.5 bg-white rounded-full"></span>}
                         </span>
-                        <span className="font-bold text-xs">Renseigner une autre adresse</span>
+                        <span className="font-bold text-xs">Renseigner un nouveau pays / autre adresse</span>
                       </div>
                       <p className="text-[10px] text-gray-500 pl-5">
-                        Pour expédier directement sur un autre chantier ou au nom d'un tiers
+                        Pour livrer vers un autre pays pris en charge ou sur un autre chantier
                       </p>
                     </button>
                   </div>
                 </div>
 
-                {/* Form fields: shown if user chose custom address OR if saved address is missing crucial fields like phone */}
-                {(!useSavedAddress || !customerPhone || !customerName) && (
+                {/* Form fields: strictly folded when default address is selected, unfolded when custom address is selected */}
+                {!useSavedAddress && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2 animate-fadeIn">
                     <div>
                       <label className="block font-semibold text-gray-700 mb-1">Nom du Contact *</label>
@@ -959,19 +1202,34 @@ export default function Cart() {
                     </div>
 
                     <div>
-                      <label className="block font-semibold text-gray-700 mb-1">Ville de Livraison au Sénégal</label>
+                      <label className="block font-semibold text-gray-700 mb-1">Pays de Livraison (Par défaut : {defaultClientCountry})</label>
                       <select
+                        value={customerCountry || defaultClientCountry}
+                        onChange={(e) => setCustomerCountry(e.target.value)}
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs font-bold text-[#003366] focus:outline-none focus:border-orange-500"
+                      >
+                        <optgroup label="Pays pris en charge par la livraison">
+                          {(siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).map(c => (
+                            <option key={`sup-${c}`} value={c}>{c} (Livraison prise en charge)</option>
+                          ))}
+                        </optgroup>
+                        <optgroup label="Tous les pays">
+                          {WORLD_COUNTRIES.map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </optgroup>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-gray-700 mb-1">Ville de Livraison ({effectiveDeliveryCountry})</label>
+                      <input
+                        type="text"
                         value={customerCity}
                         onChange={(e) => setCustomerCity(e.target.value)}
+                        placeholder="Ex: Dakar, Abidjan, Bamako..."
                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                      >
-                        <option value="Dakar">Dakar (Plateau, Zone Ind, Yoff, Rufisque)</option>
-                        <option value="Thiès">Thiès</option>
-                        <option value="Saint-Louis">Saint-Louis</option>
-                        <option value="Mbour">Mbour / Saly</option>
-                        <option value="Kaolack">Kaolack</option>
-                        <option value="Autre Région">Autre Région du Sénégal</option>
-                      </select>
+                      />
                     </div>
 
                     <div className="sm:col-span-2">
@@ -1160,7 +1418,7 @@ export default function Cart() {
                       <span>PayDunya — Mobile Money & Carte Bancaire</span>
                     </div>
                     <p className="text-[11px] text-gray-600 mt-0.5">
-                      Tous les moyens réunis : Wave, Orange Money, Free Money, Djamo, MTN, Moov, Visa & Mastercard
+                      Tous les moyens réunis : Wave, Orange Money, Yas (Free Money), Djamo, MTN, Moov, Visa & Mastercard
                     </p>
                   </div>
                   <span className="px-2 py-0.5 rounded bg-[#003366] text-white text-[10px] font-bold shrink-0">
@@ -1196,22 +1454,25 @@ export default function Cart() {
               )}
             </div>
 
-            {/* MANDATORY CONTRACT (Dynamic: Sourcing Mandate vs Local Direct Sale) */}
-            <div className="p-4 bg-orange-50/80 border border-orange-200 rounded-2xl my-5 text-xs text-gray-800 space-y-3">
-              <div className="flex items-start gap-2.5">
-                <ShieldCheck className="w-5 h-5 text-orange-600 shrink-0 mt-0.5" />
-                <div>
+            {/* MANDATORY CONTRACT (Simplified in Cart Summary) */}
+            <div className="p-3.5 bg-orange-50/80 border border-orange-200 rounded-2xl my-5 text-xs text-gray-800 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-orange-600 shrink-0" />
                   <h4 className="font-black text-orange-950 text-xs uppercase tracking-wider">
-                    Contrat Éthique & Engagements Légal Sénégal
+                    Contrat Éthique & Engagements
                   </h4>
-                  <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
-                    Conformément à nos engagements de transparence et de déontologie commerciale, 
-                    <strong> {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'} </strong> garantit la conformité technique, la traçabilité intégrale et le suivi douanier de vos matériels jusqu'à livraison sur site à Dakar ou en région.
-                  </p>
                 </div>
+                <button 
+                  type="button"
+                  onClick={() => setShowContractModal(true)}
+                  className="text-[10px] text-orange-700 hover:text-orange-900 font-bold underline shrink-0 cursor-pointer"
+                >
+                  Lire le contrat &rarr;
+                </button>
               </div>
 
-              <label className="flex items-start gap-3 pt-2 border-t border-orange-200/60 cursor-pointer">
+              <label className="flex items-start gap-2.5 pt-2 border-t border-orange-200/60 cursor-pointer">
                 <input
                   type="checkbox"
                   required
@@ -1220,17 +1481,9 @@ export default function Cart() {
                   className="w-4 h-4 mt-0.5 accent-[#FF6600] rounded cursor-pointer shrink-0"
                 />
                 <span className="text-[11px] text-gray-900 font-semibold leading-snug">
-                  J'ai lu et j'accepte expressément le contrat de mandat et les conditions de vente de {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'}. *
+                  J'accepte le contrat de mandat et les conditions de vente de {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'}. *
                 </span>
               </label>
-
-              <button 
-                type="button"
-                onClick={() => setShowContractModal(true)}
-                className="text-[10px] text-orange-700 font-bold underline block text-right"
-              >
-                Lire l'intégralité du contrat éthique &rarr;
-              </button>
             </div>
 
             {checkoutError && (
@@ -1245,13 +1498,18 @@ export default function Cart() {
               <button 
                 type="button"
                 onClick={(e) => { setOrderType('order'); handleCheckout(e, 'order'); }}
-                disabled={!contractAccepted || isSubmitting || hasUnavailableItems}
+                disabled={!contractAccepted || isSubmitting || hasUnavailableItems || hasUndeliverableCountryItems}
                 className="w-full bg-[#FF6600] hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-extrabold py-3.5 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-600/30 text-xs uppercase tracking-wider cursor-pointer"
               >
                 {hasUnavailableItems ? (
                   <>
                     <Lock className="w-4 h-4 text-white shrink-0" />
                     <span>Commande Bloquée (Articles Indisponibles)</span>
+                  </>
+                ) : hasUndeliverableCountryItems ? (
+                  <>
+                    <Lock className="w-4 h-4 text-white shrink-0" />
+                    <span>Pays non desservi ({effectiveDeliveryCountry})</span>
                   </>
                 ) : isSubmitting ? (
                   'Génération Facture PayDunya...'
@@ -1266,16 +1524,16 @@ export default function Cart() {
               <button 
                 type="button"
                 onClick={(e) => { setOrderType('quote'); handleCheckout(e, 'quote'); }}
-                disabled={!contractAccepted || isSubmitting || hasUnavailableItems}
+                disabled={!contractAccepted || isSubmitting || hasUnavailableItems || hasUndeliverableCountryItems}
                 className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2 text-xs cursor-pointer"
               >
                 <FileText className="w-3.5 h-3.5 text-orange-400" />
-                {hasUnavailableItems ? 'Devis Proforma Indisponible' : t('btn_issue_proforma')}
+                {hasUnavailableItems || hasUndeliverableCountryItems ? 'Devis Proforma Indisponible' : t('btn_issue_proforma')}
               </button>
             </div>
             
             <p className="text-[10px] text-center text-gray-400 mt-4">
-              Paiement unifié sécurisé via PayDunya (Mobile Money & Cartes) et Virement Bancaire B2B. Conforme aux normes fiscales du Sénégal.
+              Paiement unifié sécurisé via PayDunya (Mobile Money & Cartes) et Virement Bancaire B2B.
             </p>
           </div>
         </div>
@@ -1289,7 +1547,7 @@ export default function Cart() {
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-5 h-5 text-orange-600" />
                 <h3 className="text-sm font-black uppercase text-[#003366]">
-                  Contrat de Mandat de Sourcing & Transparence Commerciale
+                  Contrat Éthique & Engagements Légaux
                 </h3>
               </div>
               <button onClick={() => setShowContractModal(false)} className="text-gray-400 hover:text-gray-900 font-bold text-base cursor-pointer">
@@ -1298,21 +1556,25 @@ export default function Cart() {
             </div>
 
             <div className="space-y-4 my-6 text-gray-600 leading-relaxed">
+              <div className="p-3.5 bg-orange-50/70 border border-orange-200/80 rounded-xl text-gray-700">
+                Conformément à nos engagements de transparence et de déontologie commerciale,{' '}
+                <strong>{siteSettings.companyName || 'ZONE ÉQUIPEMENTS'}</strong> garantit la conformité technique et la traçabilité intégrale de vos matériels. Le dédouanement maritime est géré par les services logistiques des transitaires partenaires ; pour le fret aérien, les formalités douanières peuvent faire l'objet d'un contrôle ou blocage temporaire en douane pour régularisation.
+              </div>
               <p>
                 <strong>Article 1 : Nature de la Convention</strong><br />
                 L'entreprise {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'} opère pour le compte de ses clients selon un mandat de représentation commerciale et de sourcing industriel international.
               </p>
               <p>
                 <strong>Article 2 : Possession des Marchandises</strong><br />
-                Le client reconnaît expressément avoir été averti que le matériel sélectionné n'est pas physiquement stocké dans les locaux de Dakar au moment de la commande. {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'} s'engage à commander le produit directement auprès du fabricant certifié dès validation du paiement ou bon de commande pro.
+                Le client reconnaît expressément avoir été averti que le matériel sélectionné n'est pas physiquement stocké dans les locaux au moment de la commande. {siteSettings.companyName || 'ZONE ÉQUIPEMENTS'} s'engage à commander le produit directement auprès du fabricant certifié dès validation du paiement ou bon de commande pro.
               </p>
               <p>
                 <strong>Article 3 : Origine & Délais</strong><br />
-                L'origine des équipements (Chine, Europe, Amérique) est rigoureusement spécifiée. Les délais moyens de transit DAP sont de {siteSettings.airFreightDurationDays || '5 - 10 jours'} en aérien express et {siteSettings.seaFreightDurationDays || '30 - 45 jours'} en fret maritime.
+                L'origine des équipements (Chine, Europe, Amérique) est rigoureusement spécifiée. Les délais moyens de transit indicatifs sont de {siteSettings.airFreightDurationDays || '5 - 10 jours'} en aérien express et {siteSettings.seaFreightDurationDays || '30 - 45 jours'} en fret maritime.
               </p>
               <p>
-                <strong>Article 4 : Tarification & TVA</strong><br />
-                Les prix affichés comprennent le coût d'achat, le fret international, l'assurance de transit et la TVA en vigueur ({Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%). Aucun frais occulte ne sera réclamé.
+                <strong>Article 4 : Tarification du Fret & Formalités Douanières</strong><br />
+                Les tarifs de fret (actuels ou futures mises à jour) dépendent entièrement des barèmes réels en vigueur des compagnies logistiques partenaires (maritimes et aériennes). Les formalités et droits de douane locaux à destination peuvent être pris en charge en toute autonomie par le client (avec transmission des liasses d'origine) ou confiés aux transitaires partenaires.
               </p>
             </div>
 

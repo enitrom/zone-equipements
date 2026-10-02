@@ -9,16 +9,27 @@ import {
   Clock, CheckCircle2, AlertCircle, FileText, ArrowRight,
   Phone, Building2, MapPin, ExternalLink, RefreshCw, Save,
   Check, Eye, Download, Globe, CreditCard, Trash2, Edit,
-  ShieldCheck, KeyRound, X, AlertTriangle, Send
+  ShieldCheck, KeyRound, X, AlertTriangle, Send, Heart
 } from 'lucide-react';
-import { catalogService, Order, getClientWarehouseCode } from '../services/catalogService';
+import {
+  catalogService, Order, ExtendedProduct, getClientWarehouseCode,
+  getEffectiveProductBasePrice, isProductSourcing, parseWeightToKg,
+  getCleanProvenanceDisplay
+} from '../services/catalogService';
 import { siteSettingsService } from '../services/siteSettingsService';
 import { useLanguage, Language } from '../LanguageContext';
 import { useCart } from '../CartContext';
-import { printHtmlDocument } from '../utils/printDocument';
+import { printHtmlDocument, downloadOrderPdf } from '../utils/printDocument';
 import { ConfirmModal } from '../components/admin/ConfirmModal';
+import { getProductImageUrl, handleImageError } from '../constants';
+import {
+  WORLD_COUNTRIES,
+  DEFAULT_SUPPORTED_DELIVERY_COUNTRIES,
+  resolveCanonicalCountryName,
+  isDeliveryCountrySupported
+} from '../utils/countries';
 
-type TabType = 'overview' | 'orders' | 'profile' | 'settings';
+type TabType = 'overview' | 'orders' | 'liked' | 'profile' | 'settings';
 
 export default function Account() {
   const { user, profile, loading, isAdmin } = useAuth();
@@ -35,10 +46,18 @@ export default function Account() {
   const [displayName, setDisplayName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [companyName, setCompanyName] = useState('');
+  const [defaultCountry, setDefaultCountry] = useState<string>(
+    () => catalogService.getEffectiveClientCountry(profile)
+  );
   const [city, setCity] = useState('Dakar');
   const [address, setAddress] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Liked products (Favoris) state
+  const [likedProducts, setLikedProducts] = useState<ExtendedProduct[]>(() => catalogService.getLikedProducts());
+  const [siteSettings, setSiteSettings] = useState(() => siteSettingsService.getSettings());
+  const [generatedFallbackOtp, setGeneratedFallbackOtp] = useState('');
 
   // Email OTP verification state for sensitive profile edit
   const [showOtpModal, setShowOtpModal] = useState(false);
@@ -77,10 +96,26 @@ export default function Account() {
       setDisplayName(profile.displayName || user?.displayName || '');
       setPhoneNumber(profile.phone || '');
       setCompanyName(profile.company || '');
+      setDefaultCountry(resolveCanonicalCountryName(profile.country || siteSettings.defaultClientCountry || 'Sénégal'));
       setCity(profile.city || 'Dakar');
       setAddress(profile.address || '');
     }
-  }, [profile, user]);
+  }, [profile, user, siteSettings.defaultClientCountry]);
+
+  useEffect(() => {
+    const syncLikedAndSettings = () => {
+      setLikedProducts(catalogService.getLikedProducts());
+      setSiteSettings(siteSettingsService.getSettings());
+    };
+    const unsubCat = catalogService.subscribe(syncLikedAndSettings);
+    const unsubSet = siteSettingsService.subscribe(syncLikedAndSettings);
+    window.addEventListener('ze_liked_products_updated', syncLikedAndSettings);
+    return () => {
+      unsubCat();
+      unsubSet();
+      window.removeEventListener('ze_liked_products_updated', syncLikedAndSettings);
+    };
+  }, []);
 
   const loadUserOrders = () => {
     if (!user) return;
@@ -137,13 +172,18 @@ export default function Account() {
     setIsSendingOtp(true);
     setOtpError('');
     try {
-      const resp = await fetch('/api/auth/send-verification-code', {
+      const resp = await fetch('/api/auth/send-verification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: user.email, purpose: 'profile_update' })
       });
       const data = await resp.json();
       if (data.success) {
+        const directCode = data.fallbackCode || data.debugCode || '';
+        setGeneratedFallbackOtp(directCode);
+        if (directCode) {
+          setOtpCode(directCode);
+        }
         setShowOtpModal(true);
         setResendCountdown(60);
         const timer = setInterval(() => {
@@ -187,21 +227,30 @@ export default function Account() {
         return;
       }
 
-      // Code is valid - update profile in Firestore
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
+      const resolvedCountry = resolveCanonicalCountryName(defaultCountry) || 'Sénégal';
+      const updatedFields = {
         displayName: displayName.trim(),
         phone: phoneNumber.trim(),
         company: companyName.trim(),
+        country: resolvedCountry,
         city: city.trim(),
         address: address.trim(),
         updatedAt: new Date().toISOString()
-      }).catch(() => {});
+      };
+
+      // Code is valid - update profile in Firestore and localStorage
+      const userRef = doc(db, 'users', user.uid);
+      await updateDoc(userRef, updatedFields).catch(() => {});
+      try {
+        const raw = localStorage.getItem('ze_user_profile_v1');
+        const prev = raw ? JSON.parse(raw) : {};
+        localStorage.setItem('ze_user_profile_v1', JSON.stringify({ ...prev, ...updatedFields }));
+      } catch {}
 
       setShowOtpModal(false);
       setOtpCode('');
       setSaveSuccess(true);
-      triggerToast('Vos informations de compte ont été mises à jour avec succès.');
+      triggerToast(`Profil et pays par défaut (${resolvedCountry}) mis à jour avec succès.`);
       setTimeout(() => setSaveSuccess(false), 4000);
     } catch (err: any) {
       setOtpError(err?.message || 'Erreur lors de l\'enregistrement du profil.');
@@ -385,10 +434,10 @@ export default function Account() {
       </div>
     `;
 
-    printHtmlDocument(
-      docTitle,
-      `${order.orderNumber}.html`,
-      bodyHtml,
+    const isPaid = order.paymentStatus === 'Payé intégralement' || order.paymentStatus === 'Payé';
+    downloadOrderPdf(
+      order,
+      isPaid ? 'invoice' : 'quote',
       (msg) => triggerToast(msg)
     );
   };
@@ -411,13 +460,17 @@ export default function Account() {
               {(displayName || user.email || 'U')[0].toUpperCase()}
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-xl sm:text-2xl font-black">{displayName || 'Compte Client B2B'}</h1>
                 {isAdmin && (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-[#FF6600] text-white tracking-widest">
                     ADMIN
                   </span>
                 )}
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-white/10 text-emerald-300 border border-emerald-400/30 flex items-center gap-1">
+                  <Globe className="w-3 h-3" />
+                  Pays par défaut : {defaultCountry || 'Sénégal'}
+                </span>
               </div>
               <p className="text-xs text-blue-200 mt-0.5 font-mono">{user.email}</p>
             </div>
@@ -467,6 +520,18 @@ export default function Account() {
         </button>
 
         <button
+          onClick={() => setActiveTab('liked')}
+          className={`pb-3.5 px-4 text-xs font-black uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
+            activeTab === 'liked'
+              ? 'border-[#FF6600] text-[#FF6600]'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          <Heart className={`w-4 h-4 ${likedProducts.length > 0 ? 'fill-red-500 text-red-500' : ''}`} />
+          <span>Produits Aimés ({likedProducts.length})</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('profile')}
           className={`pb-3.5 px-4 text-xs font-black uppercase tracking-wider flex items-center gap-2 border-b-2 transition-all whitespace-nowrap cursor-pointer ${
             activeTab === 'profile'
@@ -493,7 +558,7 @@ export default function Account() {
       {activeTab === 'overview' && (
         <div className="space-y-6 animate-fadeIn">
           {/* Metrics Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div className="p-5 border border-slate-200 rounded-2xl bg-slate-50/70 flex flex-col justify-between">
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                 Commandes en cours
@@ -522,6 +587,24 @@ export default function Account() {
               </div>
             </div>
 
+            <div
+              onClick={() => setActiveTab('liked')}
+              className="p-5 border border-rose-200 rounded-2xl bg-rose-50/40 hover:bg-rose-50/80 transition-colors flex flex-col justify-between cursor-pointer"
+            >
+              <span className="text-[11px] font-bold text-rose-800 uppercase tracking-wider flex items-center gap-1.5">
+                <Heart className="w-3.5 h-3.5 text-rose-600 fill-rose-600" />
+                Produits Aimés
+              </span>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-3xl font-black font-mono text-rose-700">
+                  {likedProducts.length}
+                </span>
+                <span className="text-[11px] font-bold text-rose-800 bg-rose-100 px-2 py-0.5 rounded-md">
+                  Voir ma sélection &rarr;
+                </span>
+              </div>
+            </div>
+
             <div className="p-5 border border-blue-200 rounded-2xl bg-blue-50/40 flex flex-col justify-between">
               <span className="text-[11px] font-bold text-[#003366] uppercase tracking-wider">
                 Total Facturé & Réglé
@@ -535,6 +618,44 @@ export default function Account() {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Bandeau Pays par défaut du client & Pays pris en charge par la livraison */}
+          <div className="p-4 bg-white rounded-2xl border border-gray-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Globe className="w-4 h-4 text-[#003366]" />
+                <span className="font-bold text-gray-900">
+                  Votre pays de livraison par défaut :
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-[#003366] border border-blue-200 font-black">
+                  {defaultCountry || 'Sénégal'}
+                </span>
+                {isDeliveryCountrySupported(
+                  defaultCountry || 'Sénégal',
+                  siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES
+                ) ? (
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                    ✓ Pays couvert par la livraison
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
+                    ⚠️ Hors zone standard — Vérifiez les pays livrés par l'entrepôt du produit
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500">
+                <strong>Pays pris en charge de base pour la livraison :</strong>{' '}
+                {(siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).join(', ')}.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('profile')}
+              className="px-3.5 py-2 bg-slate-100 hover:bg-[#003366] hover:text-white text-[#003366] rounded-xl font-bold text-xs transition-colors shrink-0 cursor-pointer"
+            >
+              Modifier mon pays par défaut
+            </button>
           </div>
 
           {/* Quick Actions & Recent Orders */}
@@ -780,15 +901,21 @@ export default function Account() {
                             </button>
                           )}
 
-                          {/* Action 3: Download PDF */}
+                          {/* Action 3: Download PDF (Facture Définitive si payé ou Proforma B2B) */}
                           <button
                             type="button"
                             onClick={() => printInvoice(order)}
-                            className="px-3 py-2 bg-[#003366] hover:bg-[#002244] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
-                            title="Télécharger Devis / Facture Proforma PDF"
+                            className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs text-white ${
+                              order.paymentStatus === 'Payé intégralement' || order.paymentStatus === 'Payé'
+                                ? 'bg-emerald-700 hover:bg-emerald-800'
+                                : 'bg-[#003366] hover:bg-[#002244]'
+                            }`}
+                            title={order.paymentStatus === 'Payé intégralement' || order.paymentStatus === 'Payé'
+                              ? "Télécharger la Facture Définitive Acquittée (.PDF)"
+                              : "Télécharger le Devis Proforma Officiel (.PDF)"}
                           >
                             <Download className="w-3.5 h-3.5" />
-                            <span>PDF</span>
+                            <span>{order.paymentStatus === 'Payé intégralement' || order.paymentStatus === 'Payé' ? 'Facture PDF' : 'Proforma PDF'}</span>
                           </button>
 
                           {/* Action 4: Delete / Cancel if unpaid */}
@@ -803,6 +930,179 @@ export default function Account() {
                             </button>
                           )}
                         </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ================= TAB 2B: PRODUITS AIMÉS (FAVORIS DÉDIÉS) ================= */}
+      {activeTab === 'liked' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-8 space-y-6 animate-fadeIn">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100 pb-5">
+            <div>
+              <h1 className="text-xl sm:text-2xl font-black text-[#003366] flex items-center gap-2.5">
+                <Heart className="w-6 h-6 text-rose-500 fill-rose-500" />
+                <span>Mes Produits Aimés ({likedProducts.length})</span>
+              </h1>
+              <p className="text-xs text-gray-500 mt-1">
+                Retrouvez tous les équipements industriels et matériels MRO que vous avez aimés pour les commander rapidement ou suivre leur disponibilité de livraison vers votre pays par défaut (<strong>{defaultCountry || 'Sénégal'}</strong>).
+              </p>
+            </div>
+            <Link
+              to="/shop"
+              className="px-4 py-2 bg-[#003366] hover:bg-[#002244] text-white rounded-xl text-xs font-bold flex items-center gap-1.5 self-start sm:self-auto"
+            >
+              <span>Explorer le catalogue</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+
+          {likedProducts.length === 0 ? (
+            <div className="text-center py-16 border-2 border-dashed border-gray-200 rounded-2xl p-6 bg-gray-50/50">
+              <Heart className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+              <h3 className="text-base font-bold text-gray-800">Aucun produit aimé pour le moment</h3>
+              <p className="text-xs text-gray-500 mt-1 max-w-md mx-auto">
+                Cliquez sur l'icône cœur ❤️ sur n'importe quelle fiche produit ou dans le catalogue pour enregistrer vos équipements favoris dans cet espace dédié.
+              </p>
+              <Link
+                to="/shop"
+                className="inline-flex items-center gap-2 mt-4 px-5 py-2.5 bg-[#FF6600] hover:bg-orange-600 text-white rounded-xl text-xs font-bold shadow-md transition-all"
+              >
+                <span>Découvrir les matériels</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {likedProducts.map(prod => {
+                const basePrice = getEffectiveProductBasePrice(prod);
+                const isSourcing = isProductSourcing(prod);
+                const deliveryCheck = catalogService.isCountryDeliverableForProduct(defaultCountry || 'Sénégal', prod);
+                const whFreight = catalogService.getProductWarehouseAndFreight(prod, parseWeightToKg(prod.weight) || 1);
+
+                return (
+                  <div
+                    key={prod.id}
+                    className="border border-gray-200 rounded-2xl p-4 flex flex-col justify-between bg-white hover:border-[#003366]/40 transition-all shadow-xs group"
+                  >
+                    <div>
+                      <div className="relative aspect-video bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-center p-3 mb-3 overflow-hidden">
+                        <Link to={`/product/${prod.id}`} className="w-full h-full flex items-center justify-center">
+                          <img
+                            src={getProductImageUrl(prod.img)}
+                            alt={prod.name}
+                            className="max-h-28 max-w-full object-contain group-hover:scale-105 transition-transform"
+                            referrerPolicy="no-referrer"
+                            onError={handleImageError}
+                          />
+                        </Link>
+                        <span className="absolute top-2 left-2 bg-white/95 border border-gray-200 px-2 py-0.5 rounded text-[9px] font-bold text-[#003366] uppercase">
+                          {prod.brand}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            catalogService.toggleLikedProduct(prod.id, user.uid);
+                            triggerToast(`"${prod.name}" retiré de vos produits aimés.`);
+                          }}
+                          className="absolute top-2 right-2 p-1.5 rounded-full bg-white/95 border border-rose-200 text-rose-500 hover:bg-rose-50 transition-colors cursor-pointer shadow-2xs"
+                          title="Retirer des produits aimés"
+                        >
+                          <Heart className="w-4 h-4 fill-rose-500 text-rose-500" />
+                        </button>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                        {isSourcing ? (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-orange-50 text-[#FF6600] border border-orange-200">
+                            À sourcer • {whFreight.offersAirFreight && whFreight.offersSeaFreight ? 'Air & Mer' : whFreight.offersAirFreight ? 'Fret Aérien' : 'Fret Maritime'}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Stock Local • Dispo immédiate
+                          </span>
+                        )}
+
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                          deliveryCheck.deliverable
+                            ? 'bg-blue-50 text-[#003366] border border-blue-200'
+                            : 'bg-amber-50 text-amber-800 border border-amber-200'
+                        }`}>
+                          {deliveryCheck.deliverable
+                            ? `✓ Livré vers ${deliveryCheck.canonicalCountry}`
+                            : `⚠️ Non livré vers ${deliveryCheck.canonicalCountry}`}
+                        </span>
+                      </div>
+
+                      <Link
+                        to={`/product/${prod.id}`}
+                        className="font-bold text-sm text-gray-900 hover:text-[#003366] line-clamp-2 leading-snug block"
+                      >
+                        {prod.name}
+                      </Link>
+                      <p className="text-[10px] text-gray-400 font-mono mt-1">
+                        Réf: {prod.ref || prod.model} • Origine: {prod.origin || 'International'}
+                      </p>
+                      <p className="text-[10px] text-gray-500 mt-1">
+                        Pays livrés : <span className="font-semibold text-gray-700">{deliveryCheck.supportedCountries.join(', ')}</span>
+                      </p>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-gray-100 space-y-2.5">
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[10px] font-bold uppercase text-gray-400">Prix Unitaire HT</span>
+                        <span className="font-mono font-black text-sm text-[#003366]">
+                          {basePrice.toLocaleString('fr-FR')} FCFA
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const weightKg = parseWeightToKg(prod.weight) || 1;
+                            const wf = catalogService.getProductWarehouseAndFreight(prod, weightKg);
+                            const method = isSourcing ? wf.defaultClientMethod : 'none';
+                            const fCost = isSourcing ? (method === 'air' ? wf.airFreightCost : wf.seaFreightCost) : 0;
+                            addItem({
+                              productId: prod.id,
+                              name: prod.name,
+                              price: basePrice,
+                              costPrice: prod.costPrice,
+                              supplierPrice: prod.supplierPrice,
+                              supplierCurrency: prod.supplierCurrency,
+                              supplierId: prod.supplierId,
+                              supplierName: prod.supplierName,
+                              brand: prod.brand,
+                              origin: prod.origin,
+                              quantity: 1,
+                              img: prod.img,
+                              weightKg,
+                              inStock: !isSourcing,
+                              availabilityMode: isSourcing ? 'sourcing' : 'stock',
+                              shippingMethod: method,
+                              freightCost: fCost,
+                              seaFreightCostXOF: wf.seaFreightCost,
+                              airFreightCostXOF: wf.airFreightCost
+                            });
+                            triggerToast(`"${prod.name}" ajouté au panier.`);
+                          }}
+                          className="flex-1 bg-[#003366] hover:bg-[#002244] text-white py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                        >
+                          <ShoppingCart className="w-3.5 h-3.5" />
+                          <span>Ajouter au panier</span>
+                        </button>
+                        <Link
+                          to={`/product/${prod.id}`}
+                          className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-xs font-bold transition-colors"
+                        >
+                          Fiche
+                        </Link>
                       </div>
                     </div>
                   </div>
@@ -896,23 +1196,43 @@ export default function Account() {
 
               <div>
                 <label className="block font-bold text-gray-700 uppercase mb-1">
-                  Ville de Livraison au Sénégal
+                  Pays de Livraison par Défaut *
                 </label>
                 <select
-                  value={city}
-                  onChange={e => setCity(e.target.value)}
-                  className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
+                  value={defaultCountry}
+                  onChange={e => setDefaultCountry(e.target.value)}
+                  className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs font-bold text-[#003366] focus:outline-none focus:border-[#003366] bg-white"
                 >
-                  <option value="Dakar">Dakar</option>
-                  <option value="Thiès">Thiès</option>
-                  <option value="Saint-Louis">Saint-Louis</option>
-                  <option value="Mbour">Mbour / Saly</option>
-                  <option value="Kaolack">Kaolack</option>
-                  <option value="Autre Région">Autre Région du Sénégal</option>
+                  <optgroup label="Pays pris en charge de base par la livraison">
+                    {(siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).map(c => (
+                      <option key={`sup-${c}`} value={c}>{c} (Livraison prise en charge)</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Tous les pays">
+                    {WORLD_COUNTRIES.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </optgroup>
                 </select>
+                <span className="text-[10px] text-gray-500 mt-1 block">
+                  Utilisé automatiquement lors de vos commandes si aucun autre pays n'est renseigné.
+                </span>
               </div>
 
               <div>
+                <label className="block font-bold text-gray-700 uppercase mb-1">
+                  Ville de Livraison ({defaultCountry || 'Sénégal'})
+                </label>
+                <input
+                  type="text"
+                  value={city}
+                  onChange={e => setCity(e.target.value)}
+                  placeholder="Ex: Dakar, Abidjan, Bamako..."
+                  className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
                 <label className="block font-bold text-gray-700 uppercase mb-1">
                   Adresse Précise de Livraison
                 </label>
@@ -1017,6 +1337,19 @@ export default function Account() {
               <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl font-semibold flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 <span>{otpError}</span>
+              </div>
+            )}
+
+            {generatedFallbackOtp && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs">
+                <span className="font-bold text-amber-900">Code de validation directe :</span>
+                <button
+                  type="button"
+                  onClick={() => setOtpCode(generatedFallbackOtp)}
+                  className="px-2.5 py-1 bg-amber-600 text-white rounded-lg font-mono font-black cursor-pointer"
+                >
+                  {generatedFallbackOtp}
+                </button>
               </div>
             )}
 

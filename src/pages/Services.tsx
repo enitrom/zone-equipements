@@ -67,17 +67,17 @@ export default function Services() {
     fr: {
       badge: "INGÉNIERIE D'APPROVISIONNEMENT & LOGISTIQUE B2B",
       heroTitle: "Nos Services Industriels & Logistiques",
-      heroSub: "De la recherche d'équipements rares auprès des constructeurs mondiaux jusqu'au dédouanement et à la livraison sur votre site au Sénégal et en Afrique de l'Ouest.",
+      heroSub: "De la recherche d'équipements rares auprès des constructeurs mondiaux jusqu'au transport international et à la livraison sur site. Dédouanement autonome au choix du client ou accompagnement dédié selon vos exigences logistiques.",
       ctaQuote: "Demander un Sourcing Spécifique",
       ctaCatalog: "Explorer le Catalogue",
       metrics: [
         { val: "+500", label: "Constructeurs & Usines Certifiés (OEM)" },
-        { val: "24h - 48h", label: "Livraison sur Stock Local à Dakar" },
-        { val: "5 à 10 j", label: "Transit Aérien Express DAP Dakar" },
+        { val: "24h - 48h", label: "Livraison sur Stock Local" },
+        { val: "5 à 10 j", label: "Transit Aérien Express" },
         { val: "100%", label: "Conformité CE / ISO & Garantie 12 Mois" }
       ],
       pillarsTitle: "Une Chaîne d'Approvisionnement Complète & Sécurisée",
-      pillarsSub: "Zone Équipements Sénégal sécurise chaque étape technique, logistique et douanière de vos achats industriels MRO, BTP, Mines et Énergie.",
+      pillarsSub: "Zone Équipements sécurise chaque étape technique et logistique de vos achats industriels MRO, BTP, Mines et Énergie.",
       pillars: [
         {
           icon: Search,
@@ -106,13 +106,14 @@ export default function Services() {
         {
           icon: Truck,
           color: "bg-[#003366]",
-          tag: "Transit & Douane",
-          title: "3. Logistique Internationale & Dédouanement DAP Dakar",
-          desc: "Nous gérons de bout en bout le transport international, le transit et les formalités douanières. Vous recevez votre matériel prêt à l'emploi à Dakar ou sur votre site industriel.",
+          tag: "Logistique & Fret",
+          title: "3. Logistique Internationale & Fret Partenaires",
+          desc: "Nous coordonnons l'acheminement international par fret aérien ou maritime avec nos compagnies partenaires. Les barèmes de fret dépendent des grilles tarifaires réelles de nos transporteurs. Le dédouanement à destination peut être géré en direct par le client ou confié à un transitaire agréé.",
           points: [
             `Fret Aérien Express (${settings.airFreightDurationDays || '5 à 10 jours'}) pour les urgences MRO et pièces critiques`,
             `Fret Maritime Économique (${settings.seaFreightDurationDays || '30 à 45 jours'}) au poids ou au volume (m³) pour charges lourdes`,
-            "Prise en charge complète du dédouanement, sans frais cachés"
+            "Tarifs de fret indexés sur les barèmes réels de nos compagnies logistiques partenaires (maritimes et aériennes)",
+            "Dédouanement à destination : gestion autonome par le client ou accompagnement dédié"
           ]
         },
         {
@@ -166,8 +167,8 @@ export default function Services() {
         { num: "01", title: "Sélection ou Demande", desc: "Choisissez vos articles en stock ou à sourcer sur le catalogue, ou transmettez-nous votre référence / lien fournisseur." },
         { num: "02", title: "Devis Proforma < 24h", desc: "Validation technique, calcul exact du fret (aérien ou maritime) et émission de votre facture Proforma officielle TTC ou HT." },
         { num: "03", title: "Validation & Inspection", desc: "Dès confirmation (ou versement de l'acompte), nous auditons, testons et réceptionnons le matériel dans notre hub export." },
-        { num: "04", title: "Transit & Douane", desc: "Acheminement sécurisé par avion ou navire jusqu'à Dakar avec prise en charge intégrale des formalités douanières." },
-        { num: "05", title: "Livraison sur Site", desc: "Réception à notre entrepôt de Dakar ou livraison directe sur votre chantier / usine avec bon de livraison et garantie." }
+        { num: "04", title: "Transit & Logistique", desc: "Acheminement sécurisé par avion ou navire avec nos compagnies partenaires. Dédouanement autonome par le client ou accompagnement dédié." },
+        { num: "05", title: "Livraison sur Site", desc: "Réception à l'entrepôt ou livraison directe sur votre chantier / usine avec liasse documentaire d'origine et garantie." }
       ],
       formTitle: "Formulaire de Sourcing sur Demande & Devis Spécifique",
       formSub: "Vous avez une référence précise, une liste d'équipements ou un lien fournisseur (Alibaba, Europe, USA) ? Recevez votre cotation chiffrée sous 24h.",
@@ -178,8 +179,8 @@ export default function Services() {
           a: "Chaque fiche produit et carte du catalogue affiche clairement un badge vert « Disponible immédiatement • Stock Dakar » (livraison 24-48h sans frais de fret international) ou un badge orange « Article à sourcer • Sur commande » qui active le calculateur de fret aérien ou maritime."
         },
         {
-          q: "Y a-t-il des frais de douane supplémentaires à payer à l'arrivée à Dakar ?",
-          a: "Non. Lorsque vous sélectionnez l'option d'acheminement par Fret Aérien ou Fret Maritime DAP Dakar, les frais de transit et de dédouanement standard sont intégrés. Le montant de votre facture Proforma est ferme et transparent."
+          q: "Comment s'organisent les frais de fret et les formalités de dédouanement ?",
+          a: "Les tarifs de fret (actuels ou futures mises à jour) dépendent entièrement des barèmes réels appliqués par nos prestataires logistiques maritimes et aériens. Le dédouanement à l'arrivée peut être géré en toute autonomie par le client (avec mise à disposition de toutes les factures et certificats d'origine) ou confié à un transitaire partenaire."
         },
         {
           q: "Puis-je commander un produit trouvé sur Alibaba ou chez un fabricant européen ?",

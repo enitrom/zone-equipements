@@ -2,14 +2,14 @@ import { useState, useEffect, FormEvent } from 'react';
 import { 
   Search, Filter, ShoppingCart, ArrowUpDown, Star, Plus, CheckCircle2, 
   Package, ChevronRight, ChevronDown, Truck, Clock, ShieldCheck, 
-  LayoutGrid, List, ArrowRight, ExternalLink, RefreshCw, Eye, Check, Info, FileText, X
+  LayoutGrid, List, ArrowRight, ExternalLink, RefreshCw, Eye, Check, Info, FileText, X, Heart
 } from 'lucide-react';
 import * as Icons from 'lucide-react';
 import { useCart } from '../CartContext';
 import { useAuth } from '../AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
 import { Product, getProductImageUrl, handleImageError, DEFAULT_HERO_IMAGE } from '../constants';
-import { catalogService, ExtendedProduct, cleanBrand, getEffectiveProductBasePrice, isProductSourcing, parseWeightToKg } from '../services/catalogService';
+import { catalogService, ExtendedProduct, cleanBrand, getEffectiveProductBasePrice, isProductSourcing, parseWeightToKg, getCleanProvenanceDisplay } from '../services/catalogService';
 import { siteSettingsService, CategoryItem } from '../services/siteSettingsService';
 import { useLanguage } from '../LanguageContext';
 import { analyticsTracker } from '../services/analyticsTracker';
@@ -87,8 +87,22 @@ export default function Shop() {
   };
 
   const { addItem } = useCart();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const navigate = useNavigate();
+  const [likedIds, setLikedIds] = useState<number[]>(() => catalogService.getLikedProductIds());
+
+  useEffect(() => {
+    const syncLiked = () => setLikedIds(catalogService.getLikedProductIds());
+    window.addEventListener('ze_liked_products_updated', syncLiked);
+    return () => window.removeEventListener('ze_liked_products_updated', syncLiked);
+  }, []);
+
+  useEffect(() => {
+    const effCountry = catalogService.getEffectiveClientCountry(profile);
+    if (effCountry) {
+      setClientCountry(effCountry);
+    }
+  }, [profile]);
 
   // Populate dynamic filters based on full PRODUCTS catalog and global MRO categories
   const availableBrands = (() => {
@@ -831,11 +845,13 @@ export default function Shop() {
               {sortedProducts.map((rawProduct) => {
                 const product = translateProduct(rawProduct);
                 const isComparing = compareList.includes(product.id);
+                const isLiked = likedIds.includes(Number(product.id));
                 const isQuickView = quickViewId === product.id;
                 const displayBasePrice = getEffectiveProductBasePrice(rawProduct as any);
                 
-                // B2B West African VAT simulator
-                const activeVatRate = (rawProduct as any).applyVat !== false ? ((rawProduct as any).vatRate ?? siteSettings.defaultVatRate ?? 0.18) : 0;
+                // B2B West African VAT simulator: only active if vatEnabled is true AND vatRate > 0 AND applyVat !== false
+                const isVatActive = (siteSettings.vatEnabled !== false) && ((siteSettings.vatRate || 0) > 0) && ((rawProduct as any).applyVat !== false);
+                const activeVatRate = isVatActive ? ((rawProduct as any).vatRate ?? siteSettings.defaultVatRate ?? 0.18) : 0;
                 const vatAmt = Math.round(displayBasePrice * activeVatRate);
                 const priceTtc = displayBasePrice + vatAmt;
                 const isSourcing = isProductSourcing(rawProduct as any);
@@ -845,12 +861,23 @@ export default function Shop() {
                   return (
                     <div key={product.id} className="bg-white rounded-xl shadow-xs border border-gray-200 overflow-hidden group hover:shadow-md transition-all duration-300 flex flex-col justify-between">
                       <div>
-                        {/* Top Banner Row */}
+                        {/* Top Banner Row: Brand and Provenance badges */}
                         <div className="bg-gray-50 border-b border-gray-100 px-3 py-2 flex items-center justify-between text-[10px] font-mono">
-                          <span className="font-bold text-[#003366] bg-blue-50 px-2 py-0.5 rounded">
-                            {cleanBrand(product.brand, product.name)}
-                          </span>
-                          <span className="text-gray-400">Ref: {product.ref}</span>
+                          <div className="flex flex-col gap-1 items-start min-w-0">
+                            <span className="font-bold text-[#003366] bg-blue-50 px-2 py-0.5 rounded truncate max-w-[150px]">
+                              {cleanBrand(product.brand, product.name)}
+                            </span>
+                            {(() => {
+                              const cleanProv = getCleanProvenanceDisplay(product.origin, (product as any).supplierCountry, (product as any).sourcePlatform);
+                              if (!cleanProv) return null;
+                              return (
+                                <span className="inline-flex items-center gap-1 font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded text-[8px] sm:text-[9px] tracking-wide">
+                                  📍 {cleanProv}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                          <span className="text-gray-400 shrink-0">Ref: {product.ref}</span>
                         </div>
 
                         {/* Image Frame */}
@@ -862,18 +889,36 @@ export default function Shop() {
                             referrerPolicy="no-referrer"
                             onError={handleImageError}
                           />
-                          <button 
-                            type="button"
-                            onClick={(e) => { e.preventDefault(); toggleCompare(product.id); }}
-                            className={`absolute top-2 right-2 p-1.5 rounded-full shadow-sm transition-all border ${
-                              isComparing 
-                                ? 'bg-[#FF6600] text-white border-[#FF6600]' 
-                                : 'bg-white/90 text-gray-500 border-gray-200 hover:text-[#003366]'
-                            }`}
-                            title="Comparer"
-                          >
-                            <Plus className={`w-3.5 h-3.5 ${isComparing ? 'rotate-45' : ''} transition-transform`} />
-                          </button>
+                          <div className="absolute top-2 right-2 flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                catalogService.toggleLikedProduct(product.id, user?.uid);
+                                setLikedIds(catalogService.getLikedProductIds());
+                              }}
+                              className={`p-1.5 rounded-full shadow-sm transition-all border ${
+                                isLiked
+                                  ? 'bg-rose-50 text-rose-500 border-rose-200'
+                                  : 'bg-white/90 text-gray-400 border-gray-200 hover:text-rose-500'
+                              }`}
+                              title={isLiked ? 'Retirer des produits aimés' : 'Ajouter aux produits aimés'}
+                            >
+                              <Heart className={`w-3.5 h-3.5 ${isLiked ? 'fill-rose-500 text-rose-500' : ''}`} />
+                            </button>
+                            <button 
+                              type="button"
+                              onClick={(e) => { e.preventDefault(); toggleCompare(product.id); }}
+                              className={`p-1.5 rounded-full shadow-sm transition-all border ${
+                                isComparing 
+                                  ? 'bg-[#FF6600] text-white border-[#FF6600]' 
+                                  : 'bg-white/90 text-gray-500 border-gray-200 hover:text-[#003366]'
+                              }`}
+                              title="Comparer"
+                            >
+                              <Plus className={`w-3.5 h-3.5 ${isComparing ? 'rotate-45' : ''} transition-transform`} />
+                            </button>
+                          </div>
                         </Link>
 
                         {/* Essential Info Only (Refined Typography) */}
@@ -907,41 +952,49 @@ export default function Shop() {
                         </div>
                       </div>
 
-                      {/* Pricing and Superposed Action buttons footer */}
-                      <div className="border-t border-gray-100 bg-gray-50/60 p-3.5 flex items-center justify-between gap-3">
-                        {/* Left: Price with spacious margin */}
-                        <div className="flex flex-col min-w-0 pr-1">
+                      {/* Pricing and Action buttons footer */}
+                      <div className="border-t border-gray-100 bg-gray-50/60 p-3.5 flex items-center justify-between gap-2">
+                        {/* Left: Price respecting VAT settings */}
+                        <div className="flex flex-col min-w-0 pr-2">
                           <span className="text-[10px] text-gray-400 font-medium">Prix unitaire</span>
                           <div className="flex items-baseline gap-1">
                             <span className="text-base sm:text-lg font-bold text-[#003366] font-mono leading-tight">
-                              {displayBasePrice.toLocaleString('fr-FR')}
+                              {displayBasePrice > 0 ? displayBasePrice.toLocaleString('fr-FR') : 'Sur devis'}
                             </span>
-                            <span className="text-[10px] font-semibold text-gray-500">FCFA HT</span>
+                            {displayBasePrice > 0 && (
+                              <span className="text-[10px] font-semibold text-gray-500">
+                                {isVatActive ? 'FCFA HT' : 'FCFA'}
+                              </span>
+                            )}
                           </div>
-                          <span className="text-[10px] font-mono text-gray-400">
-                            {priceTtc.toLocaleString('fr-FR')} TTC
-                          </span>
+                          {isVatActive && displayBasePrice > 0 && (
+                            <span className="text-[10px] font-mono text-gray-400">
+                              {priceTtc.toLocaleString('fr-FR')} TTC
+                            </span>
+                          )}
                         </div>
 
-                        {/* Right: Superposed buttons */}
-                        <div className="flex flex-col gap-1.5 shrink-0 w-28 sm:w-32">
-                          <button 
-                            type="button"
-                            onClick={() => handleAddToCart(rawProduct)}
-                            className="w-full bg-[#003366] hover:bg-[#002244] text-white py-1.5 px-2.5 rounded-lg text-[10px] font-semibold transition-all flex items-center justify-center gap-1 shadow-2xs active:scale-95 cursor-pointer whitespace-nowrap"
-                          >
-                            <ShoppingCart className="w-3 h-3" />
-                            <span>{t('add_to_cart_btn')}</span>
-                          </button>
-                          
-                          <button 
-                            type="button"
-                            onClick={() => openQuoteModal(rawProduct)}
-                            className="w-full bg-white hover:bg-orange-50 text-[#FF6600] border border-[#FF6600] py-1.5 px-2.5 rounded-lg text-[10px] font-semibold transition-all flex items-center justify-center gap-1 shadow-2xs cursor-pointer whitespace-nowrap"
-                          >
-                            <FileText className="w-3 h-3" />
-                            <span>{t('quote_pro_btn')}</span>
-                          </button>
+                        {/* Right: Enlarged action button (Solo: Cart if price, Quote if no price) */}
+                        <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
+                          {displayBasePrice > 0 ? (
+                            <button 
+                              type="button"
+                              onClick={() => handleAddToCart(rawProduct)}
+                              className="bg-[#003366] hover:bg-[#002244] text-white py-2 px-3 sm:px-3.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer whitespace-nowrap"
+                            >
+                              <ShoppingCart className="w-3.5 h-3.5" />
+                              <span>{t('add_to_cart_btn')}</span>
+                            </button>
+                          ) : (
+                            <button 
+                              type="button"
+                              onClick={() => openQuoteModal(rawProduct)}
+                              className="bg-[#FF6600] hover:bg-[#e65c00] text-white py-2 px-3 sm:px-3.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer whitespace-nowrap"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>{t('quote_pro_btn')}</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -953,7 +1006,7 @@ export default function Shop() {
                   <div key={product.id} className="bg-white rounded-xl shadow-xs border border-gray-200 overflow-hidden group hover:border-gray-300 transition-all duration-300">
                     <div className="flex flex-col lg:flex-row lg:items-center lg:flex-nowrap p-3.5 sm:p-4 gap-3.5 lg:gap-5">
                       
-                      {/* Image block */}
+                      {/* Image block with Brand & Origin badges */}
                       <Link to={`/product/${product.id}`} className="w-full sm:w-36 lg:w-40 h-32 sm:h-32 flex-shrink-0 relative bg-gray-50 rounded-lg overflow-hidden border border-gray-100 flex items-center justify-center p-2">
                         <img 
                           src={getProductImageUrl(product.img)} 
@@ -962,20 +1015,50 @@ export default function Shop() {
                           referrerPolicy="no-referrer"
                           onError={handleImageError}
                         />
-                        <div className="absolute top-1.5 left-1.5 bg-white/95 border border-gray-200 backdrop-blur-md px-2 py-0.5 rounded text-[8px] font-bold text-[#003366] uppercase tracking-wider shadow-xs">
-                          {cleanBrand(product.brand, product.name)}
+                        <div className="absolute top-1.5 left-1.5 flex flex-col gap-1 items-start">
+                          <div className="bg-white/95 border border-gray-200 backdrop-blur-md px-2 py-0.5 rounded text-[8px] font-bold text-[#003366] uppercase tracking-wider shadow-xs">
+                            {cleanBrand(product.brand, product.name)}
+                          </div>
+                          {(() => {
+                            const cleanProv = getCleanProvenanceDisplay(product.origin, (product as any).supplierCountry, (product as any).sourcePlatform);
+                            if (!cleanProv) return null;
+                            return (
+                              <div className="bg-emerald-50/95 border border-emerald-200 backdrop-blur-md px-1.5 py-0.5 rounded text-[8px] font-bold text-emerald-800 shadow-xs">
+                                📍 {cleanProv}
+                              </div>
+                            );
+                          })()}
                         </div>
-                        <button 
-                          type="button"
-                          onClick={(e) => { e.preventDefault(); toggleCompare(product.id); }}
-                          className={`absolute top-1.5 right-1.5 p-1 rounded-full shadow-xs transition-all border ${
-                            isComparing 
-                              ? 'bg-[#FF6600] text-white border-[#FF6600]' 
-                              : 'bg-white/80 text-gray-400 border-white hover:text-[#003366]'
-                          }`}
-                        >
-                          <Plus className={`w-3 h-3 ${isComparing ? 'rotate-45' : ''} transition-transform`} />
-                        </button>
+                        <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              catalogService.toggleLikedProduct(product.id, user?.uid);
+                              setLikedIds(catalogService.getLikedProductIds());
+                            }}
+                            className={`p-1 rounded-full shadow-xs transition-all border ${
+                              isLiked
+                                ? 'bg-rose-50 text-rose-500 border-rose-200'
+                                : 'bg-white/80 text-gray-400 border-white hover:text-rose-500'
+                            }`}
+                            title={isLiked ? 'Retirer des produits aimés' : 'Ajouter aux produits aimés'}
+                          >
+                            <Heart className={`w-3 h-3 ${isLiked ? 'fill-rose-500 text-rose-500' : ''}`} />
+                          </button>
+                          <button 
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); toggleCompare(product.id); }}
+                            className={`p-1 rounded-full shadow-xs transition-all border ${
+                              isComparing 
+                                ? 'bg-[#FF6600] text-white border-[#FF6600]' 
+                                : 'bg-white/80 text-gray-400 border-white hover:text-[#003366]'
+                            }`}
+                            title="Comparer"
+                          >
+                            <Plus className={`w-3 h-3 ${isComparing ? 'rotate-45' : ''} transition-transform`} />
+                          </button>
+                        </div>
                       </Link>
 
                       {/* Essential Info block */}
@@ -1031,42 +1114,50 @@ export default function Shop() {
                         </div>
                       </div>
 
-                      {/* Streamlined Pricing & Superposed Action column */}
+                      {/* Streamlined Pricing & Action column */}
                       <div className="w-full lg:w-56 flex-shrink-0 border-t lg:border-t-0 lg:border-l border-gray-100 pt-3 lg:pt-0 lg:pl-5 flex flex-row lg:flex-col items-center lg:items-stretch justify-between gap-3">
-                        <div className="space-y-0.5 lg:mb-2 min-w-0 pr-1">
+                        <div className="space-y-0.5 lg:mb-2 min-w-0 pr-2">
                           <span className="hidden lg:block text-[9px] font-semibold text-gray-400 uppercase tracking-widest">
                             {translateText('PRIX COMPTOIR PROFESSIONNEL')}
                           </span>
                           <div className="flex items-baseline gap-1">
                             <span className="text-base sm:text-lg font-mono font-bold text-[#003366]">
-                              {displayBasePrice.toLocaleString('fr-FR')}
+                              {displayBasePrice > 0 ? displayBasePrice.toLocaleString('fr-FR') : 'Sur devis'}
                             </span>
-                            <span className="text-[10px] font-semibold text-gray-500">FCFA HT</span>
+                            {displayBasePrice > 0 && (
+                              <span className="text-[10px] font-semibold text-gray-500">
+                                {isVatActive ? 'FCFA HT' : 'FCFA'}
+                              </span>
+                            )}
                           </div>
-                          <span className="block text-[10px] text-gray-400 font-mono">
-                            {priceTtc.toLocaleString('fr-FR')} FCFA TTC
-                          </span>
+                          {isVatActive && displayBasePrice > 0 && (
+                            <span className="block text-[10px] text-gray-400 font-mono">
+                              {priceTtc.toLocaleString('fr-FR')} FCFA TTC
+                            </span>
+                          )}
                         </div>
 
-                        {/* Superposed B2B Action Buttons */}
-                        <div className="flex flex-col gap-1.5 w-28 sm:w-32 lg:w-full shrink-0">
-                          <button 
-                            type="button"
-                            onClick={() => handleAddToCart(rawProduct)}
-                            className="w-full bg-[#003366] hover:bg-[#002244] text-white py-1.5 px-3 rounded-lg text-[10px] font-semibold transition-all flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap cursor-pointer active:scale-95"
-                          >
-                            <ShoppingCart className="w-3 h-3" />
-                            <span>{t('add_to_cart_btn')}</span>
-                          </button>
-                          
-                          <button 
-                            type="button"
-                            onClick={() => openQuoteModal(rawProduct)}
-                            className="w-full bg-white hover:bg-orange-50 text-[#FF6600] border border-[#FF6600] py-1.5 px-3 rounded-lg text-[10px] font-semibold transition-all flex items-center justify-center gap-1.5 shadow-2xs whitespace-nowrap cursor-pointer"
-                          >
-                            <FileText className="w-3 h-3" />
-                            <span>{t('quote_pro_btn')}</span>
-                          </button>
+                        {/* Enlarged Action Buttons: side by side or solo, aligned right */}
+                        <div className="flex items-center justify-end gap-2 shrink-0 ml-auto w-auto">
+                          {displayBasePrice > 0 ? (
+                            <button 
+                              type="button"
+                              onClick={() => handleAddToCart(rawProduct)}
+                              className="bg-[#003366] hover:bg-[#002244] text-white py-2 px-3.5 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap cursor-pointer active:scale-95"
+                            >
+                              <ShoppingCart className="w-3.5 h-3.5" />
+                              <span>{t('add_to_cart_btn')}</span>
+                            </button>
+                          ) : (
+                            <button 
+                              type="button"
+                              onClick={() => openQuoteModal(rawProduct)}
+                              className="bg-[#FF6600] hover:bg-[#e65c00] text-white py-2 px-3.5 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap cursor-pointer"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>{t('quote_pro_btn')}</span>
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -1190,7 +1281,7 @@ export default function Shop() {
                       const p = allCatalogProducts.find(item => item.id === id) || catalogService.getProductById(id);
                       return (
                         <td key={id} className="p-4 border-b border-gray-50 text-center font-bold text-[#003366]">
-                          {p?.origin || 'International'}
+                          {getCleanProvenanceDisplay(p?.origin, (p as any)?.supplierCountry, (p as any)?.sourcePlatform) || 'Origine Certifiée'}
                         </td>
                       );
                     })}

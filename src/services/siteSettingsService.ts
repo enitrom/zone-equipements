@@ -1,6 +1,7 @@
 import { CATEGORIES } from '../constants';
 import { db, auth } from '../firebase';
 import { doc, onSnapshot, setDoc, collection, getDocs, query, where, updateDoc } from 'firebase/firestore';
+import { DEFAULT_SUPPORTED_DELIVERY_COUNTRIES } from '../utils/countries';
 
 export interface SubcategoryItem {
   name: string;
@@ -132,6 +133,9 @@ export interface SiteSettings {
   defaultVatRate?: number; // En décimal ex: 0.18 (synchronisé automatiquement avec vatRate)
   applyVatByDefault?: boolean;
   defaultMarginPercentage: number;
+  systemFreightEnabled?: boolean; // Si false, désactive les paramètres de fret système (et toujours ignorés lorsqu'un entrepôt est assigné)
+  supportedDeliveryCountries?: string[]; // Pays pris en charge par défaut pour la livraison client
+  defaultClientCountry?: string; // Pays par défaut du client (ex: Sénégal)
   airFreightPerKg: number;
   airFreightPerKgXOF?: number;
   airFreightMin: number;
@@ -272,13 +276,16 @@ function normalizePromoCode(p: Partial<PromoCode> & { code: string }): PromoCode
 
 const DEFAULT_SETTINGS: SiteSettings = {
   heroTitle: "Fournitures Industrielles & MRO en Afrique de l'Ouest",
-  heroSubtitle: "Sourcing direct auprès des plus grands fabricants mondiaux. Livraison dédouanée (DDP) à Dakar et dans toute la sous-région.",
+  heroSubtitle: "Sourcing direct auprès des plus grands fabricants mondiaux. Fret maritime & aérien international avec barèmes logistiques partenaires.",
   heroBgImage: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?w=1920&auto=format&fit=crop&q=80",
   vatRate: 18,
   vatEnabled: true,
   defaultVatRate: 0.18,
   applyVatByDefault: true,
   defaultMarginPercentage: 35,
+  systemFreightEnabled: true,
+  supportedDeliveryCountries: [...DEFAULT_SUPPORTED_DELIVERY_COUNTRIES],
+  defaultClientCountry: 'Sénégal',
   airFreightPerKg: 7000,
   airFreightPerKgXOF: 7000,
   airFreightMin: 7000,
@@ -328,7 +335,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   homeSectionsOrder: ['hero', 'features', 'delivery', 'sectors', 'categories', 'brands', 'testimonials', 'articles', 'faq'],
   logisticsBadge: "Logistique & Fret Aérien / Maritime",
   logisticsTitle: "Hub Logistique Dakar & Couverture Panafricaine",
-  logisticsSubtitle: "Acheminement direct depuis nos usines partenaires en Europe, Asie et Amérique vers le Sénégal et toute l'Afrique avec dédouanement complet.",
+  logisticsSubtitle: "Acheminement direct depuis nos usines partenaires en Europe, Asie et Amérique vers le Sénégal et toute l'Afrique. Tarifs de fret indexés sur les barèmes transporteurs réels.",
   logisticsRegions: [
     { name: "Afrique de l'Ouest", countries: "Sénégal, Côte d'Ivoire, Mali, Guinée, Mauritanie, Burkina Faso, Togo, Bénin, Niger, Ghana, Nigeria" },
     { name: "Afrique Centrale", countries: "Cameroun, Gabon, Congo, RDC, Tchad, Guinée Équatoriale, RCA" },
@@ -351,7 +358,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   faqSubtitle: "Tout ce que vous devez savoir sur nos modalités de commande, devis, livraisons et garanties.",
 
   // Footer defaults
-  footerBioText: "Fournisseur d'équipements industriels et de matériel technique au Sénégal et en Afrique de l'Ouest. Sourcing direct constructeurs et livraison dédouanée.",
+  footerBioText: "Fournisseur d'équipements industriels et de matériel technique au Sénégal et en Afrique de l'Ouest. Sourcing constructeurs directs et logistique sécurisée.",
   footerBadges: ["MRO Certified", "Africa Delivery", "Sourcing Direct"],
   footerLinksTitle: "Navigation & Sourcing",
   footerLinks: [

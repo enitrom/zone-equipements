@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Truck, DollarSign, Globe, Phone, Mail, Shield, Check, Building2, Package, Warehouse } from 'lucide-react';
 import { Supplier, AgentWarehouse, catalogService, formatWarehouseConsigneeLine, formatWarehouseFullAddress } from '../../services/catalogService';
 import { ConfirmModal } from './ConfirmModal';
+import { WORLD_COUNTRIES, resolveCanonicalCountryName } from '../../utils/countries';
 
 interface Props {
   isOpen: boolean;
@@ -78,7 +79,24 @@ export const SupplierManagerModal: React.FC<Props> = ({
 
   if (!isOpen) return null;
 
-  const defaultWh = warehouses.find(w => w.isDefault) || warehouses[0];
+  const liveSupplierGeo = catalogService.inferEntityCountryWithFallback({
+    name: form.name,
+    platform: form.platform,
+    phone: form.contactPhone,
+    email: form.contactEmail,
+    url: form.websiteUrl,
+    fallbackCountry: form.country
+  });
+
+  const closestMatch = catalogService.findClosestAgentWarehouse({
+    country: form.country,
+    platform: form.platform,
+    supplierName: form.name,
+    supplierPhone: form.contactPhone,
+    supplierUrl: form.websiteUrl,
+    currency: form.currency
+  });
+  const defaultWh = closestMatch?.warehouse || warehouses.find(w => w.isDefault) || warehouses[0];
   const selectedWh = form.agentWarehouseId
     ? warehouses.find(w => w.id === form.agentWarehouseId) || defaultWh
     : defaultWh;
@@ -90,9 +108,14 @@ export const SupplierManagerModal: React.FC<Props> = ({
       return;
     }
     const days = Number(form.avgLeadTimeDays) || parseInt(String(form.leadTimeAvg || '14'), 10) || 14;
+    const resolvedWhId = form.agentWarehouseId || closestMatch?.warehouse?.id || defaultWh?.id;
+    const effectiveSupplierCountry = liveSupplierGeo.aiConfident
+      ? liveSupplierGeo.country
+      : (resolveCanonicalCountryName(form.country) || form.country || liveSupplierGeo.country || 'Chine');
     const cleanSupplier: Partial<Supplier> = {
       ...form,
       name: form.name.trim(),
+      country: effectiveSupplierCountry,
       avgLeadTimeDays: days,
       leadTimeAvg: `${days} jours`,
       circuit: form.isAutomatedCircuit ? 'automatisé' : 'manuel',
@@ -103,7 +126,7 @@ export const SupplierManagerModal: React.FC<Props> = ({
       paymentTerms: (form.paymentTerms || '30% acompte, 70% avant expédition').trim(),
       contactPhone: (form.contactPhone || '').trim(),
       contactEmail: (form.contactEmail || '').trim(),
-      agentWarehouseId: form.agentWarehouseId ? form.agentWarehouseId : undefined
+      agentWarehouseId: resolvedWhId
     };
 
     if (supplierToEdit) {
@@ -182,15 +205,26 @@ export const SupplierManagerModal: React.FC<Props> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1">
-                Pays d'Origine
+                Pays du Fournisseur (Secours si l'IA est confuse)
               </label>
-              <input
-                type="text"
-                value={form.country || ''}
+              <select
+                value={resolveCanonicalCountryName(form.country) || form.country || 'Chine'}
                 onChange={(e) => setForm({ ...form, country: e.target.value })}
-                placeholder="Ex: Chine, Allemagne, USA, Turquie..."
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
-              />
+              >
+                {WORLD_COUNTRIES.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+              {liveSupplierGeo.aiConfident ? (
+                <p className="text-[11px] text-emerald-400 mt-1 font-medium">
+                  🤖 IA active : <strong>{liveSupplierGeo.country}</strong> détecté automatiquement. (La liste ne sert qu'en cas de doute de l'IA).
+                </p>
+              ) : (
+                <p className="text-[11px] text-amber-400 mt-1 font-medium">
+                  ⚠️ IA sans indice clair : le pays sélectionné (<strong>{resolveCanonicalCountryName(form.country) || form.country}</strong>) est utilisé en secours.
+                </p>
+              )}
             </div>
 
             <div>
@@ -370,7 +404,7 @@ export const SupplierManagerModal: React.FC<Props> = ({
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-[#FF6600]"
               >
                 <option value="">
-                  ★ Entrepôt par Défaut ({defaultWh ? `${defaultWh.name} — ${defaultWh.identificationMode === 'standard_address' ? [defaultWh.firstName, defaultWh.lastName].filter(Boolean).join(' ') : defaultWh.agentCode}` : 'Standard'})
+                  ⚡ Auto — Entrepôt le plus proche ({defaultWh ? `${defaultWh.name} — ${defaultWh.identificationMode === 'standard_address' ? [defaultWh.firstName, defaultWh.lastName].filter(Boolean).join(' ') : defaultWh.agentCode}` : 'Standard'})
                 </option>
                 {warehouses.map(wh => (
                   <option key={wh.id} value={wh.id}>
@@ -382,10 +416,17 @@ export const SupplierManagerModal: React.FC<Props> = ({
               </select>
               {selectedWh && (
                 <div className="mt-1.5 p-2 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400">
-                  <div className="font-semibold text-orange-400">
-                    {selectedWh.identificationMode === 'standard_address' || !selectedWh.agentCode
-                      ? `Méthode Standard : ${formatWarehouseConsigneeLine(selectedWh)}`
-                      : `Code Agent : ${selectedWh.agentCode}+SEA / ${selectedWh.agentCode}+AIR`}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-orange-400">
+                      {selectedWh.identificationMode === 'standard_address' || !selectedWh.agentCode
+                        ? `Méthode Standard : ${formatWarehouseConsigneeLine(selectedWh)}`
+                        : `Code Agent : ${selectedWh.agentCode}+SEA / ${selectedWh.agentCode}+AIR`}
+                    </span>
+                    {!form.agentWarehouseId && closestMatch?.matchReason && (
+                      <span className="text-[10px] text-emerald-400 font-semibold">
+                        ✓ {closestMatch.matchReason}
+                      </span>
+                    )}
                   </div>
                   <div className="truncate">{formatWarehouseFullAddress(selectedWh)} • Tél : {selectedWh.phone}</div>
                 </div>

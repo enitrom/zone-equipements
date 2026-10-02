@@ -13,15 +13,19 @@ import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import {
   Mail, Lock, LogIn, AlertCircle, Copy, Check,
-  KeyRound, RefreshCw, ArrowLeft, ShieldCheck, User, Info
+  KeyRound, RefreshCw, ArrowLeft, ShieldCheck, User, Info, Globe
 } from 'lucide-react';
 import { isUserAdmin } from '../AuthContext';
 import { siteSettingsService } from '../services/siteSettingsService';
+import { WORLD_COUNTRIES, DEFAULT_SUPPORTED_DELIVERY_COUNTRIES, resolveCanonicalCountryName } from '../utils/countries';
 
 export default function Login() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [defaultCountry, setDefaultCountry] = useState<string>(
+    () => siteSettingsService.getSettings()?.defaultClientCountry || 'Sénégal'
+  );
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
@@ -282,19 +286,33 @@ export default function Login() {
       }
 
       const role = isUserAdmin(cleanEmail) ? 'admin' : 'client';
+      const resolvedCountry = resolveCanonicalCountryName(defaultCountry) || 'Sénégal';
+      let localLikedIds: number[] = [];
+      try {
+        const rawLiked = localStorage.getItem('ze_liked_products_v1');
+        const parsed = rawLiked ? JSON.parse(rawLiked) : [];
+        if (Array.isArray(parsed)) localLikedIds = parsed.map((n: any) => Number(n)).filter(Boolean);
+      } catch {}
 
-      // Create user profile in Firestore with normalized email for future duplicate checks
+      // Create user profile in Firestore with normalized email and default country
       if (cred.user.uid) {
-        await setDoc(doc(db, 'users', cred.user.uid), {
+        const newProfile = {
           uid: cred.user.uid,
           email: cleanEmail,
           emailLower: cleanEmail,
           displayName: displayName.trim() || cred.user.displayName || cleanEmail.split('@')[0],
+          country: resolvedCountry,
+          city: resolvedCountry === 'Sénégal' ? 'Dakar' : '',
+          likedProductIds: localLikedIds,
           role,
           emailVerified: true,
           emailVerifiedCustom: true,
           createdAt: new Date().toISOString()
-        }, { merge: true }).catch(() => {});
+        };
+        await setDoc(doc(db, 'users', cred.user.uid), newProfile, { merge: true }).catch(() => {});
+        try {
+          localStorage.setItem('ze_user_profile_v1', JSON.stringify(newProfile));
+        } catch {}
       }
 
       checkAdminAndRedirect(cred.user.email);
@@ -395,19 +413,47 @@ export default function Login() {
         {step === 'form' ? (
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
             {!isLogin && (
-              <div>
-                <label className="block font-bold text-gray-700 uppercase mb-1">Nom Complet ou Société</label>
-                <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#FF6600] focus:border-transparent outline-none text-xs"
-                    placeholder="Ex: Babacar Sarr / Sahel BTP"
-                  />
+              <>
+                <div>
+                  <label className="block font-bold text-gray-700 uppercase mb-1">Nom Complet ou Société</label>
+                  <div className="relative">
+                    <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#FF6600] focus:border-transparent outline-none text-xs"
+                      placeholder="Ex: Babacar Sarr / Sahel BTP"
+                    />
+                  </div>
                 </div>
-              </div>
+
+                <div>
+                  <label className="block font-bold text-gray-700 uppercase mb-1">Pays par défaut (Livraison) *</label>
+                  <div className="relative">
+                    <Globe className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <select
+                      value={defaultCountry}
+                      onChange={(e) => setDefaultCountry(e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#FF6600] focus:border-transparent outline-none text-xs bg-white font-semibold"
+                    >
+                      <optgroup label="Pays pris en charge pour la livraison directe">
+                        {(siteSettingsService.getSettings()?.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).map(c => (
+                          <option key={`sup-${c}`} value={c}>{c} (Livraison prise en charge)</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Tous les pays">
+                        {WORLD_COUNTRIES.map(c => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    Ce pays sera utilisé automatiquement lors de vos commandes si vous n'en renseignez pas un nouveau.
+                  </p>
+                </div>
+              </>
             )}
 
             <div>

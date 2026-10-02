@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { siteSettingsService, SiteSettings, PromoCode, PaydunyaSettings } from '../../services/siteSettingsService';
 import { ImageUploadInput } from '../ImageUploadInput';
+import { WORLD_COUNTRIES, DEFAULT_SUPPORTED_DELIVERY_COUNTRIES } from '../../utils/countries';
 
 interface SiteSettingsManagerProps {
   onNotify: (msg: string) => void;
@@ -433,23 +434,46 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
           </div>
         </div>
 
-        {/* 3. Barèmes Logistiques & Fret International */}
+        {/* 3. Barèmes Logistiques & Fret International + Pays Livrés */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4 lg:col-span-2">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
             <div className="flex items-center gap-2.5">
               <Truck className="w-5 h-5 text-blue-400" />
-              <h3 className="font-bold text-white text-base">Barèmes Moyens de Fret & Transit Douanier (FCFA)</h3>
+              <div>
+                <h3 className="font-bold text-white text-base">Barèmes de Fret Système (Secours) & Pays de Livraison Pris en Charge</h3>
+                <p className="text-[11px] text-slate-400">
+                  Règle d'autonomie : Tant qu'un entrepôt est assigné à un fournisseur ou à un produit, ce sont exclusivement les tarifs et services de cet entrepôt qui s'appliquent (ces barèmes système sont automatiquement ignorés).
+                </p>
+              </div>
             </div>
-            <span className="text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-800/40 px-2.5 py-0.5 rounded-full font-semibold">
-              Affichage dynamique sur Fiche Produit, Panier, Import & Calculateur
-            </span>
+            <button
+              type="button"
+              onClick={() => {
+                const nextState = settings.systemFreightEnabled === false;
+                updateAndPersist({ systemFreightEnabled: nextState });
+                onNotify(
+                  nextState
+                    ? 'Paramètres de fret système activés (utilisés uniquement en secours si aucun entrepôt n’est assigné).'
+                    : 'Paramètres de fret système désactivés. Seuls les tarifs des entrepôts assignés aux fournisseurs/produits seront appliqués.'
+                );
+              }}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 ${
+                settings.systemFreightEnabled !== false
+                  ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40'
+                  : 'bg-rose-600/20 text-rose-300 border border-rose-500/40'
+              }`}
+            >
+              {settings.systemFreightEnabled !== false
+                ? '✓ Fret Système Actif (Ignoré si Entrepôt assigné)'
+                : '✕ Fret Système Désactivé'}
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 transition-opacity ${settings.systemFreightEnabled === false ? 'opacity-45 pointer-events-none' : ''}`}>
             {/* Fret Maritime */}
             <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
               <span className="text-xs font-extrabold uppercase tracking-wider text-blue-400 block">
-                🚢 Fret Maritime (Groupage)
+                🚢 Fret Maritime Système (Secours si aucun entrepôt)
               </span>
               <div className="grid grid-cols-3 gap-2">
                 <div>
@@ -495,7 +519,7 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
             {/* Fret Aérien Standard */}
             <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
               <span className="text-xs font-extrabold uppercase tracking-wider text-amber-400 block">
-                ✈️ Fret Aérien Cargo
+                ✈️ Fret Aérien Système (Secours si aucun entrepôt)
               </span>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -527,6 +551,84 @@ export const SiteSettingsManager: React.FC<SiteSettingsManagerProps> = ({ onNoti
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white"
                 />
               </div>
+            </div>
+          </div>
+
+          {/* Pays pris en charge par la livraison par défaut & Règle Pays Client */}
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                  <Globe className="w-4 h-4" />
+                  Pays Pris en Charge par la Livraison & Règle du Pays Client
+                </span>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Le <strong>pays client par défaut</strong> est automatiquement celui enregistré sur son compte client (s'il n'en définit pas un nouveau lors de la commande). Vous pouvez définir ci-dessous les pays livrables par défaut.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 bg-slate-900 border border-emerald-500/30 rounded-lg px-3 py-1.5">
+                <span className="text-[11px] font-bold text-emerald-300">
+                  👤 Pays client par défaut : Pays du compte client (modifiable à la commande)
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              {(settings.supportedDeliveryCountries && settings.supportedDeliveryCountries.length > 0
+                ? settings.supportedDeliveryCountries
+                : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES
+              ).map(countryName => (
+                <span
+                  key={countryName}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                >
+                  <span>✓ {countryName}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const current = settings.supportedDeliveryCountries && settings.supportedDeliveryCountries.length > 0
+                        ? settings.supportedDeliveryCountries
+                        : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES;
+                      if (current.length <= 1) {
+                        onNotify('Au moins un pays de livraison doit rester actif.');
+                        return;
+                      }
+                      updateAndPersist({
+                        supportedDeliveryCountries: current.filter(c => c !== countryName)
+                      });
+                    }}
+                    className="hover:text-rose-400 cursor-pointer"
+                    title={`Retirer ${countryName}`}
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                  </button>
+                </span>
+              ))}
+
+              <select
+                value=""
+                onChange={e => {
+                  const val = e.target.value;
+                  if (!val) return;
+                  const current = settings.supportedDeliveryCountries && settings.supportedDeliveryCountries.length > 0
+                    ? settings.supportedDeliveryCountries
+                    : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES;
+                  if (!current.includes(val)) {
+                    updateAndPersist({
+                      supportedDeliveryCountries: [...current, val]
+                    });
+                    onNotify(`${val} ajouté aux pays pris en charge pour la livraison.`);
+                  }
+                }}
+                className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1 text-xs text-orange-300 font-bold focus:border-[#FF6600] outline-none cursor-pointer"
+              >
+                <option value="">+ Ajouter un pays livré...</option>
+                {WORLD_COUNTRIES.filter(
+                  c => !(settings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).includes(c)
+                ).map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
             </div>
           </div>
         </div>

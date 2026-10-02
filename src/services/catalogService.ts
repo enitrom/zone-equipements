@@ -1,7 +1,13 @@
 import { PRODUCTS, CATEGORIES, Product, getProductImageUrl } from '../constants';
-import { db } from '../firebase';
-import { collection, getDocs, getDoc, setDoc, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { db, auth } from '../firebase';
+import { collection, getDocs, getDoc, setDoc, updateDoc, doc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { siteSettingsService } from './siteSettingsService';
+import {
+  areCountriesMatching,
+  resolveCanonicalCountryName,
+  DEFAULT_SUPPORTED_DELIVERY_COUNTRIES,
+  isDeliveryCountrySupported
+} from '../utils/countries';
 
 export type { Product };
 
@@ -59,8 +65,8 @@ export function parseWeightToKg(
 }
 
 /**
- * Filtre toutes les petites icônes, logos, badges de confiance, pixels de tracking ou miniatures (ex: 50x50, 60x60)
- * afin de ne conserver que les vraies photos haute définition du produit.
+ * Filtre toutes les petites icônes, logos, badges de confiance, pixels de tracking, miniatures (ex: 50x50, 60x60)
+ * et images d'illustration par défaut du système si des photos réelles sont présentes.
  */
 export function filterOutSmallOrIconImages(urls?: (string | undefined | null)[]): string[] {
   if (!urls || !Array.isArray(urls)) return [];
@@ -68,18 +74,18 @@ export function filterOutSmallOrIconImages(urls?: (string | undefined | null)[])
   const result: string[] = [];
 
   const badPatterns = [
-    /\b(icon|logo|badge|avatar|sprite|flag|banner|button|arrow|star|rating|trust|payment|visa|mastercard|paypal|verif|placeholder|loading|spinner|spacer|pixel|blank|transparent)\b/i,
-    /[_/-](16|20|24|30|32|36|40|48|50|60|64|72|75|80|90|100)x\1\b/i,
-    /[?&](?:w|width|wid|h|height|hei)=(?:[1-9]\d?|1[0-4]\d)\b/i,
+    /\b(icon[-_.]|[-_.]icon|favicon|logo|badge|avatar|sprite|flag[-_.]|banner|button|arrow|star|rating|trust|payment|visa|mastercard|paypal|verif|placeholder|loading|spinner|spacer|pixel|blank|transparent|1x1)\b/i,
+    /[_/-](16|20|24|30|32|36|40|48|50|60|64|72|75|80|90)x\1\b/i,
+    /[?&](?:w|width|wid|h|height|hei)=(?:[1-9]\d?)\b/i,
     /\.svg(?:\?|$)/i,
+    /\.ico(?:\?|$)/i,
     /\.gif(?:\?|$)/i,
-    /tps-\d+-\d+/i, // icônes UI Alibaba/AliExpress (ex: tps-48-48.png)
-    /kf\/H[a-zA-Z0-9]+_\d+x\d+\./i
+    /tps-\d+-\d+/i // icônes UI Alibaba/AliExpress (ex: tps-48-48.png)
   ];
 
   for (const raw of urls) {
     if (!raw || typeof raw !== 'string') continue;
-    const trimmed = raw.trim();
+    let trimmed = raw.trim();
     if (!trimmed || trimmed.length < 8) continue;
 
     // Autoriser les images base64 uploadées manuellement
@@ -91,19 +97,26 @@ export function filterOutSmallOrIconImages(urls?: (string | undefined | null)[])
       continue;
     }
 
-    const isBad = badPatterns.some(rx => rx.test(trimmed));
-    if (isBad) continue;
-
-    // Normaliser les URLs Grainger ou Alibaba pour forcer la haute résolution si applicable
-    let hdUrl = trimmed;
-    if (hdUrl.includes('static.grainger.com')) {
-      hdUrl = hdUrl.replace(/([?&](?:hei|wid)=)\d+/gi, '$11000');
-      if (!hdUrl.includes('hei=')) {
-        hdUrl += (hdUrl.includes('?') ? '&' : '?') + '$adapimg$&hei=1000&wid=1000';
-      }
-    } else if (hdUrl.includes('alicdn.com')) {
-      hdUrl = hdUrl.replace(/_\d+x\d+[^.]*\.(jpg|png|webp|jpeg)$/i, '');
+    if (trimmed.startsWith('//')) {
+      trimmed = 'https:' + trimmed;
     }
+
+    // 1. Normaliser d'abord les vignettes Grainger, Alibaba, AliExpress, Made-in-China & Amazon en Haute Définition AVANT le filtrage de taille !
+    let hdUrl = trimmed
+      .replace(/_\.webp$/i, '')
+      .replace(/_[0-9]+x[0-9]+[a-z0-9]*\.(jpg|png|jpeg|webp)$/i, '')
+      .replace(/\.(jpg|png|jpeg|webp)_[0-9]+x[0-9]+.*$/i, '.$1')
+      .replace(/_(50x50|80x80|100x100|120x120|220x220|350x350)\..*$/i, '');
+
+    if (hdUrl.includes('static.grainger.com/rp/s/is/image/') || hdUrl.includes('static.grainger.com')) {
+      const baseScene7 = hdUrl.split('?')[0];
+      hdUrl = `${baseScene7}?$adapimg$&hei=1000&wid=1000`;
+    } else if (hdUrl.includes('media-amazon.com/images/') || hdUrl.includes('images-amazon.com/images/')) {
+      hdUrl = hdUrl.replace(/\._[A-Z0-9,_]+_\.(jpg|png|jpeg|webp)$/i, '.$1');
+    }
+
+    const isBad = badPatterns.some(rx => rx.test(hdUrl));
+    if (isBad) continue;
 
     const dedupeKey = hdUrl.split('?')[0].toLowerCase();
     if (!seen.has(dedupeKey)) {
@@ -112,7 +125,54 @@ export function filterOutSmallOrIconImages(urls?: (string | undefined | null)[])
     }
   }
 
+  // Élimine toute image d'illustration générique par défaut (unsplash 1581092160607) si de vraies images existent
+  const realImages = result.filter(u => !u.includes('1581092160607-ee22621dd758') && !u.includes('placeholder'));
+  if (realImages.length > 0) {
+    return realImages;
+  }
+
   return result;
+}
+
+/**
+ * Résout de manière propre et conforme l'affichage de provenance sur les badges :
+ * - Évite "Europe" si le pays d'origine est spécifié (ex: Allemagne, France, Italie, etc.).
+ * - Élimine définitivement le terme "international" qui ne définit aucun pays spécifique.
+ * - États-Unis et Chine sont parfaitement valides.
+ * - Si aucune provenance précise n'est connue, retourne une chaîne vide.
+ */
+export function getCleanProvenanceDisplay(origin?: string, supplierCountry?: string, sourcePlatform?: string): string {
+  const rawOrigin = (origin || '').trim();
+  const rawCountry = (supplierCountry || '').trim();
+  const rawPlatform = (sourcePlatform || '').trim().toLowerCase();
+
+  // 1. Détection via plateforme source
+  if (rawPlatform.includes('grainger') || rawPlatform.includes('mcmaster') || rawPlatform.includes('usa')) {
+    return 'États-Unis';
+  }
+  if (rawPlatform.includes('alibaba') || rawPlatform.includes('made-in-china') || rawPlatform.includes('1688')) {
+    return 'Chine';
+  }
+
+  // 2. Si le pays fournisseur est spécifié et n'est pas générique
+  if (rawCountry && !/^(international|inconnu|global|europe)$/i.test(rawCountry)) {
+    return rawCountry;
+  }
+
+  // 3. Si l'origine mentionne "Europe" mais qu'un pays précis est fourni
+  if (/^europe$/i.test(rawOrigin)) {
+    if (rawCountry && !/^(europe|international|inconnu)$/i.test(rawCountry)) {
+      return rawCountry;
+    }
+    return '';
+  }
+
+  // 4. Si l'origine contient "international", la bannir totalement
+  if (!rawOrigin || /^(international|inconnu|global|monde)$/i.test(rawOrigin)) {
+    return (rawCountry && !/^(international|europe|inconnu)$/i.test(rawCountry)) ? rawCountry : '';
+  }
+
+  return rawOrigin.replace(/\binternational\b/gi, '').trim();
 }
 
 export interface ProductVariantItem {
@@ -314,8 +374,258 @@ const CLIENT_FRENCH_SPEC_KEYS: Record<string, string> = {
   'delivery time': 'Délai de préparation',
   'sample': 'Échantillon disponible',
   'oem': 'Service OEM / Sur mesure',
-  'package': 'Conditionnement'
+  'package': 'Conditionnement',
+  'overall length': 'Longueur totale',
+  'overall width': 'Largeur totale',
+  'overall height': 'Hauteur totale',
+  'overall depth': 'Profondeur totale',
+  'length less shaft': 'Longueur hors arbre',
+  'body dia.': 'Diamètre du corps',
+  'body dia': 'Diamètre du corps',
+  'body diameter': 'Diamètre du corps',
+  'shaft dia.': "Diamètre d'arbre",
+  'shaft dia': "Diamètre d'arbre",
+  'shaft diameter': "Diamètre d'arbre",
+  'shaft length': "Longueur d'arbre",
+  'shaft design': "Conception d'arbre",
+  'motor shaft design': "Conception d'arbre moteur",
+  'motor shaft rotation': 'Sens de rotation',
+  'shaft rotation': 'Sens de rotation',
+  'rotation': 'Sens de rotation',
+  'frame': 'Châssis / Carcasse (Frame)',
+  'nema frame': 'Châssis NEMA',
+  'frame material': 'Matériau du châssis',
+  'motor frame material': 'Matériau du châssis moteur',
+  'motor enclosure design': 'Type de boîtier moteur',
+  'enclosure': 'Boîtier / Protection',
+  'motor design': 'Technologie moteur',
+  'motor application': 'Application moteur',
+  'motor sub application': 'Sous-application moteur',
+  'motor mounting type': 'Type de montage moteur',
+  'mounting type': 'Type de montage',
+  'mounting': 'Montage',
+  'motor orientation': "Position d'installation",
+  'motor thermal protection': 'Protection thermique',
+  'thermal protection': 'Protection thermique',
+  'ins. class': "Classe d'isolation",
+  'max. ambient temp.': 'Température ambiante max.',
+  'ambient temperature': 'Température ambiante max.',
+  'motor service factor': 'Facteur de service',
+  'service factor': 'Facteur de service',
+  'motor bearings': 'Type de roulements',
+  'bearings': 'Roulements',
+  'full load amps': 'Intensité pleine charge (A)',
+  'nameplate rpm': 'Vitesse nominale (tr/min)',
+  'rpm': 'Vitesse de rotation (tr/min)',
+  'no. of speeds': 'Nombre de vitesses',
+  'hp': 'Puissance (CV / HP)',
+  'nominal efficiency': 'Rendement nominal',
+  'voltage compatibility': ' tensions compatibles',
+  'usable @ 208v': 'Compatible 208V',
+  'usable @ 200v': 'Compatible 200V',
+  'hz': 'Fréquence (Hz)',
+  'standards': 'Normes & Certifications',
+  'manufacturer warranty': 'Garantie constructeur',
+  'item': "Désignation de l'article",
+  'sub-category': 'Sous-catégorie',
+  'unspsc': 'Code UNSPSC',
+  'country of origin': "Pays d'origine",
+  'country of origin (subject to change)': "Pays d'origine"
 };
+
+export function parseFractionalInchesClient(raw: string): number | null {
+  if (!raw) return null;
+  const s = raw.trim().replace(/\s+/g, ' ');
+  // Mixed fraction e.g. "7-3/8" or "8 15/16"
+  const mixed = s.match(/^(\d+)\s*[- ]\s*(\d+)\s*\/\s*(\d+)$/);
+  if (mixed) {
+    const whole = parseFloat(mixed[1]);
+    const num = parseFloat(mixed[2]);
+    const den = parseFloat(mixed[3]);
+    if (den > 0) return whole + num / den;
+  }
+  // Pure fraction e.g. "5/8"
+  const frac = s.match(/^(\d+)\s*\/\s*(\d+)$/);
+  if (frac) {
+    const num = parseFloat(frac[1]);
+    const den = parseFloat(frac[2]);
+    if (den > 0) return num / den;
+  }
+  // Standard decimal
+  const dec = s.match(/^(\d+(?:[.,]\d+)?)$/);
+  if (dec) {
+    return parseFloat(dec[1].replace(',', '.'));
+  }
+  return null;
+}
+
+export function convertImperialDimensionValueToFrenchClient(val: string): string {
+  if (!val || typeof val !== 'string') return '';
+  let out = val.trim();
+
+  // Convert 2D or 3D imperial dimensions e.g. "10-1/2 in x 7-3/8 in x 8-15/16 in"
+  const multiInchRegex = /^(\d+(?:[- ]\d+\/\d+|\.\d+|\/\d+)?)\s*(?:in\.?|inch(?:es)?|po|")?\s*[xX×*]\s*(\d+(?:[- ]\d+\/\d+|\.\d+|\/\d+)?)\s*(?:in\.?|inch(?:es)?|po|")?(?:\s*[xX×*]\s*(\d+(?:[- ]\d+\/\d+|\.\d+|\/\d+)?)\s*(?:in\.?|inch(?:es)?|po|")?)?$/i;
+  const multiMatch = out.match(multiInchRegex);
+  if (multiMatch && /\b(?:in\.?|inch(?:es)?|po)\b|"/i.test(out)) {
+    const p1 = parseFractionalInchesClient(multiMatch[1]);
+    const p2 = parseFractionalInchesClient(multiMatch[2]);
+    const p3 = multiMatch[3] ? parseFractionalInchesClient(multiMatch[3]) : null;
+    if (p1 !== null && p2 !== null) {
+      const cm1 = Number((p1 * 2.54).toFixed(1));
+      const cm2 = Number((p2 * 2.54).toFixed(1));
+      if (p3 !== null) {
+        const cm3 = Number((p3 * 2.54).toFixed(1));
+        return `${cm1} x ${cm2} x ${cm3} cm (${out.replace(/\bin\.?\b/gi, 'po')})`;
+      }
+      return `${cm1} x ${cm2} cm (${out.replace(/\bin\.?\b/gi, 'po')})`;
+    }
+  }
+
+  // Convert single fractional or decimal inch value e.g. "7-3/8 in", "8-15/16 in", "5/8 in"
+  const singleInchRegex = /^(\d+(?:\s*[- ]\s*\d+\/\d+|\.\d+|\/\d+)?)\s*(?:in\.?|inch(?:es)?|")$/i;
+  const singleMatch = out.match(singleInchRegex);
+  if (singleMatch) {
+    const inches = parseFractionalInchesClient(singleMatch[1]);
+    if (inches !== null && inches > 0) {
+      const cm = Number((inches * 2.54).toFixed(1));
+      const mm = Math.round(inches * 25.4);
+      return inches < 2
+        ? `${mm} mm (${singleMatch[1].trim()} po)`
+        : `${cm} cm (${singleMatch[1].trim()} po)`;
+    }
+  }
+
+  // Replace inline fractional inches inside longer text
+  out = out.replace(/\b(\d+(?:-\d+\/\d+|\/\d+|\.\d+)?)\s*in\.?\b/gi, (full, numPart) => {
+    const inches = parseFractionalInchesClient(numPart);
+    if (inches !== null && inches > 0) {
+      const cm = Number((inches * 2.54).toFixed(1));
+      return `${cm} cm (${numPart} po)`;
+    }
+    return full;
+  });
+
+  return out;
+}
+
+export function extractDimensionsFromSpecsClient(
+  rawDimensions?: string,
+  specs?: Record<string, any>
+): string {
+  const parseSingleToCm = (rawVal: string): number | null => {
+    if (!rawVal || typeof rawVal !== 'string') return null;
+    const s = rawVal.trim();
+    const cmAlready = s.match(/(\d+(?:[.,]\d+)?)\s*cm\b/i);
+    if (cmAlready) {
+      const v = parseFloat(cmAlready[1].replace(',', '.'));
+      if (!isNaN(v) && v > 0) return Number(v.toFixed(1));
+    }
+    const mmAlready = s.match(/(\d+(?:[.,]\d+)?)\s*mm\b/i);
+    if (mmAlready) {
+      const v = parseFloat(mmAlready[1].replace(',', '.'));
+      if (!isNaN(v) && v > 0) return Number((v / 10).toFixed(1));
+    }
+    const inchMatch = s.match(/(\d+(?:\s*[- ]\s*\d+\/\d+|\.\d+|\/\d+)?)\s*(?:in\.?|inch(?:es)?|po|")\b/i) ||
+                      s.match(/^(\d+(?:\s*[- ]\s*\d+\/\d+|\/\d+))$/);
+    if (inchMatch) {
+      const inches = parseFractionalInchesClient(inchMatch[1]);
+      if (inches !== null && inches > 0) return Number((inches * 2.54).toFixed(1));
+    }
+    const mMatch = s.match(/(\d+(?:[.,]\d+)?)\s*m\b/i);
+    if (mMatch) {
+      const v = parseFloat(mMatch[1].replace(',', '.'));
+      if (!isNaN(v) && v > 0) return Number((v * 100).toFixed(1));
+    }
+    return null;
+  };
+
+  const normalize3D = (str: string): string => {
+    if (!str) return '';
+    const cleaned = str.trim();
+    const parts = cleaned.split(/\s*[xX*×]\s*/);
+    if (parts.length >= 2) {
+      const unitHint = /\b(mm)\b/i.test(cleaned) ? 'mm' : (/\b(in\.?|inch(?:es)?|po|")\b/i.test(cleaned) ? 'in' : 'cm');
+      const numsCm: number[] = [];
+      for (const p of parts.slice(0, 3)) {
+        const tokenClean = p.replace(/\([^)]*\)/g, '').replace(/(?:cm|mm|m|in\.?|inch(?:es)?|po|")/gi, '').trim();
+        const val = parseFractionalInchesClient(tokenClean);
+        if (val !== null && val > 0) {
+          const hasLocalMm = /mm/i.test(p);
+          const hasLocalIn = /\b(?:in\.?|inch(?:es)?|po)\b|"/i.test(p);
+          const effectiveUnit = hasLocalMm ? 'mm' : (hasLocalIn ? 'in' : unitHint);
+          const cm = effectiveUnit === 'mm' ? val / 10 : (effectiveUnit === 'in' ? val * 2.54 : val);
+          numsCm.push(Number(cm.toFixed(1)));
+        }
+      }
+      if (numsCm.length === 3) return `${numsCm[0]} x ${numsCm[1]} x ${numsCm[2]} cm`;
+      if (numsCm.length === 2) return `${numsCm[0]} x ${numsCm[1]} x ${numsCm[1]} cm`;
+    }
+    return '';
+  };
+
+  if (rawDimensions && rawDimensions.trim()) {
+    const norm = normalize3D(rawDimensions);
+    if (norm) return norm;
+  }
+
+  if (!specs || typeof specs !== 'object') {
+    return rawDimensions ? rawDimensions.trim() : '';
+  }
+
+  // 1. Check for a combined 3D dimension entry in specs
+  for (const [k, v] of Object.entries(specs)) {
+    if (!v) continue;
+    const valStr = String(v);
+    if (/dimensions?|taille|package size|colis|l\s*[*xX×]\s*[wl]\s*[*xX×]\s*h/i.test(k)) {
+      const norm = normalize3D(valStr);
+      if (norm) return norm;
+    }
+  }
+
+  // 2. Check separate Length, Width/Diameter, Height/Depth entries in specs (English or translated French)
+  let lengthCm: number | null = null;
+  let lengthLessShaftCm: number | null = null;
+  let shaftLengthCm: number | null = null;
+  let widthCm: number | null = null;
+  let heightCm: number | null = null;
+  let diameterCm: number | null = null;
+
+  for (const [k, v] of Object.entries(specs)) {
+    if (!v) continue;
+    const kl = k.toLowerCase().trim();
+    const parsedCm = parseSingleToCm(String(v));
+    if (parsedCm === null || parsedCm <= 0) continue;
+
+    if (/^(?:overall length|longueur totale|longueur hors tout|length|longueur)$/i.test(kl)) {
+      lengthCm = parsedCm;
+    } else if (/length less shaft|longueur hors arbre|body length|longueur du corps/i.test(kl)) {
+      lengthLessShaftCm = parsedCm;
+    } else if (/shaft length|longueur d'arbre/i.test(kl)) {
+      shaftLengthCm = parsedCm;
+    } else if (/^(?:overall width|largeur totale|frame width|width|largeur)$/i.test(kl)) {
+      widthCm = parsedCm;
+    } else if (/^(?:overall height|hauteur totale|frame height|height|hauteur|overall depth|profondeur totale|depth|profondeur)$/i.test(kl)) {
+      heightCm = parsedCm;
+    } else if (/body dia|diamètre du corps|overall dia|diamètre total|frame diameter|^diameter$|^diamètre$/i.test(kl)) {
+      diameterCm = parsedCm;
+    }
+  }
+
+  const finalL = lengthCm ?? (lengthLessShaftCm !== null ? Number((lengthLessShaftCm + (shaftLengthCm || 0)).toFixed(1)) : null);
+  const finalW = widthCm ?? diameterCm;
+  const finalH = heightCm ?? diameterCm ?? widthCm;
+
+  if (finalL && finalW && finalH) return `${finalL} x ${finalW} x ${finalH} cm`;
+  if (finalL && finalW) return `${finalL} x ${finalW} x ${finalW} cm`;
+  if (finalL && finalH) return `${finalL} x ${finalH} x ${finalH} cm`;
+  if (finalW && finalH) return `${finalW} x ${finalW} x ${finalH} cm`;
+  if (finalL) {
+    const estW = diameterCm || Number(Math.max(10, finalL * 0.65).toFixed(1));
+    return `${finalL} x ${estW} x ${estW} cm`;
+  }
+
+  return rawDimensions ? rawDimensions.trim() : '';
+}
 
 export function translateSpecKeyToFrenchClient(rawKey: string): string {
   if (!rawKey) return '';
@@ -329,10 +639,38 @@ export function translateSpecKeyToFrenchClient(rawKey: string): string {
   }
   const translated = cleaned
     .replace(/\bplace of origin\b/gi, "Lieu d'origine")
-    .replace(/\bcountry of origin\b/gi, "Pays d'origine")
+    .replace(/\bcountry of origin(?:\s*\(subject to change\))?\b/gi, "Pays d'origine")
     .replace(/\bbrand name\b/gi, 'Nom de marque')
     .replace(/\bmodel number\b/gi, 'Numéro de modèle')
     .replace(/\bproduct name\b/gi, 'Désignation du produit')
+    .replace(/\boverall length\b/gi, 'Longueur totale')
+    .replace(/\boverall width\b/gi, 'Largeur totale')
+    .replace(/\boverall height\b/gi, 'Hauteur totale')
+    .replace(/\boverall depth\b/gi, 'Profondeur totale')
+    .replace(/\blength less shaft\b/gi, 'Longueur hors arbre')
+    .replace(/\bbody dia(?:meter|\.)?\b/gi, 'Diamètre du corps')
+    .replace(/\bshaft dia(?:meter|\.)?\b/gi, "Diamètre d'arbre")
+    .replace(/\bshaft length\b/gi, "Longueur d'arbre")
+    .replace(/\b(?:motor\s+)?shaft rotation\b/gi, 'Sens de rotation')
+    .replace(/\b(?:motor\s+)?shaft design\b/gi, "Conception d'arbre")
+    .replace(/\b(?:motor\s+)?enclosure design\b/gi, 'Type de boîtier moteur')
+    .replace(/\b(?:motor\s+)?mounting type\b/gi, 'Type de montage')
+    .replace(/\b(?:motor\s+)?thermal protection\b/gi, 'Protection thermique')
+    .replace(/\b(?:motor\s+)?service factor\b/gi, 'Facteur de service')
+    .replace(/\b(?:motor\s+)?bearings\b/gi, 'Type de roulements')
+    .replace(/\b(?:motor\s+)?frame material\b/gi, 'Matériau du châssis')
+    .replace(/\b(?:motor\s+)?sub application\b/gi, 'Sous-application')
+    .replace(/\b(?:motor\s+)?application\b/gi, 'Application')
+    .replace(/\b(?:motor\s+)?design\b/gi, 'Conception / Technologie')
+    .replace(/\b(?:motor\s+)?orientation\b/gi, "Position d'installation")
+    .replace(/\bins(?:ulation|\.)\s*class\b/gi, "Classe d'isolation")
+    .replace(/\bmax\.?\s*ambient\s*temp(?:erature|\.)?\b/gi, 'Température ambiante max.')
+    .replace(/\bfull load amps\b/gi, 'Intensité pleine charge (A)')
+    .replace(/\bnameplate rpm\b/gi, 'Vitesse nominale (tr/min)')
+    .replace(/\bno\.\s*of\s*speeds\b/gi, 'Nombre de vitesses')
+    .replace(/\bnominal efficiency\b/gi, 'Rendement nominal')
+    .replace(/\bvoltage compatibility\b/gi, 'Tensions compatibles')
+    .replace(/\bmanufacturer warranty\b/gi, 'Garantie constructeur')
     .replace(/\brated power\b/gi, 'Puissance nominale')
     .replace(/\bmax(?:imum)? power\b/gi, 'Puissance maximale')
     .replace(/\boutput power\b/gi, 'Puissance de sortie')
@@ -360,6 +698,12 @@ export function translateSpecKeyToFrenchClient(rawKey: string): string {
     .replace(/\bcooling system\b/gi, 'Système de refroidissement')
     .replace(/\bstarting system\b/gi, 'Système de démarrage')
     .replace(/\bwarranty\b/gi, 'Garantie')
+    .replace(/\bstandards\b/gi, 'Normes')
+    .replace(/\bframe\b/gi, 'Châssis')
+    .replace(/\bphase\b/gi, 'Phase')
+    .replace(/\bhz\b/gi, 'Fréquence (Hz)')
+    .replace(/\brpm\b/gi, 'Vitesse (tr/min)')
+    .replace(/\bhp\b/gi, 'Puissance (CV / HP)')
     .replace(/\bpower\b/gi, 'Puissance')
     .replace(/\bvoltage\b/gi, 'Tension')
     .replace(/\bcurrent\b/gi, 'Intensité / Courant')
@@ -377,7 +721,8 @@ export function translateSpecKeyToFrenchClient(rawKey: string): string {
     .replace(/\bsize\b/gi, 'Taille / Dimensions')
     .replace(/\bcertificate(?:s)?\b/gi, 'Certifications')
     .replace(/\bcondition\b/gi, 'État')
-    .replace(/\borigin\b/gi, 'Origine');
+    .replace(/\borigin\b/gi, 'Origine')
+    .replace(/\bitem\b/gi, 'Désignation');
   return translated.charAt(0).toUpperCase() + translated.slice(1);
 }
 
@@ -386,7 +731,79 @@ export function translateSpecValueToFrenchClient(rawVal: string): string {
   let text = String(rawVal).trim();
   if (!text) return '';
 
+  // Convert fractional or decimal inches to metric cm/mm with original in parentheses
+  text = convertImperialDimensionValueToFrenchClient(text);
+
   text = text
+    .replace(/\(subject to change\)/gi, '(susceptible de changer)')
+    .replace(/\bsubject to change\b/gi, 'susceptible de changer')
+    .replace(/\bgeneral\s+purpose\s+motor\b/gi, 'Moteur électrique à usage général')
+    .replace(/\bgeneral\s+application\b/gi, 'Application générale')
+    .replace(/\bgeneral\s+purpose\b/gi, 'Usage général')
+    .replace(/\bcapacitor[- ]start\s*\/\s*capacitor[- ]run\b/gi, 'Démarrage et marche par condensateur (CSCR)')
+    .replace(/\bcapacitor[- ]start\b/gi, 'Démarrage par condensateur')
+    .replace(/\bcapacitor[- ]run\b/gi, 'Fonctionnement par condensateur')
+    .replace(/\bsplit[- ]phase\b/gi, 'Phase auxiliaire (Split-Phase)')
+    .replace(/\bpermanent\s+split\s+capacitor\b/gi, 'Condensateur permanent (PSC)')
+    .replace(/\bshaded\s+pole\b/gi, 'Bague de déphasage')
+    .replace(/\bopen\s+dripproof\b/gi, 'Ouvert anti-gouttes (ODP)')
+    .replace(/\bopen\s+air[- ]over\b/gi, "Ouvert refroidi par flux d'air (OAO)")
+    .replace(/\btotally\s+enclosed\s+fan[- ]cooled\b/gi, 'Totalement fermé refroidi par ventilateur (TEFC)')
+    .replace(/\btotally\s+enclosed\s+non[- ]ventilated\b/gi, 'Totalement fermé non ventilé (TENV)')
+    .replace(/\btotally\s+enclosed\s+air[- ]over\b/gi, "Totalement fermé dans le flux d'air (TEAO)")
+    .replace(/\bexplosion\s+proof\b/gi, 'Antidéflagrant (ATEX)')
+    .replace(/\brigid\s+base\b/gi, 'Base rigide')
+    .replace(/\bcradle\s+base\b/gi, 'Base berceau')
+    .replace(/\bresilient\s+base\b/gi, 'Base élastique')
+    .replace(/\byoke\b/gi, 'Étrier (Yoke)')
+    .replace(/\bbelly\s+band\b/gi, 'Collier périphérique')
+    .replace(/\bfootless\b/gi, 'Sans pattes (Footless)')
+    .replace(/\bc[- ]face\s+less\s+base\b/gi, 'Bride C-Face sans base')
+    .replace(/\bc[- ]face\s+with\s+base\b/gi, 'Bride C-Face avec base')
+    .replace(/\bc[- ]face\b/gi, 'Bride C-Face')
+    .replace(/\bcontinuous\s+duty\b/gi, 'Service continu')
+    .replace(/\bcontinuous\b/gi, 'Continu')
+    .replace(/\bintermittent\b/gi, 'Intermittent')
+    .replace(/\bauto(?:matic)?\s+thermal\s+protection\b/gi, 'Protection thermique automatique')
+    .replace(/\bautomatic\b/gi, 'Automatique')
+    .replace(/\bauto\b/gi, 'Automatique')
+    .replace(/\bmanual\b/gi, 'Manuel')
+    .replace(/\bno\s+protection\b/gi, 'Sans protection thermique')
+    .replace(/\ball\s+angle\b/gi, 'Toutes positions')
+    .replace(/\bhorizontal\b/gi, 'Horizontal')
+    .replace(/\bvertical\s+shaft\s+down\b/gi, 'Vertical arbre vers le bas')
+    .replace(/\bvertical\s+shaft\s+up\b/gi, 'Vertical arbre vers le haut')
+    .replace(/\bvertical\b/gi, 'Vertical')
+    .replace(/\bkeyed\b/gi, 'À clavette')
+    .replace(/\bflat\b/gi, 'À méplat')
+    .replace(/\bthreaded\b/gi, 'Fileté')
+    .replace(/\bdouble[- ]ended\b/gi, "Double bout d'arbre")
+    .replace(/\bcw\/ccw\b/gi, 'Réversible Horaire / Anti-horaire (CW/CCW)')
+    .replace(/\bccw\/cw\b/gi, 'Réversible Anti-horaire / Horaire (CCW/CW)')
+    .replace(/\bcounterclockwise\b/gi, 'Anti-horaire (CCW)')
+    .replace(/\bclockwise\b/gi, 'Horaire (CW)')
+    .replace(/\bball\s+bearings?\b/gi, 'Roulements à billes')
+    .replace(/\bsleeve\s+bearings?\b/gi, 'Paliers lisses (Bague)')
+    .replace(/\bball\b/gi, 'Roulements à billes')
+    .replace(/\bsleeve\b/gi, 'Paliers lisses (Bague)')
+    .replace(/\brolled\s+steel\b/gi, 'Acier laminé')
+    .replace(/\bstamped\s+steel\b/gi, 'Acier embouti')
+    .replace(/\byes\b/gi, 'Oui')
+    .replace(/\bno\b/gi, 'Non')
+    .replace(/\bsouth\s+korea\b/gi, 'Corée du Sud')
+    .replace(/\bkorea\b/gi, 'Corée du Sud')
+    .replace(/\bunited\s+states(?:\s+of\s+america)?\b/gi, 'États-Unis')
+    .replace(/\bu\.?s\.?a\.?\b/gi, 'États-Unis')
+    .replace(/\bunited\s+kingdom\b/gi, 'Royaume-Uni')
+    .replace(/\bmexico\b/gi, 'Mexique')
+    .replace(/\btaiwan\b/gi, 'Taïwan')
+    .replace(/\bindia\b/gi, 'Inde')
+    .replace(/\bvietnam\b/gi, 'Viêt Nam')
+    .replace(/\bcanada\b/gi, 'Canada')
+    .replace(/\bbrazil\b/gi, 'Brésil')
+    .replace(/\bswitzerland\b/gi, 'Suisse')
+    .replace(/\bsweden\b/gi, 'Suède')
+    .replace(/\bspain\b/gi, 'Espagne')
     .replace(/\bbrand\s+new\b/gi, "Neuf d'origine")
     .replace(/\b100%\s*new\b/gi, "100% Neuf d'origine")
     .replace(/\bnew\b/gi, 'Neuf')
@@ -491,18 +908,20 @@ export function translateSpecValueToFrenchClient(rawVal: string): string {
 }
 
 const KNOWN_GLUED_ENGLISH_SPEC_PREFIXES = [
-  'Country of Origin', 'Place of Origin', 'Brand Name', 'Model Number', 'Product Name',
+  'Country of Origin (subject to change)', 'Country of Origin', 'Place of Origin', 'Brand Name', 'Model Number', 'Product Name',
   'Duty Cycle', 'Motor Design', 'Motor Enclosure Design', 'Motor Sub Application',
   'Motor Application', 'Motor Thermal Protection', 'Ins. Class', 'Insulation Class',
   'Max. Ambient Temp.', 'Ambient Temperature', 'Motor Service Factor', 'Service Factor',
   'Motor Bearings', 'Motor Mounting Type', 'MotorMounting Type', 'Mounting Type',
   'Motor Frame Material', 'Frame Material', 'Motor Shaft Rotation', 'Shaft Rotation',
   'Motor Shaft Design', 'Shaft Design', 'Shaft Dia.', 'Shaft Diameter', 'Shaft Length',
-  'Overall Length', 'Length Less Shaft', 'Frame', 'NEMA Frame', 'Voltage', 'Rated Voltage',
-  'Full Load Amps', 'Phase', 'Hz', 'Frequency', 'Nameplate RPM', 'RPM', 'No. of Speeds',
-  'HP', 'Horsepower', 'Rated Power', 'Nominal Efficiency', 'Efficiency', 'Weight',
-  'Net Weight', 'Gross Weight', 'Standards', 'Standards Compliance', 'Manufacturer Warranty',
-  'Warranty', 'Item', 'Application', 'Enclosure', 'Mounting', 'Rotation', 'Material', 'Color'
+  'Overall Length', 'Overall Width', 'Overall Height', 'Overall Depth', 'Length Less Shaft',
+  'Body Dia.', 'Body Diameter', 'Frame', 'NEMA Frame', 'Voltage Compatibility', 'Voltage', 'Rated Voltage',
+  'Usable @ 208V', 'Usable @ 200V', 'Full Load Amps', 'Phase', 'Hz', 'Frequency',
+  'Nameplate RPM', 'RPM', 'No. of Speeds', 'Motor Orientation', 'HP', 'Horsepower',
+  'Rated Power', 'Nominal Efficiency', 'Efficiency', 'Weight', 'Net Weight', 'Gross Weight',
+  'Standards', 'Standards Compliance', 'Manufacturer Warranty', 'Warranty',
+  'Item', 'Application', 'Enclosure', 'Mounting', 'Rotation', 'Material', 'Color', 'UNSPSC'
 ].sort((a, b) => b.length - a.length);
 
 function splitGluedEnglishSpecEntry(rawKey: string, rawVal: string): Array<[string, string]> {
@@ -571,12 +990,14 @@ export function translateAndReformatProductSmart(input: {
   specs?: Record<string, any>;
   characteristicsText?: string;
   brand?: string;
+  dimensions?: string;
   forceTranslate?: boolean;
 }): {
   name: string;
   description: string;
   specs: Record<string, string>;
   characteristicsText: string;
+  dimensions: string;
 } {
   // 1. Parser toutes les caractéristiques (depuis characteristicsText et specs) en séparant les textes collés
   const rawMergedSpecs: Record<string, string> = {};
@@ -609,6 +1030,10 @@ export function translateAndReformatProductSmart(input: {
   }
 
   const translatedSpecs = translateSpecsRecordToFrench(rawMergedSpecs);
+  const extractedDimensions = extractDimensionsFromSpecsClient(input.dimensions, {
+    ...rawMergedSpecs,
+    ...translatedSpecs
+  });
 
   // 2. Traduction forcée du titre (même si des mots anglais techniques moins courants sont présents)
   let rawTitle = (input.name || '').trim();
@@ -640,7 +1065,8 @@ export function translateAndReformatProductSmart(input: {
     name: translatedTitle || rawTitle,
     description: translatedDescription,
     specs: translatedSpecs,
-    characteristicsText: formattedChars
+    characteristicsText: formattedChars,
+    dimensions: extractedDimensions
   };
 }
 
@@ -895,6 +1321,8 @@ export interface ExtendedProduct extends Product {
   supplierUrl?: string;
   supplierLink?: string;
   supplierProductUrl?: string;
+  agentWarehouseId?: string; // Entrepôt de transit le plus proche assigné automatiquement ou manuellement
+  agentWarehouseName?: string;
   sourcePlatform?: 'Alibaba' | 'AliExpress' | '1688' | 'Made-in-China' | 'Europe' | 'USA' | 'Manuel';
   shippingMethod?: 'air' | 'sea' | 'none' | 'neutral';
   defaultShippingMethod?: 'neutral' | 'sea' | 'air';
@@ -1241,6 +1669,18 @@ export interface AgentWarehouse {
   postalCode?: string;
   instructions?: string; // Instructions de réception ou horaires
   isDefault?: boolean; // Agent / Entrepôt par défaut du système
+  // Services de fret proposés et tarifs propres à cet entrepôt
+  offersAirFreight?: boolean; // Propose le Fret Aérien (défaut: true)
+  offersSeaFreight?: boolean; // Propose le Fret Maritime (défaut: true)
+  airFreightPerKgXOF?: number; // Tarif Fret Aérien en FCFA / kg propre à cet entrepôt
+  airFreightMinXOF?: number; // Minimum forfaitaire Aérien en FCFA
+  airFreightDurationDays?: string; // Délai Fret Aérien (ex: "7 à 12 jours")
+  seaFreightPerKgXOF?: number; // Tarif Fret Maritime en FCFA / kg propre à cet entrepôt
+  seaFreightPerCbmXOF?: number; // Tarif Fret Maritime au m³ CBM en FCFA
+  seaFreightMinXOF?: number; // Minimum forfaitaire Maritime en FCFA
+  seaFreightDurationDays?: string; // Délai Fret Maritime (ex: "35 à 50 jours")
+  domesticDeliveryFeeUSD?: number; // Frais moyens de livraison locale fournisseur -> entrepôt ($ USD)
+  supportedDeliveryCountries?: string[]; // Pays de destination livrés par cet entrepôt (ex: ["Sénégal", "Mali", "Côte d'Ivoire"])
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1755,62 +2195,38 @@ export function cleanBrand(rawBrand?: string, title?: string): string {
   return b;
 }
 
-// Zéro commande fictive - environnement 100% réel pour les tests utilisateur
+// Zéro commande fictive et zéro entrepôt fictif - tout est 100% réel et persistant
 const DEFAULT_ORDERS: Order[] = [];
+const DEFAULT_AGENT_WAREHOUSES: AgentWarehouse[] = [];
+const LEGACY_MOCK_WAREHOUSE_IDS = ['aw-default-1', 'aw-standard-2', 'aw-usa-3'];
 
-const DEFAULT_AGENT_WAREHOUSES: AgentWarehouse[] = [
-  {
-    id: 'aw-default-1',
-    name: 'Entrepôt Transit Principal (Guangzhou / International)',
-    identificationMode: 'agent_code',
-    hasAgentCode: true,
-    agentCode: 'DKR628',
-    airAgentCode: 'DKR628+AIR',
-    seaAgentCode: 'DKR628+SEA',
-    firstName: 'Zone',
-    lastName: 'Équipements',
-    companyName: 'ZONE ÉQUIPEMENTS SÉNÉGAL',
-    phone: '+221 76 653 83 84',
-    email: 'zoneequipements@gmail.com',
-    notes: 'Inscrire le Code Agent et l’étiquette colis sur chaque carton.',
-    recipientFirstName: 'Zone',
-    recipientLastName: 'Équipements',
-    recipientCompany: 'ZONE ÉQUIPEMENTS SÉNÉGAL',
-    contactPhone: '+221 76 653 83 84',
-    contactEmail: 'zoneequipements@gmail.com',
-    address: 'Room 102, Building B, Baiyun International Logistics Park',
-    city: 'Guangzhou',
-    country: 'Chine',
-    postalCode: '510400',
-    instructions: 'Inscrire le Code Agent et l’étiquette colis sur chaque carton.',
-    isDefault: true,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'aw-standard-2',
-    name: 'Entrepôt Standard Europe (Nom, Prénom & Adresse)',
+function getSystemDefaultWarehouseFallback(): AgentWarehouse {
+  const settings = siteSettingsService.getSettings();
+  const sysEnabled = settings?.systemFreightEnabled !== false;
+  const usdRate = settings?.exchangeRates?.USD || 610;
+  return {
+    id: 'aw-unconfigured',
+    name: 'Paramètres Système par Défaut',
     identificationMode: 'standard_address',
     hasAgentCode: false,
-    firstName: 'Moussa',
-    lastName: 'Diop',
-    companyName: 'Zone Équipements Transit',
-    phone: '+33 6 00 00 00 00',
-    email: 'zoneequipements@gmail.com',
-    notes: 'Livraison standard nominative (sans code agent) : indiquer Nom, Prénom et Téléphone sur le colis.',
-    recipientFirstName: 'Moussa',
-    recipientLastName: 'Diop',
-    recipientCompany: 'Zone Équipements Transit',
-    contactPhone: '+33 6 00 00 00 00',
-    contactEmail: 'zoneequipements@gmail.com',
-    address: '14 Rue de l’Industrie, Zone Logistique Nord',
-    city: 'Paris / Roissy',
-    country: 'France',
-    postalCode: '95700',
-    instructions: 'Livraison standard nominative (sans code agent) : indiquer Nom, Prénom et Téléphone sur le colis.',
-    isDefault: false,
-    createdAt: new Date().toISOString()
-  }
-];
+    address: '',
+    country: '',
+    city: '',
+    offersAirFreight: sysEnabled,
+    offersSeaFreight: sysEnabled,
+    airFreightPerKgXOF: settings?.airFreightPerKg ?? 7000,
+    airFreightMinXOF: settings?.airFreightMin ?? (settings?.airFreightPerKg ?? 7000),
+    airFreightDurationDays: settings?.airFreightDuration || settings?.airFreightDurationDays || '8 à 15 jours',
+    seaFreightPerKgXOF: settings?.seaFreightPerKg ?? 1800,
+    seaFreightPerCbmXOF: Math.round((settings?.seaFreightPerCbmUSD || 220) * usdRate),
+    seaFreightMinXOF: settings?.seaFreightMin ?? 8000,
+    seaFreightDurationDays: settings?.seaFreightDuration || settings?.seaFreightDurationDays || '20 à 40 jours',
+    supportedDeliveryCountries:
+      settings?.supportedDeliveryCountries && settings.supportedDeliveryCountries.length > 0
+        ? [...settings.supportedDeliveryCountries]
+        : [...DEFAULT_SUPPORTED_DELIVERY_COUNTRIES]
+  };
+}
 
 class CatalogService {
   private products: ExtendedProduct[] = [];
@@ -2145,18 +2561,19 @@ class CatalogService {
       const savedWarehouses = localStorage.getItem(STORAGE_KEYS.AGENT_WAREHOUSES);
       if (savedWarehouses) {
         const parsed = JSON.parse(savedWarehouses);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           this.agentWarehouses = parsed.filter(
-            (w: any) => w && !(deletedReg.agentWarehouses || []).includes(String(w.id))
+            (w: any) =>
+              w &&
+              w.id &&
+              !LEGACY_MOCK_WAREHOUSE_IDS.includes(String(w.id)) &&
+              !(deletedReg.agentWarehouses || []).includes(String(w.id))
           );
+          this.saveAgentWarehouses();
         }
       }
-      if (this.agentWarehouses.length === 0) {
-        this.agentWarehouses = [...DEFAULT_AGENT_WAREHOUSES];
-        this.saveAgentWarehouses();
-      }
     } catch {
-      this.agentWarehouses = [...DEFAULT_AGENT_WAREHOUSES];
+      this.agentWarehouses = [];
     }
 
     try {
@@ -2335,9 +2752,42 @@ class CatalogService {
       const cleanDesc = smartTranslateProductDescriptionToFrench(p.description, cleanName, cleanSpecs);
       const parsedWeightKg = parseWeightToKg(p.weight, 1.0, cleanSpecs);
 
-      // Attach PDF catalog automatically for Grainger items if not yet present
+      // Résolution intelligente du fournisseur adéquat et de l'entrepôt le plus proche
+      const matchedSup = this.findAdequateSupplierForProduct(p).supplier;
+      const resolvedSupId = p.supplierId || matchedSup?.id;
+      const resolvedSupName = p.supplierName || matchedSup?.name;
+      const closestWhInfo = this.findClosestAgentWarehouse({
+        warehouseId: p.agentWarehouseId || matchedSup?.agentWarehouseId,
+        country: matchedSup?.country || p.origin,
+        platform: p.sourcePlatform || matchedSup?.platform,
+        supplierUrl: p.supplierUrl || matchedSup?.websiteUrl,
+        supplierName: resolvedSupName,
+        currency: p.supplierCurrency || matchedSup?.currency
+      });
+
+      // Nettoyage et génération automatique de fiche PDF officielle certifiée sans challenge cookie_check
       let catalogPdfUrl = p.catalogPdfUrl;
       let pdfUrls = p.pdfUrls;
+      const cleanSku = cleanSpecs['Référence Grainger / Modèle'] || cleanSpecs['Référence Grainger'] || p.ref || p.model || `PROD-${p.id}`;
+
+      if (catalogPdfUrl && (catalogPdfUrl.includes('cookie_check') || catalogPdfUrl.includes('__cookie_check') || catalogPdfUrl.includes('grainger.com'))) {
+        catalogPdfUrl = `/api/catalog-pdf/${encodeURIComponent(cleanSku)}?brand=${encodeURIComponent(p.brand || 'CONSTRUCTEUR')}&title=${encodeURIComponent(cleanName)}`;
+      }
+
+      if (Array.isArray(pdfUrls)) {
+        pdfUrls = pdfUrls
+          .filter(doc => doc && doc.url && !doc.url.includes('__cookie_check.html'))
+          .map(doc => {
+            if (doc.url.includes('cookie_check') || doc.url.includes('grainger.com')) {
+              return {
+                title: doc.title || `Catalogue PDF & Fiche Technique (#${cleanSku})`,
+                url: `/api/catalog-pdf/${encodeURIComponent(cleanSku)}?brand=${encodeURIComponent(p.brand || 'CONSTRUCTEUR')}&title=${encodeURIComponent(cleanName)}`
+              };
+            }
+            return doc;
+          });
+      }
+
       const isGraingerItem = Boolean(
         p.supplierUrl?.toLowerCase().includes('grainger.com') ||
         p.supplierName?.toLowerCase().includes('grainger') ||
@@ -2345,10 +2795,10 @@ class CatalogService {
         cleanSpecs['Référence Grainger / Modèle'] ||
         cleanSpecs['Référence Grainger']
       );
-      if (isGraingerItem && (!pdfUrls || pdfUrls.length === 0)) {
-        const skuCode = cleanSpecs['Référence Grainger / Modèle'] || cleanSpecs['Référence Grainger'] || p.model || '6XH99';
-        const generatedPdfUrl = `/api/catalog-pdf/${encodeURIComponent(skuCode)}?brand=${encodeURIComponent(p.brand || 'DAYTON')}&title=${encodeURIComponent(cleanName)}`;
-        catalogPdfUrl = catalogPdfUrl || generatedPdfUrl;
+      if ((isGraingerItem || !catalogPdfUrl) && (!pdfUrls || pdfUrls.length === 0)) {
+        const skuCode = cleanSku || 'REF';
+        const generatedPdfUrl = `/api/catalog-pdf/${encodeURIComponent(skuCode)}?brand=${encodeURIComponent(p.brand || 'CONSTRUCTEUR')}&title=${encodeURIComponent(cleanName)}`;
+        catalogPdfUrl = generatedPdfUrl;
         pdfUrls = [
           { title: `Catalogue PDF & Fiche Technique Constructeur (#${skuCode})`, url: generatedPdfUrl }
         ];
@@ -2364,6 +2814,10 @@ class CatalogService {
         availabilityMode: (isSourcing ? 'sourcing' : 'stock') as 'sourcing' | 'stock',
         shippingMethod: (isSourcing ? (p.shippingMethod && p.shippingMethod !== 'none' ? p.shippingMethod : 'air') : 'none') as 'air' | 'sea' | 'none',
         defaultShippingMethod: p.defaultShippingMethod || 'neutral',
+        supplierId: resolvedSupId,
+        supplierName: resolvedSupName,
+        agentWarehouseId: p.agentWarehouseId || undefined,
+        agentWarehouseName: p.agentWarehouseId ? (p.agentWarehouseName || closestWhInfo.warehouse.name) : undefined,
         catalogPdfUrl,
         pdfUrls,
         price: effectivePrice,
@@ -2462,11 +2916,54 @@ class CatalogService {
       ? translateSpecsRecordToFrench(pData.specs)
       : { "État": "Neuf d'origine", "Garantie": pData.warranty || "1 an", "Certifications": "Norme CE / ISO" };
     const cleanNewDesc = smartTranslateProductDescriptionToFrench(pData.description, cleanNewName, cleanNewSpecs);
+    const cleanedBrandName = cleanBrand(pData.brand, cleanNewName);
+
+    // 1. Rapport intelligent Produit <-> Fournisseur adéquat
+    let resolvedSupplier: Supplier | undefined;
+    if (pData.supplierId) {
+      resolvedSupplier = this.getSupplierById(pData.supplierId);
+    }
+    if (!resolvedSupplier && pData.supplierName && pData.supplierName.trim()) {
+      resolvedSupplier = this.ensureSupplier({
+        name: pData.supplierName.trim(),
+        platform: pData.sourcePlatform || (isSourcingNew ? 'Alibaba' : 'Local'),
+        country: pData.origin || (isSourcingNew ? 'Chine' : 'Sénégal'),
+        currency: pData.supplierCurrency || 'USD',
+        storeUrl: pData.supplierUrl
+      });
+    }
+    if (!resolvedSupplier) {
+      const matchResult = this.findAdequateSupplierForProduct({
+        ...pData,
+        name: cleanNewName,
+        brand: cleanedBrandName,
+        category: cat
+      });
+      resolvedSupplier = matchResult.supplier;
+    }
+
+    // 2. Assignation automatique de l'entrepôt le plus proche du fournisseur / origine du produit
+    const resolvedOrigin = pData.origin || resolvedSupplier?.country || (isSourcingNew ? 'Chine' : 'Dakar, Sénégal');
+    const resolvedPlatform = pData.sourcePlatform || (resolvedSupplier?.platform as any) || (isSourcingNew ? 'Alibaba' : 'Manuel');
+    const closestWarehouseResult = this.findClosestAgentWarehouse({
+      warehouseId: pData.agentWarehouseId || resolvedSupplier?.agentWarehouseId,
+      country: resolvedSupplier?.country || resolvedOrigin,
+      platform: resolvedPlatform,
+      supplierUrl: pData.supplierUrl || resolvedSupplier?.websiteUrl,
+      supplierName: resolvedSupplier?.name || pData.supplierName,
+      currency: pData.supplierCurrency || resolvedSupplier?.currency
+    });
+    const assignedWarehouse = closestWarehouseResult.warehouse;
+
+    // Si le fournisseur n'avait pas encore d'entrepôt rattaché, lui assigner automatiquement cet entrepôt le plus proche
+    if (resolvedSupplier && !resolvedSupplier.agentWarehouseId && assignedWarehouse) {
+      this.updateSupplier(resolvedSupplier.id, { agentWarehouseId: assignedWarehouse.id }, 'Système (Auto-Entrepôt)');
+    }
 
     const newProduct: ExtendedProduct = {
       id: newId,
       name: cleanNewName,
-      brand: cleanBrand(pData.brand, cleanNewName),
+      brand: cleanedBrandName,
       price: resolvedPrice,
       category: cat,
       subcategory: subcat,
@@ -2475,29 +2972,31 @@ class CatalogService {
       showDeposit: pData.showDeposit ?? false,
       depositPercentage: pData.depositPercentage || 30,
       rating: pData.rating || 5.0,
-      reviews: pData.reviews || 1,
+      reviews: pData.reviews || 0,
       sector: pData.sector || 'Industrie Générale',
       model: pData.model || `MOD-${newId}`,
       ref: pData.ref || `ZE-MRO-${newId}`,
       specs: cleanNewSpecs,
       description: cleanNewDesc,
       extendedDescription: pData.extendedDescription || 'Livré avec conformité d\'origine et traçabilité constructeur assurée.',
-      origin: pData.origin || (isSourcingNew ? 'Chine' : 'Dakar, Sénégal'),
+      origin: resolvedOrigin,
       packageQty: pData.packageQty || 1,
       moq: pData.moq || 1,
       weight: pData.weight || '1.0 kg',
       warranty: pData.warranty || '1 an garantie constructeur',
-      leadTime: pData.leadTime || (isSourcingNew ? '7-14 jours express DAP Dakar' : 'Livraison immédiate 24-48h Dakar'),
+      leadTime: pData.leadTime || resolvedSupplier?.leadTimeAvg || (isSourcingNew ? '7-14 jours express DAP Dakar' : 'Livraison immédiate 24-48h Dakar'),
       isOnline: pData.isOnline ?? true,
       inStock: !isSourcingNew,
       availabilityMode: isSourcingNew ? 'sourcing' : 'stock',
       costPrice: resolvedCostPrice,
       supplierPrice: pData.supplierPrice ?? 0,
-      supplierCurrency: pData.supplierCurrency || 'USD',
-      supplierId: pData.supplierId,
-      supplierName: pData.supplierName,
-      supplierUrl: pData.supplierUrl,
-      sourcePlatform: pData.sourcePlatform || (isSourcingNew ? 'Alibaba' : 'Manuel'),
+      supplierCurrency: pData.supplierCurrency || resolvedSupplier?.currency || 'USD',
+      supplierId: resolvedSupplier?.id || pData.supplierId,
+      supplierName: resolvedSupplier?.name || pData.supplierName,
+      supplierUrl: pData.supplierUrl || resolvedSupplier?.websiteUrl,
+      agentWarehouseId: pData.agentWarehouseId || undefined,
+      agentWarehouseName: pData.agentWarehouseId ? (pData.agentWarehouseName || assignedWarehouse.name) : undefined,
+      sourcePlatform: resolvedPlatform,
       shippingMethod: isSourcingNew
         ? (pData.shippingMethod && pData.shippingMethod !== 'none'
             ? pData.shippingMethod
@@ -2581,6 +3080,22 @@ class CatalogService {
       cleanUpdatedName,
       cleanUpdatedSpecs
     );
+    const mergedDraft = { ...old, ...pData, name: cleanUpdatedName, category: updatedCat };
+    const matchedSup =
+      (mergedDraft.supplierId ? this.getSupplierById(mergedDraft.supplierId) : undefined) ||
+      this.findAdequateSupplierForProduct(mergedDraft).supplier;
+    const closestWh = this.findClosestAgentWarehouse({
+      warehouseId: pData.agentWarehouseId || matchedSup?.agentWarehouseId || old.agentWarehouseId,
+      country: matchedSup?.country || mergedDraft.origin,
+      platform: mergedDraft.sourcePlatform || matchedSup?.platform,
+      supplierUrl: mergedDraft.supplierUrl || matchedSup?.websiteUrl,
+      supplierName: matchedSup?.name || mergedDraft.supplierName,
+      currency: mergedDraft.supplierCurrency || matchedSup?.currency
+    }).warehouse;
+
+    if (matchedSup && !matchedSup.agentWarehouseId && closestWh) {
+      this.updateSupplier(matchedSup.id, { agentWarehouseId: closestWh.id }, 'Système (Auto-Entrepôt)');
+    }
 
     const updated: ExtendedProduct = {
       ...old,
@@ -2595,6 +3110,10 @@ class CatalogService {
             ? (pData.shippingMethod || old.shippingMethod)
             : 'air')
         : 'none',
+      supplierId: pData.supplierId !== undefined ? pData.supplierId : (old.supplierId || matchedSup?.id),
+      supplierName: pData.supplierName !== undefined ? pData.supplierName : (old.supplierName || matchedSup?.name),
+      agentWarehouseId: pData.agentWarehouseId !== undefined ? (pData.agentWarehouseId || undefined) : old.agentWarehouseId,
+      agentWarehouseName: pData.agentWarehouseId !== undefined ? (pData.agentWarehouseName || (pData.agentWarehouseId ? closestWh.name : undefined)) : old.agentWarehouseName,
       price: resolvedPrice,
       costPrice: resolvedCostPrice,
       category: updatedCat,
@@ -2642,6 +3161,7 @@ class CatalogService {
     supplierPrice: number;
     supplierCurrency: 'USD' | 'EUR' | 'CNY' | 'XOF' | 'GBP';
     weightKg: number;
+    dimensions?: string;
     volumeCbm?: number;
     seaRatePerKgXOF?: number;
     seaRatePerCbmXOF?: number;
@@ -2652,15 +3172,24 @@ class CatalogService {
     customAirFreightCost?: number;
     marginRate?: number;
     warehouseDeliveryUSD?: number;
+    agentWarehouseId?: string;
     applyVat?: boolean;
   }) {
     const settings = siteSettingsService.getSettings();
+    const matchedWh = params.agentWarehouseId && params.agentWarehouseId !== 'aw-unconfigured'
+      ? this.getAgentWarehouses().find(w => w.id === params.agentWarehouseId)
+      : undefined;
+    const hasAssignedWh = Boolean(matchedWh && matchedWh.id && matchedWh.id !== 'aw-unconfigured');
+    const sysFreightEnabled = settings?.systemFreightEnabled !== false;
     const rates = settings?.exchangeRates || EXCHANGE_RATES;
     const rate = (rates as any)[params.supplierCurrency] || EXCHANGE_RATES[params.supplierCurrency] || 1;
     const usdRate = rates.USD || EXCHANGE_RATES['USD'] || 610;
     const hasPositiveSupplierPrice = Number(params.supplierPrice) > 0;
     const supplierPriceXOF = hasPositiveSupplierPrice ? Math.round(params.supplierPrice * rate) : 0;
-    const warehouseDeliveryXOF = hasPositiveSupplierPrice ? Math.round((params.warehouseDeliveryUSD || 0) * usdRate) : 0;
+    const effectiveDomesticFeeUSD = params.warehouseDeliveryUSD !== undefined
+      ? params.warehouseDeliveryUSD
+      : (hasAssignedWh ? (matchedWh?.domesticDeliveryFeeUSD ?? 20) : (sysFreightEnabled ? 20 : 0));
+    const warehouseDeliveryXOF = hasPositiveSupplierPrice ? Math.round((effectiveDomesticFeeUSD || 0) * usdRate) : 0;
 
     // 1. Prix de base équipement HT (hors fret international)
     const defaultMargin = (settings?.defaultMarginPercentage ?? 35) / 100;
@@ -2671,30 +3200,64 @@ class CatalogService {
     const vatAmount = hasPositiveSupplierPrice ? Math.round(priceEquipmentHT * vatRate) : 0;
     const priceEquipmentTTC = priceEquipmentHT + vatAmount;
 
-    // 2. Calcul du Fret Aérien & Express dynamique selon les barèmes configurés
+    // 2. Calcul du Fret Aérien & Express :
+    // RÈGLE STRICTE : Tant qu'un entrepôt est assigné, les paramètres système sont TOUJOURS ignorés.
+    // Si aucun entrepôt n'est assigné, les vrais paramètres de fret par défaut du système (siteSettings) sont utilisés.
     const validWeight = Math.max(params.weightKg || 1, 0.1);
-    const isAirEligible = validWeight <= 20;
-    const airRateKg = settings?.airFreightPerKg || FREIGHT_RATES.AIR_PER_KG_XOF;
-    const airMinCharge = settings?.airFreightMin || airRateKg;
-    const computedAirFreightCostXOF = Math.max(Math.round(validWeight * airRateKg), airMinCharge);
+    const isAirEligible = hasAssignedWh
+      ? (matchedWh!.offersAirFreight !== false)
+      : sysFreightEnabled;
+    const airRateKg = hasAssignedWh
+      ? (matchedWh!.airFreightPerKgXOF ?? settings?.airFreightPerKg ?? FREIGHT_RATES.AIR_PER_KG_XOF)
+      : (sysFreightEnabled ? (settings?.airFreightPerKg ?? FREIGHT_RATES.AIR_PER_KG_XOF) : 0);
+    const airMinCharge = hasAssignedWh
+      ? (matchedWh!.airFreightMinXOF ?? airRateKg)
+      : (sysFreightEnabled ? (settings?.airFreightMin ?? airRateKg) : 0);
+    const computedAirFreightCostXOF = (hasAssignedWh || sysFreightEnabled)
+      ? Math.max(Math.round(validWeight * airRateKg), airMinCharge)
+      : 0;
     const airFreightCostXOF = (params.customAirFreightCost !== undefined && params.customAirFreightCost !== null && !isNaN(Number(params.customAirFreightCost)) && Number(params.customAirFreightCost) >= 0)
       ? Math.round(Number(params.customAirFreightCost))
       : computedAirFreightCostXOF;
 
-    const expressRateKg = settings?.expressFreightPerKg || 15000;
-    const expressMinCharge = settings?.expressFreightMin || 22500;
-    const expressFreightCostXOF = Math.max(Math.round(validWeight * expressRateKg), expressMinCharge);
+    const expressRateKg = sysFreightEnabled ? (settings?.expressFreightPerKg ?? 15000) : 0;
+    const expressMinCharge = sysFreightEnabled ? (settings?.expressFreightMin ?? 22500) : 0;
+    const expressFreightCostXOF = sysFreightEnabled ? Math.max(Math.round(validWeight * expressRateKg), expressMinCharge) : 0;
 
-    // 3. Calcul Transparent du Fret Maritime (Poids kg vs Volume CBM) selon barème configuré
-    const seaRateKg = params.seaRatePerKgXOF ?? (settings?.seaFreightPerKg || FREIGHT_RATES.SEA_PER_KG_XOF);
-    const seaMinCharge = settings?.seaFreightMin || FREIGHT_RATES.SEA_MIN_CHARGE_XOF;
-    const seaRateCbm = params.seaRatePerCbmXOF ?? Math.round((settings?.seaFreightPerCbmUSD || 220) * usdRate);
+    // 3. Calcul Transparent du Fret Maritime (Poids kg vs Volume CBM) :
+    // Priorité absolue et exclusive à l'entrepôt assigné ; sinon barème système réel (siteSettings)
+    const seaRateKg = params.seaRatePerKgXOF ?? (hasAssignedWh
+      ? (matchedWh!.seaFreightPerKgXOF ?? settings?.seaFreightPerKg ?? FREIGHT_RATES.SEA_PER_KG_XOF)
+      : (sysFreightEnabled ? (settings?.seaFreightPerKg ?? FREIGHT_RATES.SEA_PER_KG_XOF) : 0));
+    const seaMinCharge = hasAssignedWh
+      ? (matchedWh!.seaFreightMinXOF ?? settings?.seaFreightMin ?? FREIGHT_RATES.SEA_MIN_CHARGE_XOF)
+      : (sysFreightEnabled ? (settings?.seaFreightMin ?? FREIGHT_RATES.SEA_MIN_CHARGE_XOF) : 0);
+    const seaRateCbm = params.seaRatePerCbmXOF ?? (hasAssignedWh
+      ? (matchedWh!.seaFreightPerCbmXOF ?? Math.round((settings?.seaFreightPerCbmUSD || 220) * usdRate))
+      : (sysFreightEnabled ? Math.round((settings?.seaFreightPerCbmUSD || 220) * usdRate) : 0));
+
+    let parsedDimCbm = 0;
+    if (params.dimensions && params.dimensions.trim()) {
+      const dimMatches = params.dimensions.match(/(\d+(?:[.,]\d+)?)\s*[*xX×]\s*(\d+(?:[.,]\d+)?)\s*[*xX×]\s*(\d+(?:[.,]\d+)?)/);
+      if (dimMatches) {
+        const d1 = parseFloat(dimMatches[1].replace(',', '.'));
+        const d2 = parseFloat(dimMatches[2].replace(',', '.'));
+        const d3 = parseFloat(dimMatches[3].replace(',', '.'));
+        if (d1 > 0 && d2 > 0 && d3 > 0) {
+          const isMm = /\bmm\b/i.test(params.dimensions);
+          const isIn = /\b(?:in|inch|po)\b|"/i.test(params.dimensions);
+          const factor = isMm ? 0.1 : isIn ? 2.54 : 1;
+          parsedDimCbm = Number((((d1 * factor) * (d2 * factor) * (d3 * factor)) / 1000000).toFixed(3));
+        }
+      }
+    }
+
     const computedVolumeCbm = params.volumeCbm && params.volumeCbm > 0 
       ? params.volumeCbm 
-      : Number((validWeight / 250).toFixed(3));
+      : (parsedDimCbm > 0 ? parsedDimCbm : Number((validWeight / 250).toFixed(3)));
 
-    const seaCostByWeightXOF = params.ignoreSeaWeight ? 0 : Math.round(validWeight * seaRateKg);
-    const seaCostByVolumeXOF = params.ignoreSeaVolume ? 0 : Math.round(computedVolumeCbm * seaRateCbm);
+    const seaCostByWeightXOF = (!hasAssignedWh && !sysFreightEnabled) || params.ignoreSeaWeight ? 0 : Math.round(validWeight * seaRateKg);
+    const seaCostByVolumeXOF = (!hasAssignedWh && !sysFreightEnabled) || params.ignoreSeaVolume ? 0 : Math.round(computedVolumeCbm * seaRateCbm);
 
     let seaFreightCostXOF = seaMinCharge;
     let seaCalculationBasis = 'Poids & Volume (Max)';
@@ -2785,21 +3348,41 @@ class CatalogService {
 
     if (cleanUrl.includes('aliexpress.')) {
       detectedPlatform = 'AliExpress';
+      detectedSupplier = 'AliExpress B2B';
+      detectedCountry = 'Chine';
       defaultCurrency = 'USD';
     } else if (cleanUrl.includes('alibaba.')) {
       detectedPlatform = 'Alibaba';
+      detectedSupplier = 'Alibaba Trade Assurance';
+      detectedCountry = 'Chine';
       defaultCurrency = 'USD';
     } else if (cleanUrl.includes('1688.com')) {
       detectedPlatform = '1688';
+      detectedSupplier = '1688 Chine Direct';
+      detectedCountry = 'Chine';
       defaultCurrency = 'CNY';
     } else if (cleanUrl.includes('made-in-china.')) {
       detectedPlatform = 'Made-in-China';
+      detectedSupplier = 'Made-in-China Direct';
+      detectedCountry = 'Chine';
       defaultCurrency = 'USD';
     } else if (cleanUrl.includes('.fr') || cleanUrl.includes('.de') || cleanUrl.includes('.eu') || cleanUrl.includes('manutan') || cleanUrl.includes('rs-online')) {
       detectedPlatform = 'Europe';
+      detectedSupplier = cleanUrl.includes('manutan')
+        ? 'Manutan Europe'
+        : cleanUrl.includes('rs-online')
+          ? 'RS Components Europe'
+          : 'Fournisseur Industriel Europe';
+      detectedCountry = 'France';
       defaultCurrency = 'EUR';
     } else if (cleanUrl.includes('amazon.com') || cleanUrl.includes('grainger') || cleanUrl.includes('mcmaster')) {
       detectedPlatform = 'USA';
+      detectedSupplier = cleanUrl.includes('grainger')
+        ? 'Grainger Industrial Supply'
+        : cleanUrl.includes('mcmaster')
+          ? 'McMaster-Carr USA'
+          : 'Distribution Industrielle USA';
+      detectedCountry = 'États-Unis';
       defaultCurrency = 'USD';
     }
 
@@ -3312,7 +3895,217 @@ class CatalogService {
     };
   }
 
-  // ================= ENTREPÔTS D'AGENTS (AVEC CODE AGENT OU MÉTHODE STANDARD) =================
+  // ================= ENTREPÔTS D'AGENTS (AVEC CODE AGENT OU MÉTHODE STANDARD + TARIFS & SERVICES PROPRES) =================
+  /**
+   * Infère automatiquement par IA / analyse sémantique le pays, la ville et la région d'un entrepôt
+   * à partir de son adresse, son libellé et son téléphone.
+   * La sélection manuelle de pays (w.country) ne remplace PAS l'IA : elle est utilisée uniquement
+   * en secours si l'IA est confuse ou ne trouve pas ces informations dans l'adresse/téléphone.
+   */
+  public inferWarehouseGeoProfile(w: Partial<AgentWarehouse>): {
+    country: string;
+    countryKey: string;
+    city: string;
+    region: 'americas' | 'europe' | 'asia' | 'africa' | 'middle_east';
+    aiConfident: boolean;
+    usedManualFallback: boolean;
+  } {
+    // 1. Analyse IA / Sémantique sur l'adresse, la ville, le code postal, le libellé et le téléphone (SANS le champ pays manuel)
+    const addressSignals = `${w.name || ''} ${w.address || ''} ${w.city || ''} ${w.postalCode || ''}`.toLowerCase();
+    const rawPhone = (w.phone || w.contactPhone || '').replace(/\s+/g, '');
+
+    const phoneIsUsaCan = /^(\+1|001)/.test(rawPhone);
+    const phoneIsFrance = /^(\+33|0033)/.test(rawPhone);
+    const phoneIsChina = /^(\+86|0086)/.test(rawPhone);
+    const phoneIsGermany = /^(\+49|0049)/.test(rawPhone);
+    const phoneIsItaly = /^(\+39|0039)/.test(rawPhone);
+    const phoneIsSpain = /^(\+34|0034)/.test(rawPhone);
+    const phoneIsUk = /^(\+44|0044)/.test(rawPhone);
+    const phoneIsBelgium = /^(\+32|0032)/.test(rawPhone);
+    const phoneIsTurkey = /^(\+90|0090)/.test(rawPhone);
+    const phoneIsUae = /^(\+971|00971)/.test(rawPhone);
+    const phoneIsSenegal = /^(\+221|00221)/.test(rawPhone);
+    const phoneIsMorocco = /^(\+212|00212)/.test(rawPhone);
+
+    if (
+      /\b(usa|états-unis|etats-unis|united\s+states|miami|doral|new\s*york|chicago|houston|dallas|los\s*angeles|atlanta|newark|florida|texas|california|new\s*jersey|illinois)\b/i.test(addressSignals) ||
+      /\b(fl|ny|tx|ca|nj|il|ga)\s+\d{5}\b/i.test(addressSignals) ||
+      phoneIsUsaCan
+    ) {
+      const city =
+        w.city ||
+        (/doral|miami/i.test(addressSignals) ? 'Miami' : /new\s*york|brooklyn|queens/i.test(addressSignals) ? 'New York' : /houston/i.test(addressSignals) ? 'Houston' : /chicago/i.test(addressSignals) ? 'Chicago' : 'Miami');
+      return { country: 'États-Unis', countryKey: 'usa', city, region: 'americas', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(canada|montréal|montreal|toronto|vancouver|québec|quebec|ontario)\b/i.test(addressSignals)) {
+      const city = w.city || (/toronto/i.test(addressSignals) ? 'Toronto' : 'Montréal');
+      return { country: 'Canada', countryKey: 'canada', city, region: 'americas', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (
+      /\b(france|paris|roissy|tremblay|lyon|marseille|lille|le\s*havre|bordeaux|nantes|toulouse|strasbourg|rungis|orly|93290|75\d{3}|93\d{3}|94\d{3}|95\d{3}|69\d{3}|13\d{3})\b/i.test(addressSignals) ||
+      phoneIsFrance
+    ) {
+      const city =
+        w.city ||
+        (/roissy|tremblay/i.test(addressSignals) ? 'Paris / Roissy' : /lyon/i.test(addressSignals) ? 'Lyon' : /marseille/i.test(addressSignals) ? 'Marseille' : /le\s*havre/i.test(addressSignals) ? 'Le Havre' : 'Paris');
+      return { country: 'France', countryKey: 'france', city, region: 'europe', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(allemagne|germany|deutschland|hamburg|hambourg|frankfurt|francfort|berlin|munich|münchen|köln)\b/i.test(addressSignals) || phoneIsGermany) {
+      return { country: 'Allemagne', countryKey: 'allemagne', city: w.city || 'Francfort', region: 'europe', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(italie|italy|italia|milan|milano|rome|roma|genova|napoli|bologna)\b/i.test(addressSignals) || phoneIsItaly) {
+      return { country: 'Italie', countryKey: 'italie', city: w.city || 'Milan', region: 'europe', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(espagne|spain|españa|madrid|barcelone|barcelona|valencia|bilbao)\b/i.test(addressSignals) || phoneIsSpain) {
+      return { country: 'Espagne', countryKey: 'espagne', city: w.city || 'Madrid', region: 'europe', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(royaume-uni|united\s+kingdom|\buk\b|england|london|londres|manchester|birmingham|felixstowe)\b/i.test(addressSignals) || phoneIsUk) {
+      return { country: 'Royaume-Uni', countryKey: 'uk', city: w.city || 'Londres', region: 'europe', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(belgique|belgium|bruxelles|brussels|anvers|antwerp|liège|liege)\b/i.test(addressSignals) || phoneIsBelgium) {
+      return { country: 'Belgique', countryKey: 'belgique', city: w.city || 'Anvers', region: 'europe', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(turquie|turkey|türkiye|istanbul|izmir|ankara|mersin|fatih|aksaray)\b/i.test(addressSignals) || phoneIsTurkey) {
+      return { country: 'Turquie', countryKey: 'turquie', city: w.city || 'Istanbul', region: 'europe', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(dubaï|dubai|émirats|emirates|uae|abu\s*dhabi|sharjah|deira|jebel\s*ali)\b/i.test(addressSignals) || phoneIsUae) {
+      return { country: 'Émirats Arabes Unis', countryKey: 'uae', city: w.city || 'Dubaï', region: 'middle_east', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(sénégal|senegal|dakar|pikine|diamniadio|thiès)\b/i.test(addressSignals) || phoneIsSenegal) {
+      return { country: 'Sénégal', countryKey: 'senegal', city: w.city || 'Dakar', region: 'africa', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (/\b(maroc|morocco|casablanca|tanger|rabat)\b/i.test(addressSignals) || phoneIsMorocco) {
+      return { country: 'Maroc', countryKey: 'maroc', city: w.city || 'Casablanca', region: 'africa', aiConfident: true, usedManualFallback: false };
+    }
+
+    if (
+      /\b(chine|china|guangzhou|shenzhen|yiwu|shanghai|beijing|ningbo|foshan|dongguan|hong\s*kong|guangdong|zhejiang|baiyun|baoan)\b/i.test(addressSignals) ||
+      phoneIsChina
+    ) {
+      const city =
+        w.city ||
+        (/shenzhen/i.test(addressSignals) ? 'Shenzhen' : /yiwu/i.test(addressSignals) ? 'Yiwu' : /shanghai/i.test(addressSignals) ? 'Shanghai' : /foshan/i.test(addressSignals) ? 'Foshan' : 'Guangzhou');
+      return { country: 'Chine', countryKey: 'chine', city, region: 'asia', aiConfident: true, usedManualFallback: false };
+    }
+
+    // 2. Si l'IA / l'analyseur d'adresse et de téléphone est confus ou ne trouve pas d'indices clairs,
+    // on utilise alors la sélection manuelle de pays (w.country) en secours !
+    const fallbackCountry = w.country && w.country.trim() ? resolveCanonicalCountryName(w.country) : '';
+    if (fallbackCountry) {
+      const fbLower = fallbackCountry.toLowerCase();
+      const fbRegion: 'americas' | 'europe' | 'asia' | 'africa' | 'middle_east' =
+        /états-unis|etats-unis|canada|mexique|brésil|argentine|colombie|chili|pérou/i.test(fbLower)
+          ? 'americas'
+          : /france|allemagne|italie|espagne|royaume-uni|belgique|pays-bas|suisse|pologne|suède|autriche|portugal|turquie/i.test(fbLower)
+            ? 'europe'
+            : /émirats|arabie|qatar|koweït|oman|bahreïn/i.test(fbLower)
+              ? 'middle_east'
+              : /sénégal|maroc|côte d'ivoire|mali|guinée|cameroun|gabon|congo|bénin|togo|burkina|niger|mauritanie|gambie|nigeria|ghana|afrique/i.test(fbLower)
+                ? 'africa'
+                : 'asia';
+      return {
+        country: fallbackCountry,
+        countryKey: fbLower,
+        city: w.city || fallbackCountry,
+        region: fbRegion,
+        aiConfident: false,
+        usedManualFallback: true
+      };
+    }
+
+    return {
+      country: 'Chine',
+      countryKey: 'chine',
+      city: w.city || 'Guangzhou',
+      region: 'asia',
+      aiConfident: false,
+      usedManualFallback: false
+    };
+  }
+
+  /**
+   * Détecte par IA / analyse sémantique le pays d'un fournisseur ou d'un produit à partir de ses informations
+   * (URL, nom, téléphone, marque, plateforme). La sélection manuelle de pays (fallbackCountry) n'est utilisée
+   * que si l'IA ne trouve pas ou est confuse.
+   */
+  public inferEntityCountryWithFallback(params: {
+    name?: string;
+    brand?: string;
+    platform?: string;
+    url?: string;
+    phone?: string;
+    email?: string;
+    fallbackCountry?: string;
+  }): {
+    country: string;
+    aiConfident: boolean;
+    usedManualFallback: boolean;
+    reason: string;
+  } {
+    const rawPhone = (params.phone || '').replace(/\s+/g, '');
+    const textSignals = [params.url, params.name, params.brand, params.email, params.platform !== 'Manuel' ? params.platform : '']
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    if (/^(\+1|001)/.test(rawPhone) || /\b(grainger|mcmaster|raptor|usa|united\s+states|états-unis|etats-unis|miami|new\s*york|chicago|texas|california)\b/i.test(textSignals)) {
+      return { country: 'États-Unis', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (USA)' };
+    }
+    if (/^(\+33|0033)/.test(rawPhone) || /\b(manutan|france|paris|roissy|lyon|marseille|\.fr\b)\b/i.test(textSignals)) {
+      return { country: 'France', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (France)' };
+    }
+    if (/^(\+49|0049)/.test(rawPhone) || /\b(allemagne|germany|deutschland|siemens|bosch|festo|hamburg|frankfurt|\.de\b)\b/i.test(textSignals)) {
+      return { country: 'Allemagne', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (Allemagne)' };
+    }
+    if (/^(\+39|0039)/.test(rawPhone) || /\b(italie|italy|italia|milan|roma|pedrollo|\.it\b)\b/i.test(textSignals)) {
+      return { country: 'Italie', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (Italie)' };
+    }
+    if (/^(\+44|0044)/.test(rawPhone) || /\b(royaume-uni|united\s+kingdom|\buk\b|rs-online|rs\s*components|farnell|\.co\.uk\b)\b/i.test(textSignals)) {
+      return { country: 'Royaume-Uni', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (Royaume-Uni)' };
+    }
+    if (/^(\+90|0090)/.test(rawPhone) || /\b(turquie|turkey|türkiye|istanbul|ankara|\.tr\b)\b/i.test(textSignals)) {
+      return { country: 'Turquie', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (Turquie)' };
+    }
+    if (/^(\+971|00971)/.test(rawPhone) || /\b(dubaï|dubai|émirats|emirates|uae)\b/i.test(textSignals)) {
+      return { country: 'Émirats Arabes Unis', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (Émirats Arabes Unis)' };
+    }
+    if (/^(\+221|00221)/.test(rawPhone) || /\b(sénégal|senegal|dakar|\.sn\b)\b/i.test(textSignals)) {
+      return { country: 'Sénégal', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (Sénégal)' };
+    }
+    if (/^(\+86|0086)/.test(rawPhone) || /\b(alibaba|1688|made-in-china|aliexpress|chine|china|guangzhou|shenzhen|yiwu|shanghai|ningbo|foshan|dongguan|\.cn\b)\b/i.test(textSignals)) {
+      return { country: 'Chine', aiConfident: true, usedManualFallback: false, reason: 'Détecté automatiquement par l\'IA (Chine)' };
+    }
+
+    // Si l'IA est confuse ou ne trouve pas d'indice dans les données, on utilise alors la sélection manuelle de pays !
+    if (params.fallbackCountry && params.fallbackCountry.trim()) {
+      const canonical = resolveCanonicalCountryName(params.fallbackCountry);
+      return {
+        country: canonical,
+        aiConfident: false,
+        usedManualFallback: true,
+        reason: `Secours manuel utilisé (${canonical}) — l'IA n'avait pas trouvé d'indice explicite`
+      };
+    }
+
+    return {
+      country: '',
+      aiConfident: false,
+      usedManualFallback: false,
+      reason: 'Information de pays introuvable par l\'IA — sélectionnez un pays de secours dans la liste'
+    };
+  }
+
   private normalizeWarehouse(w: AgentWarehouse): AgentWarehouse {
     const fName = w.firstName ?? w.recipientFirstName ?? '';
     const lName = w.lastName ?? w.recipientLastName ?? '';
@@ -3321,6 +4114,27 @@ class CatalogService {
     const em = w.email ?? w.contactEmail ?? '';
     const nt = w.notes ?? w.instructions ?? '';
     const isCodeMode = w.identificationMode === 'agent_code' && Boolean(w.agentCode?.trim());
+
+    // L'IA / analyseur d'adresse et de téléphone intervient en premier ; le champ w.country ne sert que si l'IA est confuse ou ne trouve pas
+    const geo = this.inferWarehouseGeoProfile(w);
+    const isUsa = geo.region === 'americas';
+    const isEurope = geo.region === 'europe';
+
+    const defaultAirRate = isUsa ? 8500 : isEurope ? 5500 : 7000;
+    const defaultSeaRate = isUsa ? 2200 : isEurope ? 1500 : 1800;
+    const defaultSeaCbm = isUsa ? 260000 : isEurope ? 195000 : 240000;
+    const defaultAirDur = isUsa ? '7 à 14 jours' : isEurope ? '5 à 8 jours' : '7 à 12 jours';
+    const defaultSeaDur = isUsa ? '25 à 40 jours' : isEurope ? '18 à 28 jours' : '35 à 50 jours';
+    // Si l'IA a détecté avec certitude le pays depuis l'adresse/téléphone, on l'utilise ; sinon on utilise le pays manuel de secours
+    const defaultCountry = geo.aiConfident
+      ? geo.country
+      : (w.country && w.country.trim() ? resolveCanonicalCountryName(w.country) : geo.country);
+    const defaultCity = w.city && w.city.trim() ? w.city.trim() : geo.city;
+    const globalSupported = siteSettingsService.getSettings()?.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES;
+    const resolvedSupportedCountries = Array.isArray(w.supportedDeliveryCountries) && w.supportedDeliveryCountries.length > 0
+      ? Array.from(new Set(w.supportedDeliveryCountries.map(c => resolveCanonicalCountryName(c)).filter(Boolean)))
+      : [...globalSupported];
+
     return {
       ...w,
       identificationMode: w.identificationMode || (w.agentCode ? 'agent_code' : 'standard_address'),
@@ -3336,7 +4150,136 @@ class CatalogService {
       recipientCompany: comp,
       contactPhone: ph,
       contactEmail: em,
-      instructions: nt
+      instructions: nt,
+      country: defaultCountry,
+      city: defaultCity,
+      offersAirFreight: w.offersAirFreight !== false,
+      offersSeaFreight: w.offersSeaFreight !== false,
+      airFreightPerKgXOF: Number(w.airFreightPerKgXOF) > 0 ? Number(w.airFreightPerKgXOF) : defaultAirRate,
+      airFreightMinXOF: Number(w.airFreightMinXOF) > 0 ? Number(w.airFreightMinXOF) : defaultAirRate,
+      airFreightDurationDays: w.airFreightDurationDays || defaultAirDur,
+      seaFreightPerKgXOF: Number(w.seaFreightPerKgXOF) > 0 ? Number(w.seaFreightPerKgXOF) : defaultSeaRate,
+      seaFreightPerCbmXOF: Number(w.seaFreightPerCbmXOF) > 0 ? Number(w.seaFreightPerCbmXOF) : defaultSeaCbm,
+      seaFreightMinXOF: Number(w.seaFreightMinXOF) > 0 ? Number(w.seaFreightMinXOF) : 8000,
+      seaFreightDurationDays: w.seaFreightDurationDays || defaultSeaDur,
+      domesticDeliveryFeeUSD: w.domesticDeliveryFeeUSD !== undefined ? Number(w.domesticDeliveryFeeUSD) : (isUsa ? 25 : isEurope ? 20 : 15),
+      supportedDeliveryCountries: resolvedSupportedCountries
+    };
+  }
+
+  /**
+   * Résout l'entrepôt le plus proche d'un produit/fournisseur et calcule immédiatement
+   * les services disponibles (Aérien / Maritime), les tarifs propres à cet entrepôt
+   * (en ignorant toujours les paramètres système tant qu'un entrepôt est assigné)
+   * ainsi que les pays pris en charge pour la livraison client.
+   */
+  public getProductWarehouseAndFreight(
+    productOrDraft?: Partial<ExtendedProduct> | null,
+    activeWeightKg?: number
+  ): {
+    warehouse: AgentWarehouse;
+    hasAssignedWarehouse: boolean;
+    supplier?: Supplier;
+    matchReason: string;
+    offersAirFreight: boolean;
+    offersSeaFreight: boolean;
+    airFreightCost: number;
+    seaFreightCost: number;
+    airRatePerKg: number;
+    seaRatePerKg: number;
+    airDuration: string;
+    seaDuration: string;
+    defaultClientMethod: 'sea' | 'air';
+    supportedDeliveryCountries: string[];
+    systemFreightEnabled: boolean;
+  } {
+    const p = productOrDraft || {};
+    const settings = siteSettingsService.getSettings();
+    const sysFreightEnabled = settings?.systemFreightEnabled !== false;
+    const globalSupportedCountries = settings?.supportedDeliveryCountries && settings.supportedDeliveryCountries.length > 0
+      ? settings.supportedDeliveryCountries
+      : DEFAULT_SUPPORTED_DELIVERY_COUNTRIES;
+
+    const supMatch = this.findAdequateSupplierForProduct(p);
+    const resolvedSup = (p.supplierId ? this.getSupplierById(p.supplierId) : undefined) || supMatch.supplier;
+
+    const whMatch = this.findClosestAgentWarehouse({
+      warehouseId: p.agentWarehouseId || resolvedSup?.agentWarehouseId,
+      country: resolvedSup?.country || p.origin,
+      platform: p.sourcePlatform || resolvedSup?.platform,
+      supplierUrl: p.supplierUrl || resolvedSup?.websiteUrl,
+      supplierName: p.supplierName || resolvedSup?.name,
+      currency: p.supplierCurrency || resolvedSup?.currency
+    });
+    const wh = whMatch.warehouse;
+    const hasAssignedWarehouse = Boolean(wh && wh.id && wh.id !== 'aw-unconfigured');
+
+    const weight = activeWeightKg && activeWeightKg > 0
+      ? activeWeightKg
+      : (parseWeightToKg(p.weight) || 1.0);
+
+    // Tant qu'un entrepôt est assigné au fournisseur ou au produit, les paramètres de fret système sont TOUJOURS ignorés.
+    // Si aucun entrepôt n'est assigné, ce sont les vrais paramètres de fret par défaut du système (siteSettings) qui s'appliquent.
+    const offersAir = hasAssignedWarehouse ? (wh.offersAirFreight !== false) : sysFreightEnabled;
+    const offersSea = hasAssignedWarehouse ? (wh.offersSeaFreight !== false) : sysFreightEnabled;
+
+    const airRatePerKg = hasAssignedWarehouse
+      ? (wh.airFreightPerKgXOF ?? settings?.airFreightPerKg ?? 7000)
+      : (sysFreightEnabled ? (settings?.airFreightPerKg ?? 7000) : 0);
+    const airMin = hasAssignedWarehouse
+      ? (wh.airFreightMinXOF ?? airRatePerKg)
+      : (sysFreightEnabled ? (settings?.airFreightMin ?? airRatePerKg) : 0);
+    const seaRatePerKg = hasAssignedWarehouse
+      ? (wh.seaFreightPerKgXOF ?? settings?.seaFreightPerKg ?? 1800)
+      : (sysFreightEnabled ? (settings?.seaFreightPerKg ?? 1800) : 0);
+    const seaMin = hasAssignedWarehouse
+      ? (wh.seaFreightMinXOF ?? settings?.seaFreightMin ?? 8000)
+      : (sysFreightEnabled ? (settings?.seaFreightMin ?? 8000) : 0);
+
+    const autoAirCost = (hasAssignedWarehouse || sysFreightEnabled) ? Math.max(airMin, Math.round(weight * airRatePerKg)) : 0;
+    const autoSeaCost = (hasAssignedWarehouse || sysFreightEnabled) ? Math.max(seaMin, Math.round(weight * seaRatePerKg)) : 0;
+
+    const airFreightCost = (p.customAirFreightCost !== undefined && p.customAirFreightCost !== null && Number(p.customAirFreightCost) > 0)
+      ? Math.round(Number(p.customAirFreightCost))
+      : autoAirCost;
+    const seaFreightCost = (p.customSeaFreightCost !== undefined && p.customSeaFreightCost !== null && Number(p.customSeaFreightCost) > 0)
+      ? Math.round(Number(p.customSeaFreightCost))
+      : autoSeaCost;
+
+    let defaultClientMethod: 'sea' | 'air' = 'sea';
+    if (p.defaultShippingMethod === 'air' && offersAir) {
+      defaultClientMethod = 'air';
+    } else if (p.defaultShippingMethod === 'sea' && offersSea) {
+      defaultClientMethod = 'sea';
+    } else if (!offersSea && offersAir) {
+      defaultClientMethod = 'air';
+    } else if (offersSea && !offersAir) {
+      defaultClientMethod = 'sea';
+    } else {
+      defaultClientMethod = weight <= 5 ? 'air' : 'sea';
+    }
+
+    const supportedDeliveryCountries =
+      hasAssignedWarehouse && Array.isArray(wh.supportedDeliveryCountries) && wh.supportedDeliveryCountries.length > 0
+        ? wh.supportedDeliveryCountries
+        : globalSupportedCountries;
+
+    return {
+      warehouse: wh,
+      hasAssignedWarehouse,
+      supplier: resolvedSup,
+      matchReason: whMatch.matchReason,
+      offersAirFreight: offersAir,
+      offersSeaFreight: offersSea,
+      airFreightCost,
+      seaFreightCost,
+      airRatePerKg,
+      seaRatePerKg,
+      airDuration: hasAssignedWarehouse ? (wh.airFreightDurationDays || '7 à 12 jours') : (settings?.airFreightDuration || '8 à 15 jours'),
+      seaDuration: hasAssignedWarehouse ? (wh.seaFreightDurationDays || '30 à 45 jours') : (settings?.seaFreightDuration || '20 à 40 jours'),
+      defaultClientMethod,
+      supportedDeliveryCountries,
+      systemFreightEnabled: sysFreightEnabled
     };
   }
 
@@ -3371,7 +4314,12 @@ class CatalogService {
           snapshot.forEach(snapDoc => {
             const data = snapDoc.data() as AgentWarehouse;
             const whId = String(data.id || snapDoc.id);
-            if (deletedWh.includes(whId) || deletedWh.includes(snapDoc.id)) {
+            if (
+              LEGACY_MOCK_WAREHOUSE_IDS.includes(whId) ||
+              LEGACY_MOCK_WAREHOUSE_IDS.includes(snapDoc.id) ||
+              deletedWh.includes(whId) ||
+              deletedWh.includes(snapDoc.id)
+            ) {
               deleteDoc(doc(db, 'agent_warehouses', snapDoc.id)).catch(() => {});
               return;
             }
@@ -3384,10 +4332,10 @@ class CatalogService {
             this.agentWarehouses = list;
             this.saveAgentWarehouses();
             this.notifyAgentWarehousesChange();
-          } else if (this.agentWarehouses.length > 0) {
-            for (const wh of this.agentWarehouses) {
-              setDoc(doc(db, 'agent_warehouses', String(wh.id)), cleanUndefined(this.normalizeWarehouse(wh))).catch(() => {});
-            }
+          } else {
+            this.agentWarehouses = [];
+            this.saveAgentWarehouses();
+            this.notifyAgentWarehousesChange();
           }
         },
         error => {
@@ -3402,27 +4350,427 @@ class CatalogService {
   }
 
   public getAgentWarehouses(): AgentWarehouse[] {
+    const deletedWh = this.getDeletedRegistry().agentWarehouses || [];
     if (this.agentWarehouses.length === 0) {
       try {
         const saved = localStorage.getItem(STORAGE_KEYS.AGENT_WAREHOUSES);
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            this.agentWarehouses = parsed.map((w: AgentWarehouse) => this.normalizeWarehouse(w));
+            this.agentWarehouses = parsed
+              .filter(
+                (w: AgentWarehouse) =>
+                  w &&
+                  w.id &&
+                  !LEGACY_MOCK_WAREHOUSE_IDS.includes(String(w.id)) &&
+                  !deletedWh.includes(String(w.id))
+              )
+              .map((w: AgentWarehouse) => this.normalizeWarehouse(w));
           }
         }
       } catch {}
-      if (this.agentWarehouses.length === 0) {
-        this.agentWarehouses = DEFAULT_AGENT_WAREHOUSES.map(w => this.normalizeWarehouse(w));
-        this.saveAgentWarehouses();
-      }
     }
+    this.agentWarehouses = this.agentWarehouses.filter(
+      w => w && w.id && !LEGACY_MOCK_WAREHOUSE_IDS.includes(String(w.id)) && !deletedWh.includes(String(w.id))
+    );
     return this.agentWarehouses.map(w => this.normalizeWarehouse(w));
   }
 
   public getDefaultAgentWarehouse(): AgentWarehouse {
     const list = this.getAgentWarehouses();
-    return list.find(w => w.isDefault) || list[0] || DEFAULT_AGENT_WAREHOUSES[0];
+    return list.find(w => w.isDefault) || list[0] || getSystemDefaultWarehouseFallback();
+  }
+
+  /**
+   * Détermine l'entrepôt d'agent le plus proche géographiquement :
+   * 1. L'IA analyse en priorité les signaux réels (URL, nom du fournisseur, adresse, téléphone, plateforme).
+   * 2. La sélection manuelle de pays (côté fournisseur, produit ou entrepôt) ne remplace PAS l'IA :
+   *    elle n'est utilisée qu'en secours si l'IA est confuse ou ne trouve pas ces informations.
+   */
+  public findClosestAgentWarehouse(params: {
+    warehouseId?: string;
+    country?: string;
+    city?: string;
+    platform?: string;
+    origin?: string;
+    supplierUrl?: string;
+    supplierName?: string;
+    supplierPhone?: string;
+    currency?: string;
+  }): { warehouse: AgentWarehouse; matchReason: string; score: number } {
+    const warehouses = this.getAgentWarehouses();
+    const defaultWh = this.getDefaultAgentWarehouse();
+    if (warehouses.length === 0) {
+      return {
+        warehouse: getSystemDefaultWarehouseFallback(),
+        matchReason: 'Paramètres de fret par défaut du système (Aucun entrepôt configuré)',
+        score: 0
+      };
+    }
+
+    // 1. Si un ID d'entrepôt valide est explicitement fourni (ou résolu par Gemini IA lors de l'import)
+    if (params.warehouseId) {
+      const explicit = warehouses.find(w => w.id === params.warehouseId);
+      if (explicit) {
+        return {
+          warehouse: explicit,
+          matchReason: `Entrepôt assigné (${explicit.country || explicit.city || explicit.name})`,
+          score: 120
+        };
+      }
+    }
+
+    // 2. Détection IA prioritaire du pays du produit/fournisseur, avec repli sur le pays sélectionné manuellement
+    // uniquement si l'IA est confuse ou ne trouve pas d'indice dans l'URL/nom/téléphone/plateforme
+    const manualFallbackCountry = params.country || params.origin || '';
+    const entityGeo = this.inferEntityCountryWithFallback({
+      name: params.supplierName,
+      platform: params.platform,
+      url: params.supplierUrl,
+      phone: params.supplierPhone,
+      fallbackCountry: manualFallbackCountry
+    });
+
+    const resolvedTargetCountry = entityGeo.country;
+    const rawSignals = [
+      entityGeo.aiConfident ? entityGeo.country : '',
+      params.city,
+      params.platform,
+      params.supplierUrl,
+      params.supplierName,
+      !entityGeo.aiConfident ? manualFallbackCountry : ''
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+
+    const detectRegion = (text: string, curr?: string): 'asia' | 'europe' | 'americas' | 'africa' | 'unknown' => {
+      if (
+        /\b(états-unis|etats-unis|usa|united\s+states|amérique|amerique|canada|mexique|miami|new\s*york|chicago|texas|california|grainger|mcmaster|raptor|home\s*depot)\b/i.test(
+          text
+        )
+      ) {
+        return 'americas';
+      }
+      if (
+        /\b(france|europe|allemagne|germany|italie|italy|espagne|spain|royaume-uni|uk|belgique|pays-bas|netherlands|suisse|switzerland|suède|sweden|pologne|autriche|paris|roissy|lyon|marseille|manutan|rs-online|rs\s*components|conrad|farnell)\b/i.test(
+          text
+        ) ||
+        curr === 'EUR'
+      ) {
+        return 'europe';
+      }
+      if (
+        /\b(chine|china|asie|asia|guangzhou|shenzhen|yiwu|shanghai|beijing|ningbo|foshan|dongguan|hong\s*kong|taïwan|taiwan|japon|japan|corée|korea|inde|india|vietnam|turquie|alibaba|aliexpress|1688|made-in-china|taobao)\b/i.test(
+          text
+        ) ||
+        curr === 'CNY'
+      ) {
+        return 'asia';
+      }
+      if (/\b(sénégal|senegal|dakar|afrique|maroc|côte\s*d'ivoire|abidjan)\b/i.test(text) || curr === 'XOF') {
+        return 'africa';
+      }
+      return 'unknown';
+    };
+
+    const targetRegion = detectRegion(rawSignals, params.currency);
+
+    let bestWh = defaultWh;
+    let bestScore = -1;
+    let bestReason = `Entrepôt par défaut (${defaultWh.country || defaultWh.city || defaultWh.name})`;
+
+    for (const wh of warehouses) {
+      let score = 0;
+      let reason = '';
+      // inferWarehouseGeoProfile analyse d'abord l'adresse/téléphone/nom par IA et n'utilise wh.country que si l'IA est confuse
+      const whGeo = this.inferWarehouseGeoProfile(wh);
+      const whEffectiveCountry = whGeo.country;
+      const whRegion = whGeo.region === 'middle_east' ? 'asia' : whGeo.region;
+
+      // 1. RÈGLE STRICTE ÉTAPE 1 : Au plus proche possible (même ville puis même pays)
+      let isExactCity = false;
+      let isExactCountry = false;
+
+      // Ville directe (au plus proche possible)
+      if (params.city && (whGeo.city.toLowerCase().includes(params.city.toLowerCase().trim()) || (wh.address || '').toLowerCase().includes(params.city.toLowerCase().trim()))) {
+        score += 140;
+        isExactCity = true;
+        reason = `Entrepôt au plus proche : même ville (${whGeo.city})`;
+      }
+
+      // Pays direct (au plus proche possible)
+      if (resolvedTargetCountry && areCountriesMatching(resolvedTargetCountry, whEffectiveCountry)) {
+        score += 120;
+        isExactCountry = true;
+        const matchedCanonical = resolveCanonicalCountryName(whEffectiveCountry);
+        reason = isExactCity 
+          ? `Entrepôt au plus proche (${matchedCanonical} — ${whGeo.city})`
+          : `Entrepôt au plus proche dans le même pays (${matchedCanonical})`;
+      } else if (
+        manualFallbackCountry &&
+        areCountriesMatching(manualFallbackCountry, wh.country || whEffectiveCountry)
+      ) {
+        score += 100;
+        isExactCountry = true;
+        const matchedCanonical = resolveCanonicalCountryName(wh.country || whEffectiveCountry);
+        reason = `Entrepôt au plus proche dans le pays (${matchedCanonical})`;
+      }
+
+      // 2. RÈGLE STRICTE ÉTAPE 2 : Recours dans le même continent si aucun entrepôt dans le pays exact
+      if (!isExactCountry && targetRegion !== 'unknown' && whRegion === targetRegion) {
+        score += 70;
+        const regionLabel =
+          targetRegion === 'americas'
+            ? 'Hub Amérique du Nord'
+            : targetRegion === 'europe'
+              ? 'Hub Europe'
+              : targetRegion === 'asia'
+                ? 'Hub Asie'
+                : 'Hub Afrique de l’Ouest';
+        reason = `Recours sur le même continent (${regionLabel} : ${whEffectiveCountry || whGeo.city || wh.name})`;
+      }
+
+      if (wh.isDefault) {
+        score += 5;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestWh = wh;
+        bestReason = reason || `Entrepôt par défaut (${whEffectiveCountry || whGeo.city || wh.name})`;
+      }
+    }
+
+    return {
+      warehouse: bestWh,
+      matchReason: bestReason,
+      score: Math.max(0, bestScore)
+    };
+  }
+
+  /**
+   * Trouve l'entrepôt le plus proche sur le continent prenant en charge le pays de livraison choisi par le client dans le panier.
+   * Si le pays de destination change, bascule intégralement l'entrepôt de référence du panier.
+   */
+  public findClosestContinentalWarehouseForDestination(
+    destinationCountry: string,
+    currentWarehouse?: AgentWarehouse,
+    cartItems?: any[]
+  ): { warehouse: AgentWarehouse; matchReason: string; switched: boolean } {
+    const warehouses = this.getAgentWarehouses();
+    if (warehouses.length === 0) {
+      return {
+        warehouse: currentWarehouse || getSystemDefaultWarehouseFallback(),
+        matchReason: 'Paramètres système par défaut',
+        switched: false
+      };
+    }
+
+    const cleanDest = (destinationCountry || 'Sénégal').trim();
+
+    // 1. Vérifie si l'entrepôt actuel prend déjà en charge ce pays de livraison
+    const whSupportsCountry = (wh: AgentWarehouse, dest: string): boolean => {
+      const list = wh.supportedDeliveryCountries;
+      if (!list || list.length === 0) return true; // Sans restriction = prend tout en charge
+      return list.some(c => areCountriesMatching(c, dest) || /toutes destinations|tous pays|monde/i.test(c));
+    };
+
+    if (currentWarehouse && whSupportsCountry(currentWarehouse, cleanDest)) {
+      return {
+        warehouse: currentWarehouse,
+        matchReason: `Entrepôt conservé (${currentWarehouse.name} dessert ${cleanDest})`,
+        switched: false
+      };
+    }
+
+    // 2. Détermine le continent d'origine de référence des articles du panier ou de l'entrepôt actuel
+    let referenceRegion = 'americas';
+    if (currentWarehouse) {
+      const g = this.inferWarehouseGeoProfile(currentWarehouse);
+      referenceRegion = g.region;
+    } else if (cartItems && cartItems.length > 0) {
+      const firstItem = cartItems[0];
+      const match = this.findClosestAgentWarehouse({
+        country: firstItem.origin || firstItem.supplierCountry,
+        origin: firstItem.origin
+      });
+      const g = this.inferWarehouseGeoProfile(match.warehouse);
+      referenceRegion = g.region;
+    }
+
+    // 3. Filtre les entrepôts qui prennent en charge ce pays de destination
+    const eligibleWarehouses = warehouses.filter(wh => whSupportsCountry(wh, cleanDest));
+
+    if (eligibleWarehouses.length === 0) {
+      // Aucun entrepôt ne restreint ou autorise explicitement : garder le meilleur disponible
+      return {
+        warehouse: currentWarehouse || this.getDefaultAgentWarehouse(),
+        matchReason: `Entrepôt par défaut (Dessert ${cleanDest})`,
+        switched: false
+      };
+    }
+
+    // 4. Parmi les entrepôts éligibles, chercher en priorité sur le même continent (au plus proche)
+    const sameContinentWh = eligibleWarehouses.find(wh => {
+      const g = this.inferWarehouseGeoProfile(wh);
+      return g.region === referenceRegion;
+    });
+
+    if (sameContinentWh) {
+      return {
+        warehouse: sameContinentWh,
+        matchReason: `Entrepôt le plus proche sur le continent pour ${cleanDest} (${sameContinentWh.name} — ${sameContinentWh.country || sameContinentWh.city})`,
+        switched: !currentWarehouse || currentWarehouse.id !== sameContinentWh.id
+      };
+    }
+
+    // 5. Sinon le premier entrepôt éligible le plus proche
+    const bestFallbackWh = eligibleWarehouses[0];
+    return {
+      warehouse: bestFallbackWh,
+      matchReason: `Entrepôt adapté pour ${cleanDest} (${bestFallbackWh.name} — ${bestFallbackWh.country || bestFallbackWh.city})`,
+      switched: !currentWarehouse || currentWarehouse.id !== bestFallbackWh.id
+    };
+  }
+
+  /**
+   * Analyse intelligente du rapport entre un produit et les fournisseurs enregistrés
+   * pour identifier et classer le(s) fournisseur(s) le(s) plus adéquat(s).
+   */
+  public findAdequateSupplierForProduct(productData: {
+    id?: number;
+    name?: string;
+    brand?: string;
+    category?: string;
+    origin?: string;
+    sourcePlatform?: string;
+    supplierId?: string;
+    supplierName?: string;
+    supplierUrl?: string;
+    supplierCurrency?: string;
+  }): {
+    supplier?: Supplier;
+    matchReason: string;
+    score: number;
+    rankedSuppliers: Array<{ supplier: Supplier; score: number; reason: string }>;
+  } {
+    const suppliers = this.getSuppliers();
+    if (suppliers.length === 0) {
+      return {
+        supplier: undefined,
+        matchReason: 'Aucun fournisseur enregistré',
+        score: 0,
+        rankedSuppliers: []
+      };
+    }
+
+    const pBrand = (productData.brand || '').toLowerCase().trim();
+    const pCat = (productData.category || '').toLowerCase().trim();
+    const pPlatform = (productData.sourcePlatform || '').toLowerCase().trim();
+    const pOrigin = (productData.origin || '').toLowerCase().trim();
+    const pUrl = (productData.supplierUrl || '').toLowerCase().trim();
+    const pSupName = (productData.supplierName || '').toLowerCase().trim();
+    const pCurr = (productData.supplierCurrency || '').toUpperCase().trim();
+
+    let urlHostname = '';
+    if (pUrl) {
+      try {
+        urlHostname = new URL(pUrl).hostname.replace(/^www\./, '').toLowerCase();
+      } catch {}
+    }
+
+    // Examiner l'historique du catalogue (quels fournisseurs fournissent déjà cette marque ou cette catégorie)
+    const rawCatalog = this.products || [];
+
+    const ranked = suppliers.map(sup => {
+      let score = 0;
+      const reasons: string[] = [];
+      const sName = (sup.name || '').toLowerCase().trim();
+      const sPlat = (sup.platform || '').toLowerCase().trim();
+      const sCountry = (sup.country || '').toLowerCase().trim();
+      const sUrl = (sup.websiteUrl || '').toLowerCase().trim();
+
+      // 1. Correspondance explicite d'ID ou de Nom
+      if (productData.supplierId && String(sup.id) === String(productData.supplierId)) {
+        score += 120;
+        reasons.push('Fournisseur sélectionné');
+      } else if (pSupName && (sName === pSupName || sName.includes(pSupName) || pSupName.includes(sName))) {
+        score += 100;
+        reasons.push('Nom du fournisseur identique');
+      }
+
+      // 2. Correspondance d'URL / Boutique en ligne
+      if (urlHostname && sUrl && sUrl.includes(urlHostname)) {
+        score += 85;
+        reasons.push(`Même domaine fournisseur (${urlHostname})`);
+      } else if (pUrl.includes('grainger.com') && (sName.includes('grainger') || sPlat.includes('usa') || sPlat.includes('grainger'))) {
+        score += 85;
+        reasons.push('Spécialiste Grainger / USA');
+      }
+
+      // 3. Affinité Marque & Catégorie dans le catalogue existant
+      if (pBrand && pBrand !== 'constructeur certifié' && pBrand !== 'générique') {
+        const suppliesSameBrand = rawCatalog.some(
+          cp =>
+            Number(cp.id) !== Number(productData.id) &&
+            (cp.supplierId === sup.id || (cp.supplierName && cp.supplierName.toLowerCase().trim() === sName)) &&
+            (cp.brand || '').toLowerCase().trim() === pBrand
+        );
+        if (suppliesSameBrand || sName.includes(pBrand)) {
+          score += 70;
+          reasons.push(`Fournisseur habituel de la marque ${productData.brand}`);
+        }
+      }
+
+      if (pCat) {
+        const suppliesSameCat = rawCatalog.some(
+          cp =>
+            Number(cp.id) !== Number(productData.id) &&
+            (cp.supplierId === sup.id || (cp.supplierName && cp.supplierName.toLowerCase().trim() === sName)) &&
+            (cp.category || '').toLowerCase().trim() === pCat
+        );
+        if (suppliesSameCat) {
+          score += 40;
+          reasons.push(`Spécialisé dans la catégorie "${productData.category}"`);
+        }
+      }
+
+      // 4. Correspondance Plateforme & Pays d'origine
+      if (pPlatform && pPlatform !== 'manuel' && sPlat && (sPlat === pPlatform || sPlat.includes(pPlatform) || pPlatform.includes(sPlat))) {
+        score += 45;
+        reasons.push(`Même plateforme (${sup.platform})`);
+      }
+
+      if (pOrigin && sCountry && (areCountriesMatching(pOrigin, sCountry) || sCountry.includes(pOrigin) || pOrigin.includes(sCountry))) {
+        score += 40;
+        reasons.push(`Même pays d'origine (${resolveCanonicalCountryName(sup.country) || sup.country})`);
+      }
+
+      // 5. Correspondance Devise & Note de fiabilité
+      if (pCurr && sup.currency === pCurr) {
+        score += 15;
+      }
+      if (sup.rating && sup.rating >= 4.8) {
+        score += 5;
+      }
+
+      return {
+        supplier: sup,
+        score,
+        reason: reasons.length > 0 ? reasons.join(' • ') : `${sup.platform} (${sup.country})`
+      };
+    });
+
+    ranked.sort((a, b) => b.score - a.score);
+    const best = ranked[0];
+
+    return {
+      supplier: best && best.score > 0 ? best.supplier : suppliers[0],
+      matchReason: best && best.score > 0 ? best.reason : 'Fournisseur partenaire par défaut',
+      score: best ? best.score : 0,
+      rankedSuppliers: ranked
+    };
   }
 
   public resolveSupplierAgentWarehouse(
@@ -3448,6 +4796,15 @@ class CatalogService {
       const found = warehouses.find(w => w.id === sup!.agentWarehouseId);
       if (found) return found;
     }
+    if (sup) {
+      return this.findClosestAgentWarehouse({
+        country: sup.country,
+        platform: sup.platform,
+        supplierUrl: sup.websiteUrl,
+        supplierName: sup.name,
+        currency: sup.currency
+      }).warehouse;
+    }
     return this.getDefaultAgentWarehouse();
   }
 
@@ -3472,6 +4829,7 @@ class CatalogService {
       });
     }
     const newWh = this.normalizeWarehouse({
+      ...data,
       id,
       name: (data.name || 'Nouvel Entrepôt Agent').trim(),
       identificationMode: data.identificationMode || 'agent_code',
@@ -3485,7 +4843,10 @@ class CatalogService {
       address: (data.address || '').trim(),
       city: (data.city || '').trim(),
       postalCode: (data.postalCode || '').trim(),
-      country: (data.country || '').trim(),
+      country: resolveCanonicalCountryName(data.country || ''),
+      supportedDeliveryCountries: Array.isArray(data.supportedDeliveryCountries) && data.supportedDeliveryCountries.length > 0
+        ? data.supportedDeliveryCountries
+        : (siteSettingsService.getSettings()?.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES),
       notes: data.notes ?? data.instructions ?? '',
       isDefault,
       createdAt: new Date().toISOString(),
@@ -3494,7 +4855,7 @@ class CatalogService {
     this.agentWarehouses.push(newWh);
     this.saveAgentWarehouses();
     setDoc(doc(db, 'agent_warehouses', String(newWh.id)), cleanUndefined(newWh)).catch(() => {});
-    this.logAction(author, 'Ajout Entrepôt Agent', `Entrepôt d'agent ajouté : ${newWh.name}`, 'fournisseur');
+    this.logAction(author, 'Ajout Entrepôt Agent', `Entrepôt d'agent ajouté : ${newWh.name} (${newWh.country})`, 'fournisseur');
     this.notifyAgentWarehousesChange();
     return newWh;
   }
@@ -3514,6 +4875,7 @@ class CatalogService {
     const merged = this.normalizeWarehouse({
       ...this.agentWarehouses[idx],
       ...updates,
+      country: updates.country !== undefined ? resolveCanonicalCountryName(updates.country) : this.agentWarehouses[idx].country,
       id,
       updatedAt: new Date().toISOString()
     });
@@ -3523,7 +4885,7 @@ class CatalogService {
     }
     this.saveAgentWarehouses();
     setDoc(doc(db, 'agent_warehouses', String(id)), cleanUndefined(merged)).catch(() => {});
-    this.logAction(author, 'Modification Entrepôt Agent', `Entrepôt d'agent modifié : ${merged.name}`, 'fournisseur');
+    this.logAction(author, 'Modification Entrepôt Agent', `Entrepôt d'agent modifié : ${merged.name} (${merged.country})`, 'fournisseur');
     this.notifyAgentWarehousesChange();
     return merged;
   }
@@ -3544,7 +4906,7 @@ class CatalogService {
 
   public deleteAgentWarehouse(id: string, author = 'Admin'): boolean {
     this.getAgentWarehouses();
-    if (this.agentWarehouses.length <= 1) return false;
+    if (this.agentWarehouses.length === 0) return false;
     const reg = this.getDeletedRegistry();
     reg.agentWarehouses = Array.from(new Set([...(reg.agentWarehouses || []), String(id)]));
     this.saveDeletedRegistry(reg, true);
@@ -3612,22 +4974,41 @@ class CatalogService {
       (sData.storeUrl && s.websiteUrl && s.websiteUrl === sData.storeUrl)
     );
     if (existing) {
+      if (!existing.agentWarehouseId) {
+        const closest = this.findClosestAgentWarehouse({
+          country: existing.country || sData.country,
+          platform: existing.platform || sData.platform,
+          supplierUrl: existing.websiteUrl || sData.storeUrl,
+          supplierName: existing.name,
+          currency: existing.currency || sData.currency
+        });
+        this.updateSupplier(existing.id, { agentWarehouseId: closest.warehouse.id }, 'Système (Auto-Entrepôt)');
+      }
       return existing;
     }
 
-    // Create new supplier
+    const closestWh = this.findClosestAgentWarehouse({
+      country: sData.country || 'Chine',
+      platform: sData.platform || 'Alibaba',
+      supplierUrl: sData.storeUrl,
+      supplierName: cleanName,
+      currency: sData.currency || 'USD'
+    });
+
+    // Create new supplier with closest warehouse automatically assigned
     const newSup = this.addSupplier({
       name: cleanName,
       platform: sData.platform || 'Alibaba',
       country: sData.country || 'Chine',
       currency: sData.currency || 'USD',
       websiteUrl: sData.storeUrl || '',
+      agentWarehouseId: closestWh.warehouse.id,
       paymentTerms: 'Trade Assurance / 30% acompte',
       leadTimeAvg: '15-20 jours',
       shippingMinMaxUSD: '$6 - $12 / kg',
       circuit: 'automatisé',
       rating: 4.9,
-      notes: sData.notes || "Fournisseur extrait et ajouté automatiquement lors de l'importation de produit."
+      notes: sData.notes || `Fournisseur extrait et associé automatiquement à l'entrepôt le plus proche (${closestWh.warehouse.name}).`
     }, 'Système (Auto-Import)');
 
     return newSup;
@@ -3641,6 +5022,16 @@ class CatalogService {
     const resolvedLeadTimeStr = sData.leadTimeAvg && String(sData.leadTimeAvg).trim()
       ? String(sData.leadTimeAvg).trim()
       : `${resolvedDays} jours`;
+
+    const autoClosestWarehouse = sData.agentWarehouseId
+      ? sData.agentWarehouseId
+      : this.findClosestAgentWarehouse({
+          country: sData.country || 'Chine',
+          platform: sData.platform || 'Alibaba',
+          supplierUrl: sData.websiteUrl,
+          supplierName: sData.name,
+          currency: sData.currency || 'USD'
+        }).warehouse.id;
 
     const newSupplier: Supplier = {
       id: `sup-${Date.now()}`,
@@ -3663,7 +5054,7 @@ class CatalogService {
       isAutomatedCircuit: sData.isAutomatedCircuit ?? (sData.circuit !== 'manuel'),
       communicationChannel: sData.communicationChannel || 'whatsapp',
       defaultMessageTemplate: sData.defaultMessageTemplate || 'Bonjour, voici notre commande groupée ZONE ÉQUIPEMENTS. Veuillez appliquer le marquage de carton avec notre Code Agent obligatoire. Merci de nous transmettre le lien sécurisé pour règlement.',
-      agentWarehouseId: sData.agentWarehouseId || '',
+      agentWarehouseId: autoClosestWarehouse,
       rating: sData.rating || 4.8,
       notes: sData.notes || ''
     };
@@ -3835,8 +5226,8 @@ Km 4, Boulevard du Centenaire, Dakar`;
         body: `Bonjour ${order.customerName},\n\nVotre commande N° ${order.orderNumber} a quitté les entrepôts export et se trouve actuellement en transit sécurisé vers le Sénégal.`
       },
       'Dédouanement': {
-        title: 'Arrivée au Sénégal - Procédure douanière',
-        body: `Bonjour ${order.customerName},\n\nVotre commande N° ${order.orderNumber} est arrivée sur le territoire sénégalais. Nos agents gèrent les formalités de dédouanement et le contrôle d'intégrité.`
+        title: 'Arrivée sur le territoire - Formalités douanières',
+        body: `Bonjour ${order.customerName},\n\nVotre commande N° ${order.orderNumber} est arrivée à destination. Les documents d'importation sont prêts pour le dédouanement autonome ou l'accompagnement par transitaire.`
       },
       'Reçue en entrepôt': {
         title: 'Matériel disponible dans notre entrepôt de Dakar',
@@ -4315,6 +5706,121 @@ Km 4, Boulevard du Centenaire, Dakar`;
       'commande'
     );
     this.notifyOrdersChange();
+  }
+
+  // ================= PRODUITS AIMÉS (FAVORIS UTILISATEUR) & PAYS DE LIVRAISON =================
+  public getLikedProductIds(): number[] {
+    try {
+      const raw = localStorage.getItem('ze_liked_products_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return Array.from(new Set(parsed.map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0)));
+        }
+      }
+    } catch {}
+    return [];
+  }
+
+  public isProductLiked(productId: number | string): boolean {
+    const numId = Number(productId);
+    if (!Number.isFinite(numId)) return false;
+    return this.getLikedProductIds().includes(numId);
+  }
+
+  public setLikedProductIds(ids: number[], userId?: string): number[] {
+    const cleanIds = Array.from(new Set((ids || []).map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0)));
+    try {
+      localStorage.setItem('ze_liked_products_v1', JSON.stringify(cleanIds));
+    } catch {}
+    const uid = userId || auth.currentUser?.uid;
+    if (uid) {
+      updateDoc(doc(db, 'users', uid), {
+        likedProductIds: cleanIds,
+        updatedAt: new Date().toISOString()
+      }).catch(() => {});
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('ze_liked_products_updated', { detail: cleanIds }));
+    }
+    this.listeners.forEach(fn => {
+      try {
+        fn();
+      } catch {}
+    });
+    return cleanIds;
+  }
+
+  public toggleLikedProduct(productId: number | string, userId?: string): boolean {
+    const numId = Number(productId);
+    if (!Number.isFinite(numId) || numId <= 0) return false;
+    const current = this.getLikedProductIds();
+    const exists = current.includes(numId);
+    const next = exists ? current.filter(id => id !== numId) : [numId, ...current];
+    this.setLikedProductIds(next, userId);
+    return !exists;
+  }
+
+  public getLikedProducts(): ExtendedProduct[] {
+    const likedIds = this.getLikedProductIds();
+    if (likedIds.length === 0) return [];
+    const all = this.getProducts(false);
+    return likedIds
+      .map(id => all.find(p => Number(p.id) === Number(id)))
+      .filter((p): p is ExtendedProduct => Boolean(p));
+  }
+
+  public getEffectiveClientCountry(userProfile?: any): string {
+    const profileCountry = userProfile?.country || userProfile?.defaultCountry;
+    if (profileCountry && String(profileCountry).trim()) {
+      return resolveCanonicalCountryName(String(profileCountry).trim());
+    }
+    try {
+      const raw = localStorage.getItem('ze_user_profile_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.country && String(parsed.country).trim()) {
+          return resolveCanonicalCountryName(String(parsed.country).trim());
+        }
+      }
+    } catch {}
+    const defaultSysCountry = siteSettingsService.getSettings()?.defaultClientCountry || 'Sénégal';
+    return resolveCanonicalCountryName(defaultSysCountry) || 'Sénégal';
+  }
+
+  public isCountryDeliverableForProduct(
+    targetCountry: string,
+    productOrDraft?: Partial<ExtendedProduct> | null
+  ): {
+    deliverable: boolean;
+    canonicalCountry: string;
+    supportedCountries: string[];
+    warehouseName?: string;
+    isSourcing: boolean;
+  } {
+    const canonicalCountry = resolveCanonicalCountryName(targetCountry || this.getEffectiveClientCountry());
+    const globalSupported = siteSettingsService.getSettings()?.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES;
+    if (!productOrDraft) {
+      return {
+        deliverable: isDeliveryCountrySupported(canonicalCountry, globalSupported),
+        canonicalCountry,
+        supportedCountries: globalSupported,
+        isSourcing: false
+      };
+    }
+    const isSourcing = isProductSourcing(productOrDraft);
+    const whInfo = this.getProductWarehouseAndFreight(productOrDraft);
+    const supportedCountries = whInfo.supportedDeliveryCountries && whInfo.supportedDeliveryCountries.length > 0
+      ? whInfo.supportedDeliveryCountries
+      : globalSupported;
+    const deliverable = isDeliveryCountrySupported(canonicalCountry, supportedCountries);
+    return {
+      deliverable,
+      canonicalCountry,
+      supportedCountries,
+      warehouseName: whInfo.hasAssignedWarehouse ? whInfo.warehouse.name : undefined,
+      isSourcing
+    };
   }
 
   // ================= AUDIT =================

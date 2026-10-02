@@ -12,11 +12,12 @@ import { getProductImageUrl, handleImageError } from '../constants';
 import {
   catalogService, ExtendedProduct, cleanBrand, normalizeVariants, ProductVariantItem,
   getEffectiveProductBasePrice, parseVariantCharacteristicsToSpecs, isProductSourcing,
-  parseWeightToKg, filterOutSmallOrIconImages
+  parseWeightToKg, filterOutSmallOrIconImages, getCleanProvenanceDisplay
 } from '../services/catalogService';
 import { siteSettingsService } from '../services/siteSettingsService';
 import { useLanguage } from '../LanguageContext';
 import { analyticsTracker } from '../services/analyticsTracker';
+import { WORLD_COUNTRIES, isDeliveryCountrySupported } from '../utils/countries';
 
 export default function ProductDetails() {
   const { id } = useParams<{ id: string }>();
@@ -42,7 +43,11 @@ export default function ProductDetails() {
   const product = useMemo(() => rawProduct ? translateProduct(rawProduct) : undefined, [rawProduct, translateProduct]);
   const navigate = useNavigate();
   const { addItem } = useCart();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const clientDefaultCountry = useMemo(
+    () => catalogService.getEffectiveClientCountry(profile),
+    [profile, siteSettings.defaultClientCountry]
+  );
 
   // Normalize real options / variants with support for distinct price, supplierPrice, image, characteristics & weight per variant
   const productVariants: ProductVariantItem[] = useMemo(() => {
@@ -106,36 +111,41 @@ export default function ProductDetails() {
 
   const originalUnitPrice = hasActiveDiscount ? baseEquipmentPrice : null;
 
-  // Dynamic Freight calculations using the active variant weight, custom product freight overrides, and live site settings
-  const seaRatePerKg = siteSettings.seaFreightPerKgXOF || siteSettings.seaFreightPerKg || 1800;
-  const airRatePerKg = siteSettings.airFreightPerKgXOF || siteSettings.airFreightPerKg || 7500;
-  const autoAirFreightCost = Math.max(siteSettings.airFreightMin || 7500, Math.round(activeWeightKg * airRatePerKg));
-  const autoSeaFreightCost = Math.max(siteSettings.seaFreightMin || 8000, Math.round(activeWeightKg * seaRatePerKg));
+  // Dynamic Freight calculations resolved automatically from the product's & supplier's closest transit warehouse
+  const warehouseFreight = useMemo(
+    () => catalogService.getProductWarehouseAndFreight(product, activeWeightKg),
+    [product, activeWeightKg]
+  );
 
-  const airFreightCost = (product?.customAirFreightCost !== undefined && product.customAirFreightCost >= 0)
-    ? product.customAirFreightCost
-    : autoAirFreightCost;
-  const seaFreightCost = (product?.customSeaFreightCost !== undefined && product.customSeaFreightCost >= 0)
-    ? product.customSeaFreightCost
-    : autoSeaFreightCost;
+  const airFreightCost = warehouseFreight.airFreightCost;
+  const seaFreightCost = warehouseFreight.seaFreightCost;
 
   const [quantity, setQuantity] = useState(1);
-  // Default freight is neutral unless explicitly configured on the product
-  const [selectedFreight, setSelectedFreight] = useState<'neutral' | 'air' | 'sea'>(() => {
-    return product?.defaultShippingMethod || 'neutral';
+  // Client simply chooses between available Air or Sea freight from the assigned warehouse
+  const [selectedFreight, setSelectedFreight] = useState<'air' | 'sea'>(() => {
+    return warehouseFreight.defaultClientMethod;
   });
 
   useEffect(() => {
-    setSelectedFreight(product?.defaultShippingMethod || 'neutral');
-  }, [product?.id, product?.defaultShippingMethod]);
+    setSelectedFreight(warehouseFreight.defaultClientMethod);
+  }, [product?.id, warehouseFreight.defaultClientMethod]);
 
   const [activeTab, setActiveTab] = useState<'specs' | 'shipping'>('specs');
   const [openCurtains, setOpenCurtains] = useState<Record<string, boolean>>({});
   const toggleCurtain = (key: string) => setOpenCurtains(prev => ({ ...prev, [key]: !prev[key] }));
   const [copiedLink, setCopiedLink] = useState(false);
-  const [favorite, setFavorite] = useState(false);
+  const [favorite, setFavorite] = useState<boolean>(() => catalogService.isProductLiked(parsedId || id || ''));
   const [showQuoteModal, setShowQuoteModal] = useState(false);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+
+  useEffect(() => {
+    const syncFav = () => {
+      setFavorite(catalogService.isProductLiked(product?.id || parsedId || id || ''));
+    };
+    syncFav();
+    window.addEventListener('ze_liked_products_updated', syncFav);
+    return () => window.removeEventListener('ze_liked_products_updated', syncFav);
+  }, [product?.id, parsedId, id]);
 
   // Image Zoom & Lightbox states
   const [isHoverZooming, setIsHoverZooming] = useState(false);
@@ -150,11 +160,17 @@ export default function ProductDetails() {
   const [quoteCompany, setQuoteCompany] = useState('');
   const [quotePhone, setQuotePhone] = useState('');
   const [quoteEmail, setQuoteEmail] = useState('');
-  const [quoteCountry, setQuoteCountry] = useState('Sénégal');
+  const [quoteCountry, setQuoteCountry] = useState(() => clientDefaultCountry || 'Sénégal');
   const [quoteMessage, setQuoteMessage] = useState('');
   const [quotePaymentMethod, setQuotePaymentMethod] = useState('virement');
   const [quoteSuccess, setQuoteSuccess] = useState(false);
   const [quoteRef, setQuoteRef] = useState('');
+
+  useEffect(() => {
+    if (clientDefaultCountry) {
+      setQuoteCountry(clientDefaultCountry);
+    }
+  }, [clientDefaultCountry]);
 
   if (!product || product.isOnline === false || (product as any).isUnavailable === true) {
     return (
@@ -194,28 +210,40 @@ export default function ProductDetails() {
   const depositTotal = Math.round((totalTTC * depositPct) / 100);
   const balanceTotal = totalTTC - depositTotal;
 
-  // PDF Catalog & Technical Datasheet URLs (Single clean direct-download PDF per product, zero Grainger mention/redirect)
-  const effectiveCatalogPdfUrl = useMemo(() => {
-    const cleanSku = encodeURIComponent(product?.ref || product?.model || `SKU-${product?.id}`);
-    const cleanTitle = encodeURIComponent(product?.name || '');
-    const cleanBr = encodeURIComponent(cleanBrand(product?.brand || '', product?.name || ''));
-    const rawUrl = (product?.catalogPdfUrl && product.catalogPdfUrl.trim())
-      ? product.catalogPdfUrl.trim()
-      : (product?.pdfUrls && product.pdfUrls.length > 0 && product.pdfUrls[0]?.url ? product.pdfUrls[0].url.trim() : '');
-    const externalSrcParam = (rawUrl && rawUrl.startsWith('http') && !rawUrl.toLowerCase().includes('grainger'))
-      ? `&src=${encodeURIComponent(rawUrl)}`
-      : '';
-    return `/api/catalog-pdf/${cleanSku}?download=1&title=${cleanTitle}&brand=${cleanBr}${externalSrcParam}`;
-  }, [product]);
-
+  // PDF Catalog & Technical Datasheet URLs (direct binary downloads via /api/download-pdf)
   const allPdfDocuments = useMemo(() => {
-    if (!effectiveCatalogPdfUrl) return [];
+    const list: Array<{ title: string; url: string }> = [];
     const cleanRef = product?.ref || product?.model || cleanBrand(product?.brand || '', product?.name || '');
-    return [{
-      title: `${translateText('Catalogue PDF & Fiche Technique Constructeur')}${cleanRef ? ` (${cleanRef})` : ''}`,
-      url: effectiveCatalogPdfUrl
-    }];
-  }, [product, effectiveCatalogPdfUrl, translateText]);
+    const cleanTitle = (product?.name || 'Fiche-Technique').replace(/\s+/g, '-').replace(/__cookie_check[^\.]*/i, 'Fiche-Technique');
+    const cleanSku = encodeURIComponent(product?.ref || product?.model || `SKU-${product?.id}`);
+    const cleanBr = encodeURIComponent(cleanBrand(product?.brand || '', product?.name || ''));
+
+    if (Array.isArray(product?.pdfUrls) && product.pdfUrls.length > 0) {
+      product.pdfUrls.forEach((doc, idx) => {
+        if (!doc?.url || doc.url.includes('__cookie_check.html')) return;
+        const safeDocTitle = doc.title || `${translateText('Catalogue & Documentation Technique')} ${idx > 0 ? `#${idx + 1}` : ''}`;
+        const downloadUrl = `/api/download-pdf?url=${encodeURIComponent(doc.url)}&filename=${encodeURIComponent(`${cleanTitle}-${idx + 1}`)}&sku=${cleanSku}&brand=${cleanBr}`;
+        list.push({
+          title: safeDocTitle,
+          url: downloadUrl
+        });
+      });
+    } else if (product?.catalogPdfUrl && !product.catalogPdfUrl.includes('__cookie_check.html')) {
+      const downloadUrl = `/api/download-pdf?url=${encodeURIComponent(product.catalogPdfUrl)}&filename=${encodeURIComponent(cleanTitle)}&sku=${cleanSku}&brand=${cleanBr}`;
+      list.push({
+        title: `${translateText('Catalogue PDF & Fiche Technique Constructeur')}${cleanRef ? ` (${cleanRef})` : ''}`,
+        url: downloadUrl
+      });
+    } else {
+      list.push({
+        title: `${translateText('Catalogue PDF & Fiche Technique Constructeur')}${cleanRef ? ` (${cleanRef})` : ''}`,
+        url: `/api/catalog-pdf/${cleanSku}?download=1&title=${encodeURIComponent(product?.name || '')}&brand=${cleanBr}`
+      });
+    }
+    return list;
+  }, [product, translateText]);
+
+  const effectiveCatalogPdfUrl = allPdfDocuments.length > 0 ? allPdfDocuments[0].url : '';
 
   const handleAddToCart = () => {
     // 1. Mandatory variant selection check: user MUST select an option if available
@@ -231,10 +259,11 @@ export default function ProductDetails() {
 
     setVariantSelectionError(null);
 
-    // Internal Agent Code strictly for logistics / orders: DKR628+AIR, DKR628+SEA, or neutral/local
-    const effectiveShippingMethod: 'none' | 'neutral' | 'air' | 'sea' = isSourcingProduct ? selectedFreight : 'none';
+    // Internal Agent Code strictly for logistics / orders from the assigned warehouse
+    const effectiveShippingMethod: 'none' | 'air' | 'sea' = isSourcingProduct ? selectedFreight : 'none';
+    const whCode = warehouseFreight.warehouse?.agentCode || 'DKR628';
     const internalAgentCode = isSourcingProduct
-      ? (selectedFreight === 'sea' ? 'DKR628+SEA' : selectedFreight === 'air' ? 'DKR628+AIR' : '')
+      ? (selectedFreight === 'sea' ? `${whCode}+SEA` : `${whCode}+AIR`)
       : 'STOCK-LOCAL-DKR';
 
     const itemName = selectedVariant 
@@ -376,7 +405,10 @@ export default function ProductDetails() {
   ];
 
   const shippingRight = [
-    { label: translateText("Pays de provenance"), value: product.origin || 'International' },
+    { 
+      label: translateText("Pays de provenance"), 
+      value: getCleanProvenanceDisplay(product.origin, (product as any).supplierCountry, (product as any).sourcePlatform) || translateText('Conforme constructeur') 
+    },
     { label: translateText('Poids brut vérifié'), value: `${activeWeightKg} kg` },
     { label: translateText('Dimensions colis'), value: translateText(product.dimensions || 'Standard export') },
     {
@@ -518,9 +550,14 @@ export default function ProductDetails() {
                         </button>
                         <button 
                           type="button"
-                          onClick={() => setFavorite(!favorite)}
-                          className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-red-600 transition-all text-gray-400 cursor-pointer"
-                          title="Ajouter aux favoris"
+                          onClick={() => {
+                            const nextLiked = catalogService.toggleLikedProduct(product.id, user?.uid);
+                            setFavorite(nextLiked);
+                          }}
+                          className={`p-2 rounded-full bg-white/90 shadow-sm border transition-all cursor-pointer ${
+                            favorite ? 'border-red-300 text-red-500 bg-red-50/90' : 'border-gray-200 text-gray-400 hover:text-red-600'
+                          }`}
+                          title={favorite ? "Retirer de mes produits aimés" : "Ajouter à mes produits aimés"}
                         >
                           <Heart className={`w-4 h-4 ${favorite ? 'text-red-500 fill-red-500' : ''}`} />
                         </button>
@@ -684,9 +721,20 @@ export default function ProductDetails() {
             <div className="lg:col-span-7 flex flex-col justify-between">
               <div>
                 
-                {/* Brand Identifier (Clean, strictly no platform names) */}
-                <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-                  {translateText('Marque')} : <span className="text-[#003366] font-bold">{cleanBrand(product.brand, product.name)}</span>
+                {/* Brand Identifier & Provenance Badge directly below */}
+                <div className="flex flex-col gap-1.5 items-start mb-2.5">
+                  <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                    {translateText('Marque')} : <span className="text-[#003366] font-bold bg-blue-50 px-2 py-0.5 rounded border border-blue-100">{cleanBrand(product.brand, product.name)}</span>
+                  </div>
+                  {(() => {
+                    const cleanProv = getCleanProvenanceDisplay(product.origin, (product as any).supplierCountry, (product as any).sourcePlatform);
+                    if (!cleanProv) return null;
+                    return (
+                      <div className="inline-flex items-center gap-1 font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded text-[10px]">
+                        📍 {translateText('Provenance')} : <span className="font-bold">{cleanProv}</span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Main Product Title */}
@@ -699,8 +747,6 @@ export default function ProductDetails() {
                   <span>{translateText('Référence SKU')}: <strong className="text-gray-900 font-semibold">{product.ref}</strong></span>
                   <span className="text-gray-300">|</span>
                   <span>{translateText('Modèle')}: <strong className="text-gray-900 font-semibold">{displayModel}</strong></span>
-                  <span className="text-gray-300">|</span>
-                  <span>{translateText('Origine')}: <strong className="text-gray-900 font-semibold">{product.origin || 'International'}</strong></span>
                 </div>
 
                 {/* Pricing Block */}
@@ -824,69 +870,59 @@ export default function ProductDetails() {
                           {t('freight_selection_title')} ({translateText('Optionnel')})
                         </label>
                         <div className="flex items-center gap-2">
-                          {selectedFreight !== 'neutral' && (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedFreight('neutral')}
-                              className="text-[10px] font-bold text-gray-500 hover:text-[#003366] underline cursor-pointer"
-                            >
-                              {translateText('Désélectionner (Neutre)')}
-                            </button>
-                          )}
                           <span className="text-[10px] font-mono text-gray-600 font-bold bg-white px-2 py-0.5 rounded border border-gray-200">
                             {translateText('Poids calculé')} : {activeWeightKg} kg
                           </span>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {/* Option 1: Fret Maritime Économique (toggleable to neutral) */}
-                        <button
-                          type="button"
-                          onClick={() => setSelectedFreight(selectedFreight === 'sea' ? 'neutral' : 'sea')}
-                          className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
-                            selectedFreight === 'sea'
-                              ? 'bg-[#003366] text-white border-[#003366] shadow-xs'
-                              : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
-                          }`}
-                        >
-                          <div className="font-bold text-xs flex items-center justify-between">
-                            <span>{translateText('Fret Maritime Économique')}</span>
-                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${selectedFreight === 'sea' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
-                              +{seaFreightCost.toLocaleString('fr-FR')} F
+                      <div className={`grid grid-cols-1 ${warehouseFreight.offersSeaFreight && warehouseFreight.offersAirFreight ? 'sm:grid-cols-2' : ''} gap-2.5`}>
+                        {/* Option 1: Fret Maritime Économique (proposé selon les services de l'entrepôt assigné) */}
+                        {warehouseFreight.offersSeaFreight && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFreight('sea')}
+                            className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                              selectedFreight === 'sea'
+                                ? 'bg-[#003366] text-white border-[#003366] shadow-xs'
+                                : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
+                            }`}
+                          >
+                            <div className="font-bold text-xs flex items-center justify-between">
+                              <span>🚢 {translateText('Fret Maritime Économique')}</span>
+                              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${selectedFreight === 'sea' ? 'bg-emerald-600 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                                +{seaFreightCost.toLocaleString('fr-FR')} F
+                              </span>
+                            </div>
+                            <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'sea' ? 'text-blue-100' : 'text-gray-400'}`}>
+                              {warehouseFreight.seaDuration} • {warehouseFreight.seaRatePerKg.toLocaleString('fr-FR')} F/kg
                             </span>
-                          </div>
-                          <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'sea' ? 'text-blue-100' : 'text-gray-400'}`}>
-                            {siteSettings.seaFreightDurationDays || '30 - 45 jours'}
-                          </span>
-                        </button>
+                          </button>
+                        )}
 
-                        {/* Option 2: Fret Aérien Express (toggleable to neutral) */}
-                        <button
-                          type="button"
-                          onClick={() => setSelectedFreight(selectedFreight === 'air' ? 'neutral' : 'air')}
-                          className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
-                            selectedFreight === 'air'
-                              ? 'bg-[#003366] text-white border-[#003366] shadow-xs'
-                              : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
-                          }`}
-                        >
-                          <div className="font-bold text-xs flex items-center justify-between">
-                            <span>{translateText('Fret Aérien Express')}</span>
-                            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${selectedFreight === 'air' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
-                              +{airFreightCost.toLocaleString('fr-FR')} F
+                        {/* Option 2: Fret Aérien Express (proposé selon les services de l'entrepôt assigné) */}
+                        {warehouseFreight.offersAirFreight && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFreight('air')}
+                            className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                              selectedFreight === 'air'
+                                ? 'bg-[#003366] text-white border-[#003366] shadow-xs'
+                                : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
+                            }`}
+                          >
+                            <div className="font-bold text-xs flex items-center justify-between">
+                              <span>✈️ {translateText('Fret Aérien Express')}</span>
+                              <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${selectedFreight === 'air' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                                +{airFreightCost.toLocaleString('fr-FR')} F
+                              </span>
+                            </div>
+                            <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'air' ? 'text-blue-100' : 'text-gray-400'}`}>
+                              {warehouseFreight.airDuration} • {warehouseFreight.airRatePerKg.toLocaleString('fr-FR')} F/kg
                             </span>
-                          </div>
-                          <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'air' ? 'text-blue-100' : 'text-gray-400'}`}>
-                            {siteSettings.airFreightDurationDays || '5 - 10 jours'}
-                          </span>
-                        </button>
+                          </button>
+                        )}
                       </div>
-                      {selectedFreight === 'neutral' && (
-                        <p className="text-[10px] text-gray-500 mt-1.5 italic">
-                          {translateText('Mode neutre actif : aucun frais de fret international n\'est ajouté d\'office. Cliquez sur Maritime ou Aérien ci-dessus si vous souhaitez l\'inclure.')}
-                        </p>
-                      )}
                     </>
                   ) : (
                     <div className="flex items-center justify-between gap-2">
@@ -902,6 +938,34 @@ export default function ProductDetails() {
                     </div>
                   )}
 
+                  {/* Supported Delivery Countries & Client Default Country Indicator */}
+                  <div className="mt-3 pt-2.5 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-1.5 text-gray-600">
+                      <Globe className="w-3.5 h-3.5 text-[#003366] shrink-0" />
+                      <span className="font-bold text-[#003366]">{translateText('Pays livrés')} :</span>
+                      <span className="font-semibold text-gray-800">
+                        {warehouseFreight.supportedDeliveryCountries.join(', ')}
+                      </span>
+                    </div>
+                    {isDeliveryCountrySupported(clientDefaultCountry, warehouseFreight.supportedDeliveryCountries) ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                        ✓ Livraison disponible vers votre pays ({clientDefaultCountry})
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
+                        ⚠️ Votre pays par défaut ({clientDefaultCountry}) n'est pas desservi par cet entrepôt
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Freight carrier dependency & autonomous customs note */}
+                  <div className="mt-2.5 pt-2 border-t border-slate-200/60 text-[10px] text-gray-500 flex items-start gap-1.5">
+                    <span className="text-[#FF6600] font-bold">ℹ</span>
+                    <span>
+                      {translateText('Les tarifs de fret dépendent des barèmes réels de nos compagnies logistiques partenaires maritimes et aériennes. Le dédouanement maritime est généralement géré par les services logistiques de l\'ensemble de nos agents transitaires. Pour le fret aérien, les expéditions peuvent parfois faire l\'objet d\'un blocage ou contrôle temporaire en douane pour régularisation des formalités de dédouanement.')}
+                    </span>
+                  </div>
+
                   {/* Dynamic Pricing Breakdown (Organized, spacious & mobile-friendly) */}
                   <div className="mt-4 pt-3 border-t border-slate-200/90">
                     <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 sm:gap-2 text-xs">
@@ -913,9 +977,9 @@ export default function ProductDetails() {
                         <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">
                           {isSourcingProduct ? t('freight_selected_cost') : 'Option Fret'}
                         </span>
-                        <span className={`font-mono font-bold text-xs ${isSourcingProduct && selectedFreight !== 'neutral' ? 'text-orange-600' : 'text-gray-500'}`}>
+                        <span className={`font-mono font-bold text-xs ${isSourcingProduct ? 'text-orange-600' : 'text-gray-500'}`}>
                           {isSourcingProduct
-                            ? (selectedFreight === 'neutral' ? translateText('Non sélectionné (0 F)') : `+${freightCost.toLocaleString('fr-FR')} FCFA`)
+                            ? `+${freightCost.toLocaleString('fr-FR')} FCFA`
                             : 'Inclus (0 FCFA)'}
                         </span>
                       </div>
@@ -1003,34 +1067,54 @@ export default function ProductDetails() {
                     </button>
                   </div>
 
-                  {/* Standard Catalog-Style Add to Cart Button */}
-                  <button 
-                    onClick={handleAddToCart}
-                    className="bg-[#003366] hover:bg-[#002244] text-white h-9 px-4 rounded-lg font-semibold text-xs transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                  {/* Action Button: Cart if price exists, Quote if no price */}
+                  {currentUnitPrice > 0 ? (
+                    <button 
+                      onClick={handleAddToCart}
+                      className="bg-[#003366] hover:bg-[#002244] text-white h-10 px-5 rounded-xl font-bold text-xs sm:text-sm transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <ShoppingCart className="w-4 h-4" /> {t('add_to_cart_btn')}
+                    </button>
+                  ) : (
+                    <button 
+                      onClick={() => setShowQuoteModal(true)}
+                      className="bg-[#FF6600] hover:bg-[#e65c00] text-white h-10 px-5 rounded-xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                    >
+                      <FileText className="w-4 h-4" /> {t('quote_pro_btn')}
+                    </button>
+                  )}
+
+                  {/* Like / Favorite Product Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextLiked = catalogService.toggleLikedProduct(product.id, user?.uid);
+                      setFavorite(nextLiked);
+                    }}
+                    className={`h-10 px-3.5 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border ${
+                      favorite
+                        ? 'bg-rose-50 text-rose-600 border-rose-300'
+                        : 'bg-white hover:bg-rose-50/60 text-gray-600 hover:text-rose-600 border-gray-300'
+                    }`}
+                    title={favorite ? 'Retirer de mes produits aimés' : 'Ajouter à mes produits aimés'}
                   >
-                    <ShoppingCart className="w-3.5 h-3.5" /> {t('add_to_cart_btn')}
+                    <Heart className={`w-3.5 h-3.5 ${favorite ? 'fill-rose-500 text-rose-500' : ''}`} />
+                    <span>{favorite ? translateText('Aimé') : translateText('Aimer')}</span>
                   </button>
 
-                  {/* Standard Catalog-Style Request Quote Button */}
-                  <button 
-                    onClick={() => setShowQuoteModal(true)}
-                    className="bg-white hover:bg-orange-50 text-[#FF6600] border border-[#FF6600] h-9 px-4 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                  >
-                    <FileText className="w-3.5 h-3.5" /> {t('quote_pro_btn')}
-                  </button>
-
-                  {/* Catalogue PDF Constructeur Button (Téléchargement direct sans redirection) */}
-                  {effectiveCatalogPdfUrl && (
+                  {/* Multiple Catalogue(s) PDF Constructeur (Téléchargement direct en binaire sans conversion HTML) */}
+                  {allPdfDocuments.map((doc, dIdx) => (
                     <a
-                      href={effectiveCatalogPdfUrl}
-                      download={`Catalogue-Technique-${product.ref || product.id}.pdf`}
-                      className="bg-slate-100 hover:bg-[#003366] text-[#003366] hover:text-white border border-slate-300 h-9 px-3.5 rounded-lg font-semibold text-xs transition-all flex items-center justify-center gap-1.5 shadow-xs"
-                      title={translateText('Télécharger directement le Catalogue PDF & Fiche Technique Constructeur')}
+                      key={dIdx}
+                      href={doc.url}
+                      download
+                      className="bg-slate-100 hover:bg-[#003366] text-[#003366] hover:text-white border border-slate-300 h-10 px-3.5 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-1.5 shadow-xs"
+                      title={doc.title}
                     >
                       <Download className="w-3.5 h-3.5 text-[#FF6600]" />
-                      <span>{translateText('Catalogue PDF')}</span>
+                      <span>{allPdfDocuments.length > 1 ? `PDF #${dIdx + 1}` : translateText('Catalogue PDF')}</span>
                     </a>
-                  )}
+                  ))}
                 </div>
 
               </div>
@@ -1372,11 +1456,16 @@ export default function ProductDetails() {
                           onChange={(e) => setQuoteCountry(e.target.value)}
                           className="w-full bg-white border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-xs font-medium focus:ring-2 focus:ring-[#003366] focus:outline-none"
                         >
-                          <option value="Sénégal">Sénégal (Dakar)</option>
-                          <option value="Côte d'Ivoire">Côte d'Ivoire (Abidjan)</option>
-                          <option value="Mali">Mali (Bamako)</option>
-                          <option value="Guinée">Guinée (Conakry)</option>
-                          <option value="Burkina Faso">Burkina Faso (Ouagadougou)</option>
+                          <optgroup label="Pays pris en charge par cet entrepôt">
+                            {warehouseFreight.supportedDeliveryCountries.map(c => (
+                              <option key={`sup-${c}`} value={c}>{c} (Livraison prise en charge)</option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Tous les pays">
+                            {WORLD_COUNTRIES.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </optgroup>
                         </select>
                       </div>
                     </div>

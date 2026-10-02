@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { catalogService, getEffectiveProductBasePrice, isProductSourcing, parseWeightToKg } from './services/catalogService';
 
 export interface CartItem {
   id: string | number;
@@ -134,7 +135,7 @@ function normalizeStoredCartItem(raw: any, index: number): CartItem {
     img,
     image: img,
     brand: String(raw?.brand || 'Constructeur Certifié'),
-    origin: raw?.origin || 'International',
+    origin: (raw?.origin && !/^(international|inconnu)$/i.test(raw.origin.trim())) ? raw.origin.trim() : undefined,
     quantity: Math.max(1, Number(raw?.quantity) || 1),
     shippingMethod: method,
     freightCost: Number(raw?.freightCost ?? 0),
@@ -164,6 +165,100 @@ export function CartProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('ze_cart_v1', serialized);
     localStorage.setItem('zone_equipements_cart', serialized);
   }, [items]);
+
+  // Synchronisation intelligente et immédiate du panier avec le catalogue :
+  // Si un produit a été supprimé puis réintroduit (par exemple avec un nouvel ID, mais même modèle, référence unique ou nom/marque),
+  // ou si ses caractéristiques ont changé (prix, photos, titre, description, poids, traduction, disponibilité),
+  // le panier détecte immédiatement ces différences et synchronise les données sans perte de quantité !
+  useEffect(() => {
+    const syncCartWithLatestCatalog = () => {
+      const catalog = catalogService.getProducts();
+      if (!catalog || catalog.length === 0) return;
+
+      setItems(currentItems => {
+        let changed = false;
+        const updated = currentItems.map(item => {
+          // 1. Recherche par ID direct
+          let matched = catalog.find(p => p.id === item.productId);
+
+          // 2. Si non trouvé (produit supprimé puis réintroduit), recherche par modèle, référence unique ou titre/marque
+          if (!matched) {
+            matched = catalog.find(p => {
+              const itemModel = (item as any).model;
+              const itemRef = (item as any).ref;
+              if (itemModel && p.model && p.model.toLowerCase().trim() === String(itemModel).toLowerCase().trim()) return true;
+              if (itemRef && p.ref && p.ref.toLowerCase().trim() === String(itemRef).toLowerCase().trim()) return true;
+              const cleanItemName = (item.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              const cleanProdName = (p.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              const cleanItemBrand = (item.brand || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              const cleanProdBrand = (p.brand || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+              return cleanItemName.length > 5 && cleanItemName === cleanProdName && cleanItemBrand === cleanProdBrand;
+            });
+          }
+
+          if (!matched) return item;
+
+          // Détecter les différences éventuelles
+          const latestBasePrice = getEffectiveProductBasePrice(matched);
+          const latestImg = matched.images?.[0] || matched.img || matched.image || item.img;
+          const isSourcing = isProductSourcing(matched);
+          const cleanOrigin = (matched.origin && !/^(international|inconnu)$/i.test(matched.origin.trim()))
+            ? matched.origin.trim()
+            : (item.origin && !/^(international|inconnu)$/i.test(item.origin.trim()) ? item.origin : undefined);
+
+          const hasDiff =
+            item.productId !== matched.id ||
+            item.name !== matched.name ||
+            item.brand !== matched.brand ||
+            item.price !== latestBasePrice ||
+            item.basePriceHT !== latestBasePrice ||
+            item.img !== latestImg ||
+            item.weightKg !== parseWeightToKg(matched.weight, 1.0) ||
+            item.origin !== cleanOrigin ||
+            item.inStock !== !isSourcing ||
+            (matched.description && item.variantDescription !== matched.description);
+
+          if (hasDiff) {
+            changed = true;
+            const updatedItem: CartItem = {
+              ...item,
+              productId: matched.id,
+              name: matched.name,
+              brand: matched.brand,
+              origin: cleanOrigin,
+              weightKg: parseWeightToKg(matched.weight, 1.0),
+              img: latestImg,
+              image: latestImg,
+              price: latestBasePrice,
+              basePriceHT: latestBasePrice,
+              costPrice: matched.costPrice ?? item.costPrice,
+              inStock: !isSourcing,
+              availabilityMode: isSourcing ? 'sourcing' : 'stock',
+              defaultShippingMethod: (matched.defaultShippingMethod || item.defaultShippingMethod || 'neutral') as 'neutral' | 'sea' | 'air',
+              customSeaFreightCost: matched.customSeaFreightCost ?? item.customSeaFreightCost,
+              customAirFreightCost: matched.customAirFreightCost ?? item.customAirFreightCost,
+              showDeposit: matched.showDeposit ?? item.showDeposit,
+              depositPercentage: matched.depositPercentage ?? item.depositPercentage,
+              applyVat: matched.applyVat ?? item.applyVat
+            };
+            return updatedItem;
+          }
+          return item;
+        });
+
+        return changed ? updated : currentItems;
+      });
+    };
+
+    // Synchronisation immédiate
+    syncCartWithLatestCatalog();
+
+    // Abonnement aux changements du catalogue
+    const unsub = catalogService.subscribe(() => {
+      syncCartWithLatestCatalog();
+    });
+    return () => unsub();
+  }, []);
 
   const addToCart: CartContextType['addToCart'] = (
     product,
@@ -284,7 +379,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         img,
         image: img,
         brand: raw.brand || 'Constructeur Certifié',
-        origin: raw.origin || 'International',
+        origin: (raw.origin && !/^(international|inconnu)$/i.test(String(raw.origin).trim())) ? String(raw.origin).trim() : undefined,
         showDeposit: raw.showDeposit,
         depositPercentage: raw.depositPercentage,
         applyVat: raw.applyVat,

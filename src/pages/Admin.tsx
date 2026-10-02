@@ -14,7 +14,7 @@ import {
   computeSingleVariantPricing, getCheapestVariant, getEffectiveProductBasePrice, normalizeVariants,
   formatSpecsToCharacteristicsText, parseVariantCharacteristicsToSpecs, parseCharacteristicsTextToSpecs, translateSpecsRecordToFrench,
   smartTranslateProductTitleToFrench, smartTranslateProductDescriptionToFrench, translateAndReformatProductSmart, isProductSourcing,
-  parseWeightToKg, filterOutSmallOrIconImages,
+  parseWeightToKg, filterOutSmallOrIconImages, extractDimensionsFromSpecsClient,
   getClientWarehouseCode, getItemFreightCode, formatSupplierParcelLabel,
   formatWarehouseConsigneeLine, formatWarehouseFullAddress
 } from '../services/catalogService';
@@ -29,6 +29,7 @@ import { PurchaseOrderModal } from '../components/admin/PurchaseOrderModal';
 import { DailySupplierDispatchModal } from '../components/admin/DailySupplierDispatchModal';
 import { ClientNotificationModal } from '../components/admin/ClientNotificationModal';
 import { SiteSettingsManager } from '../components/admin/SiteSettingsManager';
+import { SecurityFirewallManager } from '../components/admin/SecurityFirewallManager';
 import { ImageUploadInput } from '../components/ImageUploadInput';
 import { ConfirmModal } from '../components/admin/ConfirmModal';
 import { printHtmlDocument } from '../utils/printDocument';
@@ -37,13 +38,14 @@ import AdminNotificationsBell from '../components/admin/AdminNotificationsBell';
 import { EmailMarketingManager } from '../components/admin/EmailMarketingManager';
 import { DirectInvoiceModal } from '../components/admin/DirectInvoiceModal';
 import { PhysicalStorePOS } from '../components/admin/PhysicalStorePOS';
+import { WORLD_COUNTRIES, resolveCanonicalCountryName } from '../utils/countries';
 
 export default function Admin() {
   const { user, isAdmin, loading } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState<'pos' | 'finance' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'campaigns' | 'security'>('pos');
+  const [activeTab, setActiveTab] = useState<'pos' | 'finance' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'campaigns' | 'security' | 'firewall'>('pos');
   const [catalogSubTab, setCatalogSubTab] = useState<'products' | 'structure'>('products');
   const [showDirectInvoiceModal, setShowDirectInvoiceModal] = useState(false);
   
@@ -137,6 +139,7 @@ export default function Admin() {
     supplierName: string;
     supplierCountry: string;
     supplierPlatform: string;
+    agentWarehouseId?: string;
     description?: string;
     inStock?: boolean;
     availabilityMode?: 'stock' | 'sourcing';
@@ -327,6 +330,98 @@ export default function Admin() {
   const totalPages = Math.ceil(filteredProducts.length / itemsPerPage) || 1;
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+  // Intelligence Produit <-> Fournisseur Adéquat & Entrepôt le Plus Proche (Formulaire Manuel)
+  const manualSupplierWarehouseMatch = useMemo(() => {
+    const supMatch = catalogService.findAdequateSupplierForProduct({
+      id: editingProduct?.id,
+      name: formProduct.name,
+      brand: formProduct.brand,
+      category: formProduct.category,
+      origin: formProduct.origin,
+      sourcePlatform: formProduct.sourcePlatform,
+      supplierId: formProduct.supplierId,
+      supplierName: formProduct.supplierName,
+      supplierUrl: formProduct.supplierUrl,
+      supplierCurrency: formProduct.supplierCurrency
+    });
+    const activeSupplier =
+      (formProduct.supplierId ? suppliers.find(s => s.id === formProduct.supplierId) : undefined) ||
+      supMatch.supplier;
+    const whMatch = catalogService.findClosestAgentWarehouse({
+      warehouseId: formProduct.agentWarehouseId || activeSupplier?.agentWarehouseId,
+      country: activeSupplier?.country || formProduct.origin,
+      platform: formProduct.sourcePlatform || activeSupplier?.platform,
+      origin: formProduct.origin,
+      supplierUrl: formProduct.supplierUrl || activeSupplier?.websiteUrl,
+      supplierName: activeSupplier?.name || formProduct.supplierName,
+      currency: formProduct.supplierCurrency || activeSupplier?.currency
+    });
+    return {
+      supMatch,
+      activeSupplier,
+      whMatch
+    };
+  }, [
+    editingProduct?.id,
+    formProduct.name,
+    formProduct.brand,
+    formProduct.category,
+    formProduct.origin,
+    formProduct.sourcePlatform,
+    formProduct.supplierId,
+    formProduct.supplierName,
+    formProduct.supplierUrl,
+    formProduct.supplierCurrency,
+    formProduct.agentWarehouseId,
+    suppliers,
+    agentWarehouses
+  ]);
+
+  // Intelligence Produit <-> Fournisseur Adéquat & Entrepôt le Plus Proche (Formulaire Import Lien)
+  const importSupplierWarehouseMatch = useMemo(() => {
+    const supMatch = catalogService.findAdequateSupplierForProduct({
+      name: importForm.name,
+      brand: importForm.brand,
+      category: importForm.category,
+      origin: importForm.supplierCountry,
+      sourcePlatform: importForm.supplierPlatform,
+      supplierId: importForm.supplierId,
+      supplierName: importForm.supplierName,
+      supplierUrl: parsedLinkData?.url,
+      supplierCurrency: importForm.supplierCurrency
+    });
+    const activeSupplier =
+      (importForm.supplierId ? suppliers.find(s => s.id === importForm.supplierId) : undefined) ||
+      supMatch.supplier;
+    const whMatch = catalogService.findClosestAgentWarehouse({
+      warehouseId: importForm.agentWarehouseId,
+      country: importForm.supplierCountry || activeSupplier?.country || parsedLinkData?.detectedCountry,
+      platform: importForm.supplierPlatform || activeSupplier?.platform || parsedLinkData?.detectedPlatform,
+      origin: importForm.supplierCountry || parsedLinkData?.detectedCountry,
+      supplierUrl: parsedLinkData?.url || activeSupplier?.websiteUrl,
+      supplierName: importForm.supplierName || activeSupplier?.name,
+      currency: importForm.supplierCurrency || activeSupplier?.currency
+    });
+    return {
+      supMatch,
+      activeSupplier,
+      whMatch
+    };
+  }, [
+    importForm.name,
+    importForm.brand,
+    importForm.category,
+    importForm.supplierCountry,
+    importForm.supplierPlatform,
+    importForm.supplierId,
+    importForm.supplierName,
+    importForm.supplierCurrency,
+    importForm.agentWarehouseId,
+    parsedLinkData,
+    suppliers,
+    agentWarehouses
+  ]);
+
   // Dynamic pricing calculation helper for manual form
   const currentCalculatedPricing = useMemo(() => {
     const rawWeight = parseWeightToKg(formProduct.weight) || 2;
@@ -345,10 +440,12 @@ export default function Admin() {
       ? (parseWeightToKg(cheapestVar.weight) || rawWeight || 2)
       : (rawWeight || 2);
 
+    const activeWh = manualSupplierWarehouseMatch.whMatch.warehouse;
     const calc = catalogService.calculatePricing({
       supplierPrice: effectiveSupplierPrice,
       supplierCurrency: formProduct.supplierCurrency || 'USD',
       weightKg: effectiveWeight,
+      dimensions: formProduct.dimensions,
       ignoreSeaWeight: formProduct.ignoreSeaWeight,
       ignoreSeaVolume: formProduct.ignoreSeaVolume,
       marginRate: Number(formProduct.marginRate) || 0.35,
@@ -357,7 +454,10 @@ export default function Admin() {
         : formProduct.defaultShippingMethod === 'air'
           ? 'air'
           : (formProduct.shippingMethod || 'auto'),
-      warehouseDeliveryUSD: Number(formProduct.warehouseDeliveryFeeUSD) || 0,
+      agentWarehouseId: activeWh?.id,
+      warehouseDeliveryUSD: formProduct.warehouseDeliveryFeeUSD !== undefined
+        ? Number(formProduct.warehouseDeliveryFeeUSD)
+        : (activeWh?.domesticDeliveryFeeUSD ?? 20),
       applyVat: formProduct.applyVat !== false
     });
 
@@ -393,15 +493,16 @@ export default function Admin() {
       airFreightCostXOF: finalAirCost,
       freightCostXOF: finalFreightCost
     };
-  }, [formProduct.supplierPrice, formProduct.supplierCurrency, formProduct.weight, formProduct.marginRate, formProduct.shippingMethod, formProduct.defaultShippingMethod, formProduct.customSeaFreightCost, formProduct.customAirFreightCost, formProduct.warehouseDeliveryFeeUSD, formProduct.applyVat, formProduct.ignoreSeaWeight, formProduct.ignoreSeaVolume, formProduct.options, siteSettings]);
+  }, [formProduct.supplierPrice, formProduct.supplierCurrency, formProduct.weight, formProduct.dimensions, formProduct.marginRate, formProduct.shippingMethod, formProduct.defaultShippingMethod, formProduct.customSeaFreightCost, formProduct.customAirFreightCost, formProduct.warehouseDeliveryFeeUSD, formProduct.applyVat, formProduct.ignoreSeaWeight, formProduct.ignoreSeaVolume, formProduct.options, siteSettings, manualSupplierWarehouseMatch.whMatch.warehouse]);
 
   // Dynamic pricing calculation helper for import form
   const importCalculatedPricing = useMemo(() => {
+    const activeWh = importSupplierWarehouseMatch.whMatch.warehouse;
     const baseSupplierPrice = Number(importForm.supplierPrice) || 0;
     const pricingCtx = {
       supplierCurrency: importForm.supplierCurrency,
       marginRate: Number(importForm.marginRate) || 0.35,
-      warehouseDeliveryFeeUSD: 20,
+      warehouseDeliveryFeeUSD: activeWh?.domesticDeliveryFeeUSD ?? 20,
       applyVat: importForm.applyVat
     };
     const cheapestVar = getCheapestVariant(importForm.options || [], pricingCtx);
@@ -417,6 +518,7 @@ export default function Admin() {
       supplierPrice: effectiveSupplierPrice,
       supplierCurrency: importForm.supplierCurrency,
       weightKg: parsedKg,
+      dimensions: importForm.dimensions,
       ignoreSeaWeight: importForm.ignoreSeaWeight,
       ignoreSeaVolume: importForm.ignoreSeaVolume,
       marginRate: Number(importForm.marginRate) || 0.35,
@@ -425,6 +527,8 @@ export default function Admin() {
         : importForm.defaultShippingMethod === 'air'
           ? 'air'
           : 'auto',
+      agentWarehouseId: activeWh?.id,
+      warehouseDeliveryUSD: activeWh?.domesticDeliveryFeeUSD ?? 20,
       applyVat: importForm.applyVat
     });
 
@@ -460,7 +564,7 @@ export default function Admin() {
       airFreightCostXOF: finalAirCost,
       freightCostXOF: finalFreightCost
     };
-  }, [importForm.supplierPrice, importForm.supplierCurrency, importForm.weight, importForm.weightInput, importForm.marginRate, importForm.applyVat, importForm.ignoreSeaWeight, importForm.ignoreSeaVolume, importForm.defaultShippingMethod, importForm.customSeaFreightCost, importForm.customAirFreightCost, importForm.options, siteSettings]);
+  }, [importForm.supplierPrice, importForm.supplierCurrency, importForm.weight, importForm.weightInput, importForm.dimensions, importForm.marginRate, importForm.applyVat, importForm.ignoreSeaWeight, importForm.ignoreSeaVolume, importForm.defaultShippingMethod, importForm.customSeaFreightCost, importForm.customAirFreightCost, importForm.options, siteSettings, importSupplierWarehouseMatch.whMatch.warehouse]);
 
   // Open Edit modal
   const handleOpenEdit = (prod: ExtendedProduct) => {
@@ -602,11 +706,22 @@ export default function Admin() {
     const parsedWeightKg = parseWeightToKg(formProduct.weight);
     const normalizedWeightStr = parsedWeightKg > 0 ? `${parsedWeightKg} kg` : (formProduct.weight || '2 kg');
 
+    const resolvedSupplier = manualSupplierWarehouseMatch.activeSupplier;
+    const resolvedClosestWh = manualSupplierWarehouseMatch.whMatch.warehouse;
+    const hasRealWarehouse = resolvedClosestWh && resolvedClosestWh.id !== 'aw-unconfigured';
+
     const payload: Partial<ExtendedProduct> = {
       ...formProduct,
       name: translatedData.name || formProduct.name.trim(),
+      origin: resolveCanonicalCountryName(formProduct.origin) || formProduct.origin || 'Chine',
       weight: normalizedWeightStr,
       category: chosenCat,
+      supplierId: formProduct.supplierId || resolvedSupplier?.id,
+      supplierName: formProduct.supplierName?.trim() || resolvedSupplier?.name,
+      agentWarehouseId: formProduct.agentWarehouseId?.trim() ? formProduct.agentWarehouseId.trim() : undefined,
+      agentWarehouseName: formProduct.agentWarehouseId?.trim()
+        ? (agentWarehouses.find(w => w.id === formProduct.agentWarehouseId)?.name || formProduct.agentWarehouseName)
+        : undefined,
       inStock: !isSourcingMode,
       availabilityMode: isSourcingMode ? 'sourcing' : 'stock',
       defaultShippingMethod: isSourcingMode ? (formProduct.defaultShippingMethod || 'neutral') : 'neutral',
@@ -649,6 +764,7 @@ export default function Admin() {
     setShowAddModal(false);
     setEditingProduct(null);
     refreshData();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleAddGalleryImage = () => {
@@ -720,17 +836,21 @@ export default function Admin() {
       const currentBrand = mode === 'manual' ? (formProduct.brand || '') : (importForm.brand || '');
       const currentDesc = mode === 'manual' ? (formProduct.description || '') : (importForm.description || '');
       const currentSpecs = mode === 'manual' ? (formProduct.specs || {}) : (importForm.specs || {});
+      const currentDims = mode === 'manual' ? (formProduct.dimensions || '') : (importForm.dimensions || '');
 
       // Forced local French translation & glued-spec splitting first
       const localResult = translateAndReformatProductSmart({
         name: currentName,
         brand: currentBrand,
         description: currentDesc,
-        specs: currentSpecs
+        specs: currentSpecs,
+        dimensions: currentDims,
+        forceTranslate: true
       });
       let bestName = localResult.name;
       let bestSpecs = localResult.specs;
       let bestDesc = localResult.description;
+      let bestDims = localResult.dimensions || currentDims;
 
       // Backend /api/translate-product refinement (Gemini or deterministic French dictionary)
       try {
@@ -750,11 +870,14 @@ export default function Admin() {
             name: json.data.name || bestName,
             brand: currentBrand,
             description: json.data.description || bestDesc,
-            specs: (json.data.specs && Object.keys(json.data.specs).length > 0) ? json.data.specs : bestSpecs
+            specs: (json.data.specs && Object.keys(json.data.specs).length > 0) ? json.data.specs : bestSpecs,
+            dimensions: json.data.dimensions || bestDims,
+            forceTranslate: true
           });
           if (refined.name) bestName = refined.name;
           if (Object.keys(refined.specs).length > 0) bestSpecs = refined.specs;
           if (refined.description) bestDesc = refined.description;
+          if (refined.dimensions) bestDims = refined.dimensions;
         }
       } catch {
         // Fallback to local smart engine already computed
@@ -765,14 +888,16 @@ export default function Admin() {
           ...prev,
           name: bestName || prev.name,
           description: bestDesc,
-          specs: bestSpecs
+          specs: bestSpecs,
+          dimensions: bestDims || prev.dimensions
         }));
       } else {
         setImportForm(prev => ({
           ...prev,
           name: bestName || prev.name,
           description: bestDesc,
-          specs: bestSpecs
+          specs: bestSpecs,
+          dimensions: bestDims || prev.dimensions
         }));
       }
       triggerToast("Traduction intégrale en français appliquée (Titre, Description & Caractéristiques).");
@@ -790,10 +915,21 @@ export default function Admin() {
     setNewImportOptionSpecs({});
     setOpenProductCurtains({});
     try {
+      const currentWarehouses = catalogService.getAgentWarehouses().map(w => ({
+        id: w.id,
+        name: w.name,
+        country: w.country,
+        address: w.address,
+        phone: w.phone
+      }));
       const res = await fetch('/api/scrape-product', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: importUrl, jsRender: useJsRender })
+        body: JSON.stringify({
+          url: importUrl,
+          jsRender: useJsRender,
+          warehouses: currentWarehouses
+        })
       });
       const json = await res.json();
       if (json.success && json.data) {
@@ -803,17 +939,48 @@ export default function Admin() {
           : (d.imageUrl ? [d.imageUrl] : []);
         const allExtractedImgs = filterOutSmallOrIconImages(rawImgs);
 
-        // Automatically ensure supplier exists only if a real supplier name was extracted
+        // Automatically ensure supplier exists or match adequate supplier + closest warehouse
+        // Ne jamais confondre la marque (d.brand) dans le champ fournisseur (d.supplier?.name)
         let autoSupplierId = '';
-        if (d.supplier && d.supplier.name && d.supplier.name.trim()) {
+        const rawDetectedCountry = d.supplier?.country || d.country || 'Chine';
+        const detectedCountry = resolveCanonicalCountryName(rawDetectedCountry) || rawDetectedCountry;
+        const detectedPlatform = d.supplier?.platform || d.platform || 'Alibaba';
+        const rawSupplierCandidate = (d.supplier?.name || '').trim();
+        const isBrandMistakenForSupplier =
+          Boolean(rawSupplierCandidate && d.brand && rawSupplierCandidate.toLowerCase() === String(d.brand).trim().toLowerCase());
+        const cleanSupplierName = isBrandMistakenForSupplier ? '' : rawSupplierCandidate;
+
+        const autoClosestWh = catalogService.findClosestAgentWarehouse({
+          warehouseId: d.closestWarehouseId,
+          country: detectedCountry,
+          platform: detectedPlatform,
+          supplierUrl: importUrl.trim(),
+          supplierName: cleanSupplierName,
+          currency: d.currency || 'USD'
+        }).warehouse;
+
+        if (cleanSupplierName) {
           const sup = catalogService.ensureSupplier({
-            name: d.supplier.name.trim(),
-            platform: d.supplier.platform || d.platform,
-            country: d.supplier.country || d.country,
-            currency: d.supplier.currency || d.currency,
-            storeUrl: d.supplier.storeUrl || importUrl.trim()
+            name: cleanSupplierName,
+            platform: detectedPlatform,
+            country: detectedCountry,
+            currency: d.supplier?.currency || d.currency,
+            storeUrl: d.supplier?.storeUrl || importUrl.trim()
           });
           autoSupplierId = sup.id;
+        } else {
+          const adequate = catalogService.findAdequateSupplierForProduct({
+            name: d.name,
+            brand: d.brand,
+            category: d.category,
+            origin: detectedCountry,
+            sourcePlatform: detectedPlatform,
+            supplierUrl: importUrl.trim(),
+            supplierCurrency: d.currency
+          });
+          if (adequate.supplier && adequate.score >= 40) {
+            autoSupplierId = adequate.supplier.id;
+          }
         }
 
         // Automatically ensure category exists in site categories if extracted
@@ -835,23 +1002,26 @@ export default function Admin() {
           name: d.name || '',
           brand: d.brand || '',
           description: d.description || '',
-          specs: d.specs || {}
+          specs: d.specs || {},
+          dimensions: d.dimensions || '',
+          forceTranslate: true
         });
         const translatedDefaultSpecs = smartTranslated.specs;
         const smartFrenchTitle = smartTranslated.name;
         const smartFrenchDesc = smartTranslated.description;
+        const extractedDims = smartTranslated.dimensions || extractDimensionsFromSpecsClient(d.dimensions, d.specs);
         const parsedWeightVal = parseWeightToKg(d.weight);
 
         setParsedLinkData({
           url: importUrl.trim(),
           detectedPlatform: d.platform || 'Alibaba',
-          detectedSupplier: d.supplier?.name || '',
-          detectedCountry: d.country || '',
+          detectedSupplier: cleanSupplierName,
+          detectedCountry: detectedCountry,
           guessedTitle: smartFrenchTitle,
           defaultCurrency: d.currency || 'USD',
           estimatedWeight: parsedWeightVal,
           brand: d.brand || '',
-          dimensions: d.dimensions || '',
+          dimensions: extractedDims,
           specs: translatedDefaultSpecs,
           catalogPdfUrl: d.catalogPdfUrl || '',
           pdfUrls: Array.isArray(d.pdfUrls) ? d.pdfUrls : []
@@ -869,7 +1039,7 @@ export default function Admin() {
           supplierCurrency: d.currency || 'USD',
           weight: parsedWeightVal,
           weightInput: parsedWeightVal > 0 ? `${parsedWeightVal} kg` : '',
-          dimensions: d.dimensions || '',
+          dimensions: extractedDims,
           marginRate: 0.35,
           applyVat: isSystemVatEnabled,
           ignoreSeaWeight: false,
@@ -884,9 +1054,10 @@ export default function Admin() {
           specs: translatedDefaultSpecs,
           options: rawExtractedOptions,
           supplierId: autoSupplierId || '',
-          supplierName: d.supplier?.name || '',
-          supplierCountry: d.supplier?.country || d.country || '',
+          supplierName: cleanSupplierName,
+          supplierCountry: detectedCountry,
           supplierPlatform: d.platform || 'Alibaba',
+          agentWarehouseId: autoClosestWh.id !== 'aw-unconfigured' ? autoClosestWh.id : '',
           description: smartFrenchDesc,
           inStock: false,
           availabilityMode: 'sourcing',
@@ -912,15 +1083,40 @@ export default function Admin() {
       setParsedLinkData(parsed);
 
       let fallbackSupplierId = '';
-      if (parsed.detectedSupplier) {
+      const cleanFallbackCountry = resolveCanonicalCountryName(parsed.detectedCountry) || parsed.detectedCountry || 'Chine';
+      const cleanFallbackSupplier =
+        parsed.detectedSupplier && parsed.detectedBrand && parsed.detectedSupplier.trim().toLowerCase() === parsed.detectedBrand.trim().toLowerCase()
+          ? ''
+          : (parsed.detectedSupplier || '');
+      const fallbackClosestWh = catalogService.findClosestAgentWarehouse({
+        country: cleanFallbackCountry,
+        platform: parsed.detectedPlatform,
+        supplierUrl: importUrl.trim(),
+        supplierName: cleanFallbackSupplier,
+        currency: parsed.defaultCurrency
+      }).warehouse;
+      if (cleanFallbackSupplier) {
         const sup = catalogService.ensureSupplier({
-          name: parsed.detectedSupplier,
+          name: cleanFallbackSupplier,
           platform: parsed.detectedPlatform,
-          country: parsed.detectedCountry || 'États-Unis',
+          country: cleanFallbackCountry,
           currency: parsed.defaultCurrency,
           storeUrl: importUrl.trim()
         });
         fallbackSupplierId = sup.id;
+      } else {
+        const adequate = catalogService.findAdequateSupplierForProduct({
+          name: fallbackTitle,
+          brand: parsed.detectedBrand,
+          category: parsed.detectedCategory,
+          origin: cleanFallbackCountry,
+          sourcePlatform: parsed.detectedPlatform,
+          supplierUrl: importUrl.trim(),
+          supplierCurrency: parsed.defaultCurrency
+        });
+        if (adequate.supplier && adequate.score >= 40) {
+          fallbackSupplierId = adequate.supplier.id;
+        }
       }
 
       const fallbackImgs = filterOutSmallOrIconImages(
@@ -952,9 +1148,10 @@ export default function Admin() {
         specs: fallbackSpecs,
         options: [],
         supplierId: fallbackSupplierId,
-        supplierName: parsed.detectedSupplier || '',
-        supplierCountry: parsed.detectedCountry || '',
+        supplierName: cleanFallbackSupplier,
+        supplierCountry: cleanFallbackCountry,
         supplierPlatform: parsed.detectedPlatform,
+        agentWarehouseId: '',
         description: fallbackDesc,
         inStock: false,
         availabilityMode: 'sourcing',
@@ -993,17 +1190,27 @@ export default function Admin() {
       setCategories(siteSettingsService.getCategories());
     }
 
-    // Ensure supplier is stored in dedicated supplier collection only if specified
-    let finalSupplierId = importForm.supplierId;
-    let finalSupplierName = importForm.supplierName?.trim() || '';
+    // Ensure supplier is stored in dedicated supplier collection or linked to the most adequate supplier + closest warehouse
+    const resolvedImportWh = importSupplierWarehouseMatch.whMatch.warehouse;
+    const hasRealImportWh = resolvedImportWh && resolvedImportWh.id !== 'aw-unconfigured';
+    let finalSupplierId = importForm.supplierId || importSupplierWarehouseMatch.activeSupplier?.id || '';
+    const candidateSupName = (importForm.supplierName?.trim() || importSupplierWarehouseMatch.activeSupplier?.name || '').trim();
+    // Ne jamais enregistrer la marque constructeur comme nom de fournisseur
+    let finalSupplierName =
+      candidateSupName && candidateSupName.toLowerCase() !== resolvedCleanBrand.toLowerCase()
+        ? candidateSupName
+        : '';
     if (finalSupplierName) {
       const sup = catalogService.ensureSupplier({
         name: finalSupplierName,
         platform: importForm.supplierPlatform || parsedLinkData.detectedPlatform,
-        country: importForm.supplierCountry || parsedLinkData.detectedCountry || 'Chine',
+        country: resolveCanonicalCountryName(importForm.supplierCountry || parsedLinkData.detectedCountry) || importForm.supplierCountry || parsedLinkData.detectedCountry || 'Chine',
         currency: importForm.supplierCurrency,
         storeUrl: parsedLinkData.url
       });
+      if (hasRealImportWh && sup.agentWarehouseId !== resolvedImportWh.id) {
+        catalogService.updateSupplier(sup.id, { agentWarehouseId: resolvedImportWh.id }, 'Système (Auto-Entrepôt)');
+      }
       finalSupplierId = sup.id;
       finalSupplierName = sup.name;
     }
@@ -1034,11 +1241,15 @@ export default function Admin() {
       name: finalFrenchTitle,
       brand: resolvedCleanBrand,
       category: chosenCat,
-      origin: importForm.supplierCountry || parsedLinkData.detectedCountry || 'Chine',
+      origin: resolveCanonicalCountryName(importForm.supplierCountry || parsedLinkData.detectedCountry) || importForm.supplierCountry || parsedLinkData.detectedCountry || 'Chine',
       sourcePlatform: (importForm.supplierPlatform as any) || parsedLinkData.detectedPlatform,
       supplierName: finalSupplierName,
       supplierUrl: parsedLinkData.url,
       supplierId: finalSupplierId,
+      agentWarehouseId: importForm.agentWarehouseId?.trim() ? importForm.agentWarehouseId.trim() : undefined,
+      agentWarehouseName: importForm.agentWarehouseId?.trim()
+        ? (agentWarehouses.find(w => w.id === importForm.agentWarehouseId)?.name || undefined)
+        : undefined,
       supplierPrice: importForm.supplierPrice,
       supplierCurrency: importForm.supplierCurrency,
       weight: `${parsedWeightKg} kg`,
@@ -1082,6 +1293,7 @@ export default function Admin() {
     setSelectedStatus('all');
     setSearchTerm('');
     refreshData();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
     triggerToast(`Produit importé avec succès (${resolvedCleanBrand}). Fournisseur et catégorie synchronisés.`);
   };
 
@@ -1365,15 +1577,15 @@ export default function Admin() {
 
           <button
             type="button"
-            onClick={() => setActiveTab(activeTab === 'audit' ? 'audit' : 'security')}
+            onClick={() => setActiveTab(activeTab === 'firewall' || activeTab === 'audit' ? activeTab : 'security')}
             className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
-              activeTab === 'security' || activeTab === 'audit'
+              activeTab === 'security' || activeTab === 'audit' || activeTab === 'firewall'
                 ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
                 : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
             }`}
           >
             <Settings className="w-4 h-4 shrink-0" />
-            <span className="truncate">Paramètres & Audit</span>
+            <span className="truncate">Paramètres & Sécurité</span>
           </button>
         </div>
 
@@ -1438,7 +1650,7 @@ export default function Admin() {
           </div>
         )}
 
-        {(activeTab === 'security' || activeTab === 'audit') && (
+        {(activeTab === 'security' || activeTab === 'audit' || activeTab === 'firewall') && (
           <div className="flex flex-wrap items-center gap-2 mt-3 p-1.5 bg-slate-950/70 border border-slate-800/80 rounded-xl">
             <button
               type="button"
@@ -1448,7 +1660,17 @@ export default function Admin() {
               }`}
             >
               <Settings className="w-3.5 h-3.5" />
-              <span>Paramètres Globaux, TVA, Devises & Comptes Admin</span>
+              <span>Paramètres Globaux & TVA</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('firewall')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'firewall' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Sécurité, Anti-Scraping & Pare-Feu</span>
             </button>
             <button
               type="button"
@@ -1458,7 +1680,7 @@ export default function Admin() {
               }`}
             >
               <Shield className="w-3.5 h-3.5" />
-              <span>Journal d'Audit & Traçabilité ({auditLogs.length})</span>
+              <span>Journal d'Audit ({auditLogs.length})</span>
             </button>
           </div>
         )}
@@ -1846,6 +2068,18 @@ export default function Admin() {
                                       >
                                         {isProductSourcing(prod) ? '🟠 Article à sourcer' : '🟢 Dispo immédiate'}
                                       </button>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                      {prod.supplierName && (
+                                        <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[9px] font-mono text-slate-300">
+                                          🏭 {prod.supplierName}
+                                        </span>
+                                      )}
+                                      {prod.agentWarehouseName && (
+                                        <span className="px-1.5 py-0.5 rounded bg-blue-950/60 border border-blue-700/50 text-[9px] font-mono text-blue-300" title="Entrepôt de transit le plus proche assigné">
+                                          📍 {prod.agentWarehouseName}
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -2431,7 +2665,10 @@ export default function Admin() {
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-slate-400 flex items-center gap-1 font-bold text-[11px]">
                             <Warehouse className="w-3.5 h-3.5 text-orange-400" />
-                            Entrepôt d'Agent assigné :
+                            Entrepôt d'Agent assigné (Proximité géographique) :
+                          </span>
+                          <span className="text-[10px] font-mono text-emerald-400">
+                            {products.filter(p => p.supplierId === sup.id || (p.supplierName && p.supplierName.toLowerCase() === sup.name.toLowerCase())).length} produit(s) lié(s)
                           </span>
                         </div>
                         <select
@@ -2445,17 +2682,21 @@ export default function Admin() {
                           className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-[#FF6600]"
                         >
                           <option value="">
-                            ★ Par Défaut ({(() => {
-                              const defWh = agentWarehouses.find(w => w.isDefault) || agentWarehouses[0];
-                              if (!defWh) return 'Standard';
-                              return `${defWh.name} — ${defWh.identificationMode === 'standard_address' || !defWh.agentCode ? [defWh.firstName, defWh.lastName].filter(Boolean).join(' ') : defWh.agentCode}`;
+                            ⚡ Auto — Le plus proche ({(() => {
+                              const closest = catalogService.findClosestAgentWarehouse({
+                                country: sup.country,
+                                platform: sup.platform,
+                                supplierName: sup.name
+                              })?.warehouse || agentWarehouses.find(w => w.isDefault) || agentWarehouses[0];
+                              if (!closest) return 'Standard';
+                              return `${closest.name} (${closest.country || ''}) — ${closest.identificationMode === 'standard_address' || !closest.agentCode ? [closest.firstName, closest.lastName].filter(Boolean).join(' ') : closest.agentCode}`;
                             })()})
                           </option>
                           {agentWarehouses.map(wh => (
                             <option key={wh.id} value={wh.id}>
-                              {wh.name} ({wh.identificationMode === 'standard_address' || !wh.agentCode
+                              {wh.name} ({wh.country || wh.city || ''}) — {wh.identificationMode === 'standard_address' || !wh.agentCode
                                 ? `Standard: ${[wh.firstName, wh.lastName].filter(Boolean).join(' ')}`
-                                : `Code: ${wh.agentCode}`})
+                                : `Code: ${wh.agentCode}`}
                             </option>
                           ))}
                         </select>
@@ -2556,6 +2797,13 @@ export default function Admin() {
         {activeTab === 'security' && (
           <div className="animate-fadeIn">
             <SiteSettingsManager onNotify={(msg) => triggerToast(msg)} />
+          </div>
+        )}
+
+        {/* ================= TAB 7: BOUCLIER DE SÉCURITÉ, PARE-FEU & ANTI-SCRAPING ================= */}
+        {activeTab === 'firewall' && (
+          <div className="animate-fadeIn">
+            <SecurityFirewallManager onNotify={(msg) => triggerToast(msg)} />
           </div>
         )}
       </main>
@@ -2812,33 +3060,207 @@ export default function Admin() {
                 )}
               </div>
 
-              {/* SÉLECTION DU FOURNISSEUR ATTACHÉ */}
-              <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-                <label className="block text-xs font-bold text-orange-400 uppercase tracking-wider">
-                  Fournisseur Partenaire Rattaché
-                </label>
-                <select
-                  value={formProduct.supplierId || ''}
-                  onChange={(e) => {
-                    const found = suppliers.find(s => s.id === e.target.value);
-                    setFormProduct({
-                      ...formProduct,
-                      supplierId: e.target.value,
-                      supplierName: found ? found.name : formProduct.supplierName,
-                      supplierCurrency: (found?.currency as any) || formProduct.supplierCurrency,
-                      origin: found ? found.country : formProduct.origin,
-                      warehouseDeliveryFeeUSD: found ? found.warehouseDeliveryFeeUSD : formProduct.warehouseDeliveryFeeUSD
-                    });
-                  }}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
-                >
-                  <option value="">Sélectionner un fournisseur...</option>
-                  {suppliers.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.country} - {s.platform}) - Devise : {s.currency}
-                    </option>
-                  ))}
-                </select>
+              {/* SÉLECTION INTELLIGENTE DU FOURNISSEUR ADÉQUAT & ASSIGNATION AUTO DE L'ENTREPÔT LE PLUS PROCHE */}
+              <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <label className="block text-xs font-bold text-orange-400 uppercase tracking-wider">
+                      Fournisseur Adéquat & Entrepôt le Plus Proche (Intelligence Logistique)
+                    </label>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Le système analyse la marque, l'origine et la plateforme du produit pour recommander le fournisseur adéquat et assigner automatiquement l'entrepôt de transit le plus proche.
+                    </p>
+                  </div>
+                  {manualSupplierWarehouseMatch.supMatch.supplier &&
+                    formProduct.supplierId !== manualSupplierWarehouseMatch.supMatch.supplier.id && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const bestSup = manualSupplierWarehouseMatch.supMatch.supplier!;
+                          const closest = catalogService.findClosestAgentWarehouse({
+                            warehouseId: bestSup.agentWarehouseId,
+                            country: bestSup.country || formProduct.origin,
+                            platform: bestSup.platform,
+                            supplierUrl: bestSup.websiteUrl,
+                            supplierName: bestSup.name,
+                            currency: bestSup.currency
+                          }).warehouse;
+                          setFormProduct({
+                            ...formProduct,
+                            supplierId: bestSup.id,
+                            supplierName: bestSup.name,
+                            supplierCurrency: (bestSup.currency as any) || formProduct.supplierCurrency,
+                            origin: bestSup.country || formProduct.origin,
+                            sourcePlatform: (bestSup.platform as any) || formProduct.sourcePlatform,
+                            agentWarehouseId: closest.id,
+                            warehouseDeliveryFeeUSD: bestSup.warehouseDeliveryFeeUSD || formProduct.warehouseDeliveryFeeUSD
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold cursor-pointer"
+                      >
+                        ✨ Appliquer fournisseur adéquat ({manualSupplierWarehouseMatch.supMatch.supplier.name})
+                      </button>
+                    )}
+                </div>
+
+                {/* Origine & Plateforme du produit (pilotent en temps réel le choix du fournisseur et de l'entrepôt proche) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      Pays d'Origine (Secours si l'IA est confuse ou sans indice)
+                    </label>
+                    <select
+                      value={resolveCanonicalCountryName(formProduct.origin) || formProduct.origin || 'Chine'}
+                      onChange={(e) => {
+                        const newOrigin = e.target.value;
+                        const autoWh = catalogService.findClosestAgentWarehouse({
+                          country: newOrigin,
+                          platform: formProduct.sourcePlatform,
+                          supplierUrl: formProduct.supplierUrl,
+                          supplierName: formProduct.supplierName,
+                          currency: formProduct.supplierCurrency
+                        }).warehouse;
+                        setFormProduct({
+                          ...formProduct,
+                          origin: newOrigin,
+                          agentWarehouseId: autoWh.id !== 'aw-unconfigured' ? autoWh.id : ''
+                        });
+                      }}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-orange-500"
+                    >
+                      {WORLD_COUNTRIES.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                    {(() => {
+                      const aiProdGeo = catalogService.inferEntityCountryWithFallback({
+                        name: formProduct.supplierName || formProduct.name,
+                        brand: formProduct.brand,
+                        platform: formProduct.sourcePlatform,
+                        url: formProduct.supplierUrl,
+                        fallbackCountry: formProduct.origin
+                      });
+                      return aiProdGeo.aiConfident ? (
+                        <span className="block text-[10px] text-emerald-400 mt-1">
+                          🤖 IA : <strong>{aiProdGeo.country}</strong> détecté automatiquement (ce menu ne sert qu'en secours).
+                        </span>
+                      ) : (
+                        <span className="block text-[10px] text-amber-400 mt-1">
+                          ⚠️ IA sans indice clair : le pays choisi (<strong>{resolveCanonicalCountryName(formProduct.origin) || formProduct.origin}</strong>) sert de secours.
+                        </span>
+                      );
+                    })()}
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      Plateforme / Canal de Sourcing
+                    </label>
+                    <select
+                      value={formProduct.sourcePlatform || 'Manuel'}
+                      onChange={(e) => {
+                        const newPlat = e.target.value as any;
+                        const autoWh = catalogService.findClosestAgentWarehouse({
+                          country: formProduct.origin,
+                          platform: newPlat,
+                          supplierUrl: formProduct.supplierUrl,
+                          supplierName: formProduct.supplierName,
+                          currency: formProduct.supplierCurrency
+                        }).warehouse;
+                        setFormProduct({
+                          ...formProduct,
+                          sourcePlatform: newPlat,
+                          agentWarehouseId: autoWh.id
+                        });
+                      }}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-orange-500"
+                    >
+                      <option value="Alibaba">Alibaba (Chine / Asie)</option>
+                      <option value="1688">1688.com (Chine)</option>
+                      <option value="Made-in-China">Made-in-China (Chine)</option>
+                      <option value="AliExpress">AliExpress (Asie)</option>
+                      <option value="Europe">Europe (Manutan, RS, Constructeurs UE)</option>
+                      <option value="USA">USA (Grainger, McMaster, Constructeurs US)</option>
+                      <option value="Manuel">Stock Local / Fournisseur Direct</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Sélection du Fournisseur (classé par pertinence avec le produit) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                      Fournisseur Partenaire Adéquat
+                    </label>
+                    <select
+                      value={formProduct.supplierId || manualSupplierWarehouseMatch.activeSupplier?.id || ''}
+                      onChange={(e) => {
+                        const found = suppliers.find(s => s.id === e.target.value);
+                        const closest = catalogService.findClosestAgentWarehouse({
+                          warehouseId: found?.agentWarehouseId,
+                          country: found?.country || formProduct.origin,
+                          platform: found?.platform || formProduct.sourcePlatform,
+                          supplierUrl: found?.websiteUrl || formProduct.supplierUrl,
+                          supplierName: found?.name,
+                          currency: found?.currency || formProduct.supplierCurrency
+                        }).warehouse;
+                        setFormProduct({
+                          ...formProduct,
+                          supplierId: e.target.value,
+                          supplierName: found ? found.name : formProduct.supplierName,
+                          supplierCurrency: (found?.currency as any) || formProduct.supplierCurrency,
+                          origin: found ? found.country : formProduct.origin,
+                          sourcePlatform: (found?.platform as any) || formProduct.sourcePlatform,
+                          agentWarehouseId: closest.id,
+                          warehouseDeliveryFeeUSD: found ? found.warehouseDeliveryFeeUSD : formProduct.warehouseDeliveryFeeUSD
+                        });
+                      }}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white"
+                    >
+                      <option value="">Auto-détection du fournisseur adéquat...</option>
+                      {manualSupplierWarehouseMatch.supMatch.rankedSuppliers.map(({ supplier: s, score, reason }) => (
+                        <option key={s.id} value={s.id}>
+                          {score >= 40 ? '★ Recommandé : ' : ''}{s.name} ({s.country} - {s.platform}) — {reason}
+                        </option>
+                      ))}
+                    </select>
+                    {manualSupplierWarehouseMatch.activeSupplier && (
+                      <span className="block text-[10px] text-emerald-400 mt-1 font-mono">
+                        ✓ Rattaché à : {manualSupplierWarehouseMatch.activeSupplier.name} ({manualSupplierWarehouseMatch.supMatch.matchReason})
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-semibold text-slate-400">
+                        Entrepôt de Transit le Plus Proche (Assigné Auto)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowWarehouseModal(true)}
+                        className="text-[10px] font-bold text-orange-400 hover:underline cursor-pointer"
+                      >
+                        Gérer entrepôts →
+                      </button>
+                    </div>
+                    <select
+                      value={formProduct.agentWarehouseId || ''}
+                      onChange={(e) => setFormProduct({ ...formProduct, agentWarehouseId: e.target.value })}
+                      className="w-full bg-slate-950 border border-blue-500/50 rounded-xl px-3 py-2 text-xs text-blue-200 font-semibold"
+                    >
+                      <option value="">Attribué automatiquement selon le pays du client (Par défaut)</option>
+                      {agentWarehouses.map(wh => (
+                        <option key={wh.id} value={wh.id}>
+                          📍 {wh.name} ({wh.city ? `${wh.city}, ` : ''}{wh.country || ''}) — Aperçu fret
+                        </option>
+                      ))}
+                    </select>
+                    <span className="block text-[10px] text-blue-300 mt-1 font-mono">
+                      📍 {manualSupplierWarehouseMatch.whMatch.matchReason}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               {/* GESTION MULTI-IMAGES DU PRODUIT (Rideau horizontal plié par défaut) */}
@@ -3914,23 +4336,17 @@ export default function Admin() {
                   )}
                 </div>
 
-                {/* SYNTHÈSE FINALE FUSIONNÉE : Coût Achat + Choix & Calcul Fret par défaut + Prix Vente TTC */}
+                {/* SYNTHÈSE FINALE UNIFIÉE : Tarifs & Fret Client */}
                 <div className="p-4 bg-slate-950 rounded-xl border border-slate-800 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                      Synthèse Finale & Option de Fret par défaut sur la Fiche
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setFormProduct({ ...formProduct, defaultShippingMethod: 'neutral' })}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer ${
-                        (!formProduct.defaultShippingMethod || formProduct.defaultShippingMethod === 'neutral')
-                          ? 'bg-orange-500/20 border-orange-500 text-orange-300'
-                          : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      ⚪ Mode Neutre (Au choix du client)
-                    </button>
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wider block">
+                        Synthèse Tarifaire & Fret Client — {manualSupplierWarehouseMatch.whMatch.warehouse.id && manualSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured' ? manualSupplierWarehouseMatch.whMatch.warehouse.name : 'Paramètres Système par Défaut'}
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        Le client choisit entre le fret aérien ou maritime lors de l'achat.
+                      </span>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
@@ -3942,68 +4358,74 @@ export default function Admin() {
                     </div>
 
                     <div
-                      onClick={() => setFormProduct({ ...formProduct, defaultShippingMethod: 'sea', shippingMethod: 'sea' })}
-                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
-                        formProduct.defaultShippingMethod === 'sea'
-                          ? 'bg-emerald-950/60 border-emerald-500 ring-1 ring-emerald-500/40'
-                          : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                      onClick={() => {
+                        if (manualSupplierWarehouseMatch.whMatch.warehouse.offersSeaFreight !== false) {
+                          setFormProduct({ ...formProduct, defaultShippingMethod: formProduct.defaultShippingMethod === 'sea' ? 'neutral' : 'sea', shippingMethod: 'sea' });
+                        }
+                      }}
+                      className={`p-2.5 rounded-xl border text-center transition-all ${
+                        manualSupplierWarehouseMatch.whMatch.warehouse.offersSeaFreight === false
+                          ? 'opacity-40 bg-slate-950 border-slate-800 cursor-not-allowed'
+                          : formProduct.defaultShippingMethod === 'sea'
+                            ? 'bg-emerald-950/60 border-emerald-500 ring-1 ring-emerald-500/40 cursor-pointer'
+                            : 'bg-slate-900/70 border-slate-800 hover:border-slate-700 cursor-pointer'
                       }`}
-                      title="Cliquez pour pré-sélectionner le Fret Maritime par défaut"
                     >
                       <span className="text-[10px] text-slate-300 block uppercase font-semibold">
-                        🚢 Fret Maritime ({siteSettings.seaFreightDurationDays || '30 à 55 jours'})
+                        🚢 Fret Maritime ({manualSupplierWarehouseMatch.whMatch.warehouse.id && manualSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured' ? (manualSupplierWarehouseMatch.whMatch.warehouse.seaFreightDurationDays || '30 à 45 jours') : (siteSettings.seaFreightDuration || siteSettings.seaFreightDurationDays || '20 à 40 jours')})
                       </span>
-                      <span className="text-xs font-bold text-emerald-400 font-mono block mt-0.5">
-                        {Math.round(currentCalculatedPricing.seaFreightCostXOF).toLocaleString('fr-FR')} F
-                      </span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="500"
-                        onClick={(e) => e.stopPropagation()}
-                        placeholder="Auto (ou saisir)"
-                        value={formProduct.customSeaFreightCost ?? ''}
-                        onChange={(e) => setFormProduct({
-                          ...formProduct,
-                          customSeaFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
-                        })}
-                        className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-emerald-300 font-mono text-center"
-                      />
+                      {manualSupplierWarehouseMatch.whMatch.warehouse.offersSeaFreight !== false ? (
+                        <>
+                          <span className="text-xs font-bold text-emerald-400 font-mono block mt-0.5">
+                            {Math.round(currentCalculatedPricing.seaFreightCostXOF).toLocaleString('fr-FR')} F
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-mono block">
+                            {manualSupplierWarehouseMatch.whMatch.warehouse.id && manualSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured'
+                              ? `Tarif entrepôt : ${(manualSupplierWarehouseMatch.whMatch.warehouse.seaFreightPerKgXOF ?? siteSettings.seaFreightPerKg ?? 1800).toLocaleString('fr-FR')} F/kg`
+                              : `Tarif système : ${(siteSettings.seaFreightPerKg ?? 1800).toLocaleString('fr-FR')} F/kg`}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-slate-500 block mt-1">Non proposé</span>
+                      )}
                     </div>
 
                     <div
-                      onClick={() => setFormProduct({ ...formProduct, defaultShippingMethod: 'air', shippingMethod: 'air' })}
-                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
-                        formProduct.defaultShippingMethod === 'air'
-                          ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/40'
-                          : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                      onClick={() => {
+                        if (manualSupplierWarehouseMatch.whMatch.warehouse.offersAirFreight !== false) {
+                          setFormProduct({ ...formProduct, defaultShippingMethod: formProduct.defaultShippingMethod === 'air' ? 'neutral' : 'air', shippingMethod: 'air' });
+                        }
+                      }}
+                      className={`p-2.5 rounded-xl border text-center transition-all ${
+                        manualSupplierWarehouseMatch.whMatch.warehouse.offersAirFreight === false
+                          ? 'opacity-40 bg-slate-950 border-slate-800 cursor-not-allowed'
+                          : formProduct.defaultShippingMethod === 'air'
+                            ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/40 cursor-pointer'
+                            : 'bg-slate-900/70 border-slate-800 hover:border-slate-700 cursor-pointer'
                       }`}
-                      title="Cliquez pour pré-sélectionner le Fret Aérien par défaut"
                     >
                       <span className="text-[10px] text-slate-300 block uppercase font-semibold">
-                        ✈️ Fret Aérien ({siteSettings.airFreightDurationDays || '7 à 14 jours'})
+                        ✈️ Fret Aérien ({manualSupplierWarehouseMatch.whMatch.warehouse.id && manualSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured' ? (manualSupplierWarehouseMatch.whMatch.warehouse.airFreightDurationDays || '7 à 12 jours') : (siteSettings.airFreightDuration || siteSettings.airFreightDurationDays || '8 à 15 jours')})
                       </span>
-                      <span className="text-xs font-bold text-blue-400 font-mono block mt-0.5">
-                        {Math.round(currentCalculatedPricing.airFreightCostXOF).toLocaleString('fr-FR')} F
-                      </span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="500"
-                        onClick={(e) => e.stopPropagation()}
-                        placeholder="Auto (ou saisir)"
-                        value={formProduct.customAirFreightCost ?? ''}
-                        onChange={(e) => setFormProduct({
-                          ...formProduct,
-                          customAirFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
-                        })}
-                        className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-blue-300 font-mono text-center"
-                      />
+                      {manualSupplierWarehouseMatch.whMatch.warehouse.offersAirFreight !== false ? (
+                        <>
+                          <span className="text-xs font-bold text-blue-400 font-mono block mt-0.5">
+                            {Math.round(currentCalculatedPricing.airFreightCostXOF).toLocaleString('fr-FR')} F
+                          </span>
+                          <span className="text-[9px] text-slate-400 font-mono block">
+                            {manualSupplierWarehouseMatch.whMatch.warehouse.id && manualSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured'
+                              ? `Tarif entrepôt : ${(manualSupplierWarehouseMatch.whMatch.warehouse.airFreightPerKgXOF ?? siteSettings.airFreightPerKg ?? 7000).toLocaleString('fr-FR')} F/kg`
+                              : `Tarif système : ${(siteSettings.airFreightPerKg ?? 7000).toLocaleString('fr-FR')} F/kg`}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-slate-500 block mt-1">Non proposé</span>
+                      )}
                     </div>
 
                     <div className="p-2.5 bg-slate-900/70 rounded-xl border border-orange-500/30 flex flex-col justify-center">
                       <span className="text-[10px] text-orange-400 block uppercase font-bold">
-                        Prix Vente {formProduct.applyVat !== false ? 'TTC' : 'Net'}
+                        Prix Vente {formProduct.applyVat !== false ? 'TTC' : 'Net'} (Hors Fret)
                       </span>
                       <span className="text-sm font-mono font-black text-orange-400 mt-0.5">
                         {currentCalculatedPricing.priceTTC.toLocaleString('fr-FR')} F
@@ -4360,46 +4782,155 @@ export default function Admin() {
                     </div>
                   </div>
 
-                  {/* 2. Fournisseur Extrait (Rideau horizontal plié par défaut, sans texte superflu) */}
+                  {/* 2. Fournisseur Détecté par Lien & Entrepôt Proche (Sans répétition des tarifs de fret) */}
                   <div className="bg-slate-950 rounded-xl border border-slate-800/90 overflow-hidden">
-                    <button
-                      type="button"
-                      onClick={() => toggleProductCurtain('import_supplier')}
-                      className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
-                    >
-                      <span className="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
-                        <Users className="w-3.5 h-3.5" /> Fournisseur & Fabricant Extrait
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {importForm.supplierName && (
-                          <span className="text-[10px] font-mono text-slate-300 bg-slate-900 border border-slate-700 px-2 py-0.5 rounded-full truncate max-w-[180px]">
-                            {importForm.supplierName}
-                          </span>
-                        )}
-                        <span className="text-xs font-bold text-slate-400">
-                          {openProductCurtains['import_supplier'] ? '▲ Replier' : '▼ Dérouler'}
+                    <div className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-900/50">
+                      <div className="space-y-1">
+                        <span className="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5" /> Fournisseur du Lien & Entrepôt de Transit
                         </span>
-                      </div>
-                    </button>
-                    {openProductCurtains['import_supplier'] && (
-                      <div className="px-3.5 pb-3.5 pt-2 border-t border-slate-800/80 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                        <div>
-                          <label className="block text-[10px] text-slate-400 mb-0.5">Nom de l'entreprise :</label>
-                          <input
-                            type="text"
-                            value={importForm.supplierName}
-                            onChange={(e) => setImportForm({ ...importForm, supplierName: e.target.value })}
-                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-medium"
-                          />
+                        <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                          <span className="font-mono font-bold text-emerald-300 bg-emerald-950/60 border border-emerald-700/50 px-2.5 py-0.5 rounded-lg">
+                            🏭 Fournisseur : {importForm.supplierName || importSupplierWarehouseMatch.activeSupplier?.name || parsedLinkData?.detectedPlatform || 'Fournisseur Direct'} {(() => {
+                              const c = importForm.supplierCountry || importSupplierWarehouseMatch.activeSupplier?.country || parsedLinkData?.detectedCountry;
+                              return (c && !/^(international|inconnu)$/i.test(c)) ? `(${c})` : '';
+                            })()}
+                          </span>
+                          <span className="font-mono font-bold text-blue-300 bg-blue-950/60 border border-blue-700/50 px-2.5 py-0.5 rounded-lg">
+                            📍 Entrepôt : {importSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured'
+                              ? `${importSupplierWarehouseMatch.whMatch.warehouse.name}${importSupplierWarehouseMatch.whMatch.warehouse.city ? ` (${importSupplierWarehouseMatch.whMatch.warehouse.city})` : ''}`
+                              : 'Tarif Standard (Aucun entrepôt spécifique assigné)'}
+                          </span>
                         </div>
-                        <div>
-                          <label className="block text-[10px] text-slate-400 mb-0.5">Pays & Localisation :</label>
-                          <input
-                            type="text"
-                            value={importForm.supplierCountry}
-                            onChange={(e) => setImportForm({ ...importForm, supplierCountry: e.target.value })}
-                            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
-                          />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleProductCurtain('import_supplier')}
+                        className="text-[11px] font-bold text-slate-300 hover:text-white bg-slate-800 px-3 py-1.5 rounded-lg shrink-0 cursor-pointer"
+                      >
+                        {openProductCurtains['import_supplier'] ? '▲ Masquer détails' : '⚙️ Modifier entrepôt / fournisseur'}
+                      </button>
+                    </div>
+                    {openProductCurtains['import_supplier'] && (
+                      <div className="px-3.5 pb-3.5 pt-2 border-t border-slate-800/80 space-y-3 text-xs">
+                        <div className="p-2.5 rounded-lg bg-blue-950/30 border border-blue-800/40 flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <span className="text-[10px] font-bold text-blue-300 uppercase block">
+                              📍 Entrepôt de Transit le Plus Proche Assigné Automatiquement :
+                            </span>
+                            <span className="text-xs font-bold text-white">
+                              {importSupplierWarehouseMatch.whMatch.warehouse.name} ({importSupplierWarehouseMatch.whMatch.warehouse.city}, {importSupplierWarehouseMatch.whMatch.warehouse.country})
+                            </span>
+                            <span className="block text-[10px] text-slate-400 font-mono">
+                              Motif : {importSupplierWarehouseMatch.whMatch.matchReason}
+                            </span>
+                          </div>
+                          <select
+                            value={importForm.agentWarehouseId || ''}
+                            onChange={(e) => setImportForm({ ...importForm, agentWarehouseId: e.target.value })}
+                            className="bg-slate-900 border border-blue-500/40 rounded-lg px-2.5 py-1.5 text-[11px] text-blue-200 font-semibold"
+                          >
+                            <option value="">Attribué automatiquement selon le pays du client (Par défaut)</option>
+                            {agentWarehouses.map(wh => (
+                              <option key={wh.id} value={wh.id}>
+                                {wh.name} ({wh.country || ''}) — Aperçu fret
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-[10px] text-slate-400 mb-0.5">Fournisseur existant adéquat :</label>
+                            <select
+                              value={importForm.supplierId || importSupplierWarehouseMatch.activeSupplier?.id || ''}
+                              onChange={(e) => {
+                                const found = suppliers.find(s => s.id === e.target.value);
+                                if (found) {
+                                  const autoWh = catalogService.findClosestAgentWarehouse({
+                                    warehouseId: found.agentWarehouseId,
+                                    country: found.country,
+                                    platform: found.platform,
+                                    supplierUrl: found.websiteUrl,
+                                    supplierName: found.name,
+                                    currency: found.currency
+                                  }).warehouse;
+                                  setImportForm({
+                                    ...importForm,
+                                    supplierId: found.id,
+                                    supplierName: found.name,
+                                    supplierCountry: found.country,
+                                    supplierPlatform: found.platform,
+                                    agentWarehouseId: autoWh.id
+                                  });
+                                } else {
+                                  setImportForm({ ...importForm, supplierId: '' });
+                                }
+                              }}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                            >
+                              <option value="">Créer / Auto-associer ({importForm.supplierName || 'Nouveau'})</option>
+                              {importSupplierWarehouseMatch.supMatch.rankedSuppliers.map(({ supplier: s, score, reason }) => (
+                                <option key={s.id} value={s.id}>
+                                  {score >= 40 ? '★ ' : ''}{s.name} ({s.country}) — {reason}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400 mb-0.5">Nom de l'entreprise fournisseur :</label>
+                            <input
+                              type="text"
+                              value={importForm.supplierName}
+                              onChange={(e) => setImportForm({ ...importForm, supplierName: e.target.value })}
+                              placeholder={importSupplierWarehouseMatch.activeSupplier?.name || 'Nom du fournisseur...'}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-medium"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-slate-400 mb-0.5">Pays de secours (utilisé uniquement si l'IA est confuse) :</label>
+                            <select
+                              value={resolveCanonicalCountryName(importForm.supplierCountry) || importForm.supplierCountry || 'Chine'}
+                              onChange={(e) => {
+                                const nextCountry = e.target.value;
+                                const nextClosest = catalogService.findClosestAgentWarehouse({
+                                  country: nextCountry,
+                                  platform: importForm.supplierPlatform,
+                                  supplierUrl: parsedLinkData?.url,
+                                  supplierName: importForm.supplierName,
+                                  currency: importForm.supplierCurrency
+                                }).warehouse;
+                                setImportForm({
+                                  ...importForm,
+                                  supplierCountry: nextCountry,
+                                  agentWarehouseId: nextClosest.id !== 'aw-unconfigured' ? nextClosest.id : ''
+                                });
+                              }}
+                              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                            >
+                              {WORLD_COUNTRIES.map(c => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                            {(() => {
+                              const aiImportGeo = catalogService.inferEntityCountryWithFallback({
+                                name: importForm.supplierName || importForm.name,
+                                brand: importForm.brand,
+                                platform: importForm.supplierPlatform,
+                                url: parsedLinkData?.url,
+                                fallbackCountry: importForm.supplierCountry
+                              });
+                              return aiImportGeo.aiConfident ? (
+                                <span className="block text-[10px] text-emerald-400 mt-1">
+                                  🤖 IA : <strong>{aiImportGeo.country}</strong> trouvé via le lien (sélection manuelle ignorée sauf doute).
+                                </span>
+                              ) : (
+                                <span className="block text-[10px] text-amber-400 mt-1">
+                                  ⚠️ IA indécise : le pays sélectionné (<strong>{resolveCanonicalCountryName(importForm.supplierCountry) || importForm.supplierCountry}</strong>) prend le relais.
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -5319,7 +5850,7 @@ export default function Admin() {
                     )}
                   </div>
 
-                  {/* 5.2 OPTIONS AVANCÉES (TVA, Acompte, Remise & Calcul Poids/Volume) - Rideau horizontal plié par défaut */}
+                  {/* 5.2 OPTIONS FINANCIÈRES (TVA, Acompte & Remise) - Rideau horizontal plié par défaut */}
                   <div className="bg-slate-950 rounded-xl border border-slate-800 overflow-hidden">
                     <button
                       type="button"
@@ -5327,7 +5858,7 @@ export default function Admin() {
                       className="w-full p-3.5 flex items-center justify-between hover:bg-slate-900/60 transition-colors cursor-pointer text-left"
                     >
                       <span className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                        <Settings className="w-3.5 h-3.5 text-orange-400" /> Options Financières & Calcul Logistique (TVA, Acompte, Remise, Poids/Vol)
+                        <Settings className="w-3.5 h-3.5 text-orange-400" /> Options Financières (TVA, Acompte, Remise)
                       </span>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] font-mono text-slate-400">
@@ -5340,38 +5871,6 @@ export default function Admin() {
                     </button>
                     {openProductCurtains['import_advanced'] && (
                       <div className="px-4 pb-4 pt-2 border-t border-slate-800/80 space-y-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          <label className="flex items-center gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 cursor-pointer text-xs">
-                            <input
-                              type="checkbox"
-                              checked={!importForm.ignoreSeaWeight}
-                              onChange={(e) => setImportForm({ ...importForm, ignoreSeaWeight: !e.target.checked })}
-                              className="w-4 h-4 accent-orange-500 rounded"
-                            />
-                            <div>
-                              <span className="text-white font-bold block">Calcul Maritime au Poids</span>
-                              <span className="text-[10px] text-slate-400">
-                                Estimé : {((importCalculatedPricing.seaCostByWeightXOF || 0)).toLocaleString('fr-FR')} F
-                              </span>
-                            </div>
-                          </label>
-
-                          <label className="flex items-center gap-2 p-2.5 bg-slate-900 rounded-lg border border-slate-800 cursor-pointer text-xs">
-                            <input
-                              type="checkbox"
-                              checked={!importForm.ignoreSeaVolume}
-                              onChange={(e) => setImportForm({ ...importForm, ignoreSeaVolume: !e.target.checked })}
-                              className="w-4 h-4 accent-orange-500 rounded"
-                            />
-                            <div>
-                              <span className="text-white font-bold block">Calcul Maritime au Volume</span>
-                              <span className="text-[10px] text-slate-400">
-                                Estimé : {((importCalculatedPricing.seaCostByVolumeXOF || 0)).toLocaleString('fr-FR')} F (~{(importCalculatedPricing.computedVolumeCbm || 0)} m³)
-                              </span>
-                            </div>
-                          </label>
-                        </div>
-
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                           <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-xl border border-slate-800">
                             <span className="text-xs text-slate-300 font-semibold">TVA ({Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%)</span>
@@ -5417,23 +5916,39 @@ export default function Admin() {
                     )}
                   </div>
 
-                  {/* SYNTHÈSE FINALE FUSIONNÉE : Coût Achat + Fret Maritime + Fret Aérien + Prix Vente TTC */}
+                  {/* SYNTHÈSE FINALE UNIFIÉE : Coût, Fret Maritime (Poids/Vol fusionné), Fret Aérien & Prix Vente */}
                   <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                        Synthèse Finale & Option de Fret par défaut sur la Fiche Produit
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setImportForm({ ...importForm, defaultShippingMethod: 'neutral' })}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold border transition-all cursor-pointer ${
-                          (!importForm.defaultShippingMethod || importForm.defaultShippingMethod === 'neutral')
-                            ? 'bg-orange-500/20 border-orange-500 text-orange-300'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        ⚪ Fret Neutre par défaut (Au choix du client)
-                      </button>
+                      <div>
+                        <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wider block">
+                          Synthèse Tarifaire & Fret Client — {importSupplierWarehouseMatch.whMatch.warehouse.id && importSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured' ? importSupplierWarehouseMatch.whMatch.warehouse.name : 'Paramètres Système par Défaut'}
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          Tarifs consolidés (le client choisit uniquement entre maritime ou aérien lors de l'achat).
+                        </span>
+                      </div>
+                      {importSupplierWarehouseMatch.whMatch.warehouse.offersSeaFreight !== false && (
+                        <div className="flex items-center gap-3 text-[10px] bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800">
+                          <label className="flex items-center gap-1 cursor-pointer text-slate-300">
+                            <input
+                              type="checkbox"
+                              checked={!importForm.ignoreSeaWeight}
+                              onChange={(e) => setImportForm({ ...importForm, ignoreSeaWeight: !e.target.checked })}
+                              className="w-3 h-3 accent-orange-500 rounded"
+                            />
+                            <span>Poids ({((importCalculatedPricing.seaCostByWeightXOF || 0)).toLocaleString('fr-FR')} F)</span>
+                          </label>
+                          <label className="flex items-center gap-1 cursor-pointer text-slate-300">
+                            <input
+                              type="checkbox"
+                              checked={!importForm.ignoreSeaVolume}
+                              onChange={(e) => setImportForm({ ...importForm, ignoreSeaVolume: !e.target.checked })}
+                              className="w-3 h-3 accent-orange-500 rounded"
+                            />
+                            <span>Volume ({((importCalculatedPricing.seaCostByVolumeXOF || 0)).toLocaleString('fr-FR')} F • ~{(importCalculatedPricing.computedVolumeCbm || 0)} m³)</span>
+                          </label>
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
@@ -5445,68 +5960,74 @@ export default function Admin() {
                       </div>
 
                       <div
-                        onClick={() => setImportForm({ ...importForm, defaultShippingMethod: 'sea' })}
-                        className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
-                          importForm.defaultShippingMethod === 'sea'
-                            ? 'bg-emerald-950/60 border-emerald-500 ring-1 ring-emerald-500/40'
-                            : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                        onClick={() => {
+                          if (importSupplierWarehouseMatch.whMatch.warehouse.offersSeaFreight !== false) {
+                            setImportForm({ ...importForm, defaultShippingMethod: importForm.defaultShippingMethod === 'sea' ? 'neutral' : 'sea' });
+                          }
+                        }}
+                        className={`p-2.5 rounded-xl border text-center transition-all ${
+                          importSupplierWarehouseMatch.whMatch.warehouse.offersSeaFreight === false
+                            ? 'opacity-40 bg-slate-950 border-slate-800 cursor-not-allowed'
+                            : importForm.defaultShippingMethod === 'sea'
+                              ? 'bg-emerald-950/60 border-emerald-500 ring-1 ring-emerald-500/40 cursor-pointer'
+                              : 'bg-slate-900/70 border-slate-800 hover:border-slate-700 cursor-pointer'
                         }`}
-                        title="Cliquez pour pré-sélectionner le Fret Maritime par défaut"
                       >
                         <span className="text-[10px] text-slate-300 block uppercase font-semibold">
-                          🚢 Fret Maritime ({siteSettings.seaFreightDurationDays || '30 à 55 jours'})
+                          🚢 Fret Maritime ({importSupplierWarehouseMatch.whMatch.warehouse.id && importSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured' ? (importSupplierWarehouseMatch.whMatch.warehouse.seaFreightDurationDays || '30 à 45 jours') : (siteSettings.seaFreightDuration || siteSettings.seaFreightDurationDays || '20 à 40 jours')})
                         </span>
-                        <span className="text-xs font-bold text-emerald-400 font-mono block mt-0.5">
-                          {Math.round(importCalculatedPricing.seaFreightCostXOF).toLocaleString('fr-FR')} F
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="500"
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder="Auto (ou saisir)"
-                          value={importForm.customSeaFreightCost ?? ''}
-                          onChange={(e) => setImportForm({
-                            ...importForm,
-                            customSeaFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
-                          })}
-                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-emerald-300 font-mono text-center"
-                        />
+                        {importSupplierWarehouseMatch.whMatch.warehouse.offersSeaFreight !== false ? (
+                          <>
+                            <span className="text-xs font-bold text-emerald-400 font-mono block mt-0.5">
+                              {Math.round(importCalculatedPricing.seaFreightCostXOF).toLocaleString('fr-FR')} F
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-mono block">
+                              {importSupplierWarehouseMatch.whMatch.warehouse.id && importSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured'
+                                ? `Tarif entrepôt : ${(importSupplierWarehouseMatch.whMatch.warehouse.seaFreightPerKgXOF ?? siteSettings.seaFreightPerKg ?? 1800).toLocaleString('fr-FR')} F/kg`
+                                : `Tarif système : ${(siteSettings.seaFreightPerKg ?? 1800).toLocaleString('fr-FR')} F/kg`}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-slate-500 block mt-1">Non proposé</span>
+                        )}
                       </div>
 
                       <div
-                        onClick={() => setImportForm({ ...importForm, defaultShippingMethod: 'air' })}
-                        className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
-                          importForm.defaultShippingMethod === 'air'
-                            ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/40'
-                            : 'bg-slate-900/70 border-slate-800 hover:border-slate-700'
+                        onClick={() => {
+                          if (importSupplierWarehouseMatch.whMatch.warehouse.offersAirFreight !== false) {
+                            setImportForm({ ...importForm, defaultShippingMethod: importForm.defaultShippingMethod === 'air' ? 'neutral' : 'air' });
+                          }
+                        }}
+                        className={`p-2.5 rounded-xl border text-center transition-all ${
+                          importSupplierWarehouseMatch.whMatch.warehouse.offersAirFreight === false
+                            ? 'opacity-40 bg-slate-950 border-slate-800 cursor-not-allowed'
+                            : importForm.defaultShippingMethod === 'air'
+                              ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/40 cursor-pointer'
+                              : 'bg-slate-900/70 border-slate-800 hover:border-slate-700 cursor-pointer'
                         }`}
-                        title="Cliquez pour pré-sélectionner le Fret Aérien par défaut"
                       >
                         <span className="text-[10px] text-slate-300 block uppercase font-semibold">
-                          ✈️ Fret Aérien ({siteSettings.airFreightDurationDays || '7 à 14 jours'})
+                          ✈️ Fret Aérien ({importSupplierWarehouseMatch.whMatch.warehouse.id && importSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured' ? (importSupplierWarehouseMatch.whMatch.warehouse.airFreightDurationDays || '7 à 12 jours') : (siteSettings.airFreightDuration || siteSettings.airFreightDurationDays || '8 à 15 jours')})
                         </span>
-                        <span className="text-xs font-bold text-blue-400 font-mono block mt-0.5">
-                          {Math.round(importCalculatedPricing.airFreightCostXOF).toLocaleString('fr-FR')} F
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="500"
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder="Auto (ou saisir)"
-                          value={importForm.customAirFreightCost ?? ''}
-                          onChange={(e) => setImportForm({
-                            ...importForm,
-                            customAirFreightCost: e.target.value !== '' ? Math.max(0, parseInt(e.target.value) || 0) : undefined
-                          })}
-                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-1.5 py-0.5 text-[10px] text-blue-300 font-mono text-center"
-                        />
+                        {importSupplierWarehouseMatch.whMatch.warehouse.offersAirFreight !== false ? (
+                          <>
+                            <span className="text-xs font-bold text-blue-400 font-mono block mt-0.5">
+                              {Math.round(importCalculatedPricing.airFreightCostXOF).toLocaleString('fr-FR')} F
+                            </span>
+                            <span className="text-[9px] text-slate-400 font-mono block">
+                              {importSupplierWarehouseMatch.whMatch.warehouse.id && importSupplierWarehouseMatch.whMatch.warehouse.id !== 'aw-unconfigured'
+                                ? `Tarif entrepôt : ${(importSupplierWarehouseMatch.whMatch.warehouse.airFreightPerKgXOF ?? siteSettings.airFreightPerKg ?? 7000).toLocaleString('fr-FR')} F/kg`
+                                : `Tarif système : ${(siteSettings.airFreightPerKg ?? 7000).toLocaleString('fr-FR')} F/kg`}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-slate-500 block mt-1">Non proposé</span>
+                        )}
                       </div>
 
                       <div className="p-2.5 bg-slate-900/70 rounded-xl border border-orange-500/30 flex flex-col justify-center">
                         <span className="text-[10px] text-orange-400 block font-bold uppercase">
-                          Prix Vente {importForm.applyVat ? 'TTC' : 'Net'}
+                          Prix Vente {importForm.applyVat ? 'TTC' : 'Net'} (Hors Fret)
                         </span>
                         <span className="text-sm font-black text-orange-400 font-mono mt-0.5">
                           {importCalculatedPricing.priceTTC.toLocaleString('fr-FR')} F

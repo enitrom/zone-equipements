@@ -135,35 +135,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           if (userDoc.exists()) {
             const data = userDoc.data();
+            const defaultCountry = data.country || siteSettingsService.getSettings()?.defaultClientCountry || 'Sénégal';
+            // Synchroniser les produits aimés entre localStorage et Firestore
+            let mergedLikedIds: number[] = Array.isArray(data.likedProductIds) ? data.likedProductIds.map((n: any) => Number(n)).filter(Boolean) : [];
+            try {
+              const rawLocalLiked = localStorage.getItem('ze_liked_products_v1');
+              const localLiked = rawLocalLiked ? JSON.parse(rawLocalLiked) : [];
+              if (Array.isArray(localLiked)) {
+                mergedLikedIds = Array.from(new Set([...mergedLikedIds, ...localLiked.map((n: any) => Number(n)).filter(Boolean)]));
+              }
+              localStorage.setItem('ze_liked_products_v1', JSON.stringify(mergedLikedIds));
+              window.dispatchEvent(new CustomEvent('ze_liked_products_updated', { detail: mergedLikedIds }));
+            } catch {}
+
             // Synchroniser strictement le rôle dans Firestore (promotion OU révocation d'un ancien admin supprimé)
-            if (data.role !== effectiveRole || data.emailLower !== userEmail) {
+            if (data.role !== effectiveRole || data.emailLower !== userEmail || !data.country || (mergedLikedIds.length > (data.likedProductIds?.length || 0))) {
               await updateDoc(userRef, {
                 role: effectiveRole,
                 email: userEmail || data.email,
-                emailLower: userEmail
+                emailLower: userEmail,
+                country: defaultCountry,
+                likedProductIds: mergedLikedIds
               }).catch(() => {});
             }
-            setProfile({ ...data, role: effectiveRole, email: userEmail || data.email });
+            const resolvedProfile = { ...data, role: effectiveRole, email: userEmail || data.email, country: defaultCountry, likedProductIds: mergedLikedIds };
+            setProfile(resolvedProfile);
+            try {
+              localStorage.setItem('ze_user_profile_v1', JSON.stringify(resolvedProfile));
+            } catch {}
           } else {
+            let localLikedIds: number[] = [];
+            try {
+              const rawLocalLiked = localStorage.getItem('ze_liked_products_v1');
+              const parsed = rawLocalLiked ? JSON.parse(rawLocalLiked) : [];
+              if (Array.isArray(parsed)) localLikedIds = parsed.map((n: any) => Number(n)).filter(Boolean);
+            } catch {}
+            const defaultCountry = siteSettingsService.getSettings()?.defaultClientCountry || 'Sénégal';
             const newProfile = {
               uid: firebaseUser.uid,
               email: userEmail,
               emailLower: userEmail,
               displayName: firebaseUser.displayName || '',
+              country: defaultCountry,
+              city: 'Dakar',
+              likedProductIds: localLikedIds,
               role: effectiveRole,
               createdAt: new Date().toISOString(),
             };
             await setDoc(userRef, newProfile).catch(() => {});
             setProfile(newProfile);
+            try {
+              localStorage.setItem('ze_user_profile_v1', JSON.stringify(newProfile));
+            } catch {}
           }
 
-          // Écoute temps réel sur le document utilisateur pour détecter toute révocation instantanée
+          // Écoute temps réel sur le document utilisateur pour détecter toute révocation instantanée ou mise à jour de favoris/pays
           unsubUserDoc = onSnapshot(userRef, (snap) => {
             if (snap.exists()) {
               const liveData = snap.data();
               const liveAllowed = isUserAdmin(firebaseUser.email || liveData.email);
               const liveRole = liveAllowed ? 'admin' : 'client';
-              setProfile({ ...liveData, role: liveRole });
+              const liveCountry = liveData.country || siteSettingsService.getSettings()?.defaultClientCountry || 'Sénégal';
+              const nextProfile = { ...liveData, role: liveRole, country: liveCountry };
+              setProfile(nextProfile);
+              try {
+                localStorage.setItem('ze_user_profile_v1', JSON.stringify(nextProfile));
+                if (Array.isArray(liveData.likedProductIds)) {
+                  localStorage.setItem('ze_liked_products_v1', JSON.stringify(liveData.likedProductIds));
+                  window.dispatchEvent(new CustomEvent('ze_liked_products_updated', { detail: liveData.likedProductIds }));
+                }
+              } catch {}
               if (!liveAllowed) {
                 silentRedirectFromAdminIfRevoked();
               }

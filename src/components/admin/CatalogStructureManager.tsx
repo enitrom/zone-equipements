@@ -493,80 +493,80 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-full overflow-hidden">
       {/* Sub tabs navigation */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-slate-950 p-2 rounded-xl border border-slate-800">
-        <div className="flex gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-950 p-3 rounded-xl border border-slate-800">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:flex xl:flex-wrap gap-2 w-full xl:w-auto">
           <button
             onClick={() => setSubTab('sectors')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               subTab === 'sectors'
                 ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/60'
             }`}
           >
-            <ImageIcon className="w-3.5 h-3.5" />
-            Secteurs d'Activité ({sectors.length})
+            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Secteurs d'Activité ({sectors.length})</span>
           </button>
           
           <button
             onClick={() => setSubTab('categories')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               subTab === 'categories'
                 ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/60'
             }`}
           >
-            <FolderTree className="w-3.5 h-3.5" />
-            Catégories & Sous-Catégories ({categories.length})
+            <FolderTree className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Catégories & Sous-Catégories ({categories.length})</span>
           </button>
 
           <button
             onClick={() => setSubTab('brands')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               subTab === 'brands'
                 ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/60'
             }`}
           >
-            <Tag className="w-3.5 h-3.5" />
-            Marques ({brands.length})
+            <Tag className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Marques ({brands.length})</span>
           </button>
 
           <button
             onClick={() => setSubTab('testimonials')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               subTab === 'testimonials'
                 ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/60'
             }`}
           >
-            <MessageSquareQuote className="w-3.5 h-3.5" />
-            Témoignages Clients ({testimonials.length})
+            <MessageSquareQuote className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Témoignages Clients ({testimonials.length})</span>
           </button>
 
           <button
             onClick={() => setSubTab('articles')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               subTab === 'articles'
                 ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/60'
             }`}
           >
-            <BookOpen className="w-3.5 h-3.5" />
-            Derniers Articles ({articles.length})
+            <BookOpen className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Derniers Articles ({articles.length})</span>
           </button>
 
           <button
             onClick={() => setSubTab('faqs')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
               subTab === 'faqs'
                 ? 'bg-[#FF6600] text-white shadow-md shadow-orange-950'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800/60'
             }`}
           >
-            <HelpCircle className="w-3.5 h-3.5" />
-            Questions Fréquentes ({faqs.length})
+            <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">Questions Fréquentes ({faqs.length})</span>
           </button>
         </div>
 
@@ -726,29 +726,29 @@ export const CatalogStructureManager: React.FC<Props> = ({ onNotify }) => {
               return (
                 <div 
                   key={cat.name}
-                  className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition-all"
+                  className="bg-slate-900 rounded-xl border border-slate-800 p-4 flex flex-col justify-between hover:border-slate-700 transition-all min-w-0 max-w-full overflow-hidden"
                 >
-                  <div>
-                    <div className="flex items-start gap-3 mb-3">
+                  <div className="min-w-0">
+                    <div className="flex items-start gap-3 mb-3 min-w-0">
                       <div className="w-9 h-9 rounded-lg bg-[#003366] text-white flex items-center justify-center shrink-0">
                         <IconComp className="w-4 h-4 text-orange-400" />
                       </div>
-                      <div>
-                        <h4 className="font-bold text-white text-sm leading-tight">{cat.name}</h4>
-                        <span className="text-[10px] text-slate-400 font-medium">{cat.brands}</span>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="font-bold text-white text-sm leading-tight break-words">{cat.name}</h4>
+                        <span className="text-[10px] text-slate-400 font-medium block break-words">{cat.brands}</span>
                       </div>
                     </div>
 
-                    <p className="text-xs text-slate-300 mb-3 line-clamp-2 leading-relaxed">{cat.description}</p>
+                    <p className="text-xs text-slate-300 mb-3 line-clamp-2 leading-relaxed break-words">{cat.description}</p>
 
                     {cat.subcategories && cat.subcategories.length > 0 && (
-                      <div className="bg-slate-950/80 p-2 rounded-lg border border-slate-800/60 mb-3">
+                      <div className="bg-slate-950/80 p-2.5 rounded-lg border border-slate-800/60 mb-3 max-w-full overflow-hidden">
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
                           Sous-catégories ({cat.subcategories.length}) :
                         </span>
-                        <div className="flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-1.5 max-w-full">
                           {cat.subcategories.map((sc, i) => (
-                            <span key={i} className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded">
+                            <span key={i} className="text-[10px] bg-slate-800 text-slate-200 border border-slate-700/60 px-2 py-0.5 rounded-md break-words max-w-full">
                               {typeof sc === 'string' ? sc : sc.name}
                             </span>
                           ))}

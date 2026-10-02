@@ -177,6 +177,10 @@ function splitGluedSpecPair(rawText: string): { key: string; val: string } | nul
     if (cleaned.toLowerCase().startsWith(prefix.toLowerCase()) && cleaned.length > prefix.length) {
       const remainder = cleaned.slice(prefix.length).replace(/^[:\s\-–]+/, '').trim();
       if (remainder.length > 0) {
+        // Discard definition tooltips e.g. "(hp) is a measure of the pump's output power..."
+        if (/\b(is a measure of|refers to the|indicates the|measured in)\b/i.test(remainder)) {
+          return null;
+        }
         return { key: prefix, val: remainder };
       }
     }
@@ -242,6 +246,40 @@ const FRENCH_SPEC_DICTIONARY: Record<string, string> = {
   'overall length': 'Longueur totale',
   'overall width': 'Largeur totale',
   'overall height': 'Hauteur totale',
+  'overall depth': 'Profondeur totale',
+  'length less shaft': 'Longueur hors arbre',
+  'body dia.': 'Diamètre du corps',
+  'body diameter': 'Diamètre du corps',
+  'overall dia.': 'Diamètre total',
+  'overall diameter': 'Diamètre total',
+  'length': 'Longueur',
+  'width': 'Largeur',
+  'height': 'Hauteur',
+  'depth': 'Profondeur',
+  'diameter': 'Diamètre',
+  'mounting': 'Montage',
+  'mounting type': 'Type de montage',
+  'mounting position': 'Position de montage',
+  'shaft design': 'Conception d\'arbre',
+  'shaft rotation': 'Sens de rotation',
+  'shaft material': 'Matériau d\'arbre',
+  'nominal efficiency': 'Rendement nominal',
+  'power factor': 'Facteur de puissance',
+  'ambient temp.': 'Température ambiante',
+  'max. ambient temp': 'Température ambiante max.',
+  'bearing type': 'Type de roulements',
+  'frame design': 'Conception du châssis',
+  'nema frame': 'Châssis NEMA',
+  'motor group': 'Catégorie moteur',
+  'inverter duty': 'Compatible variateur (Inverter Duty)',
+  'rpm range': 'Plage de vitesse (tr/min)',
+  'voltage compatibility': 'Compatibilité de tension',
+  'usable @ 208v': 'Utilisable en 208V',
+  'usable @ 200v': 'Utilisable en 200V',
+  'green environmental attribute': 'Attribut environnemental',
+  'standards compliance': 'Conformité aux normes',
+  'includes': 'Inclus',
+  'package quantity': 'Quantité par colis',
   'product name': 'Nom du produit',
   'nom du produit': 'Nom du produit',
   'model number': 'Numéro de modèle',
@@ -343,7 +381,6 @@ const FRENCH_SPEC_DICTIONARY: Record<string, string> = {
   'engine brand': 'Marque du moteur',
   'displacement': 'Cylindrée',
   'continuous running time': 'Autonomie continue',
-  'power factor': 'Facteur de puissance',
   'bore*stroke': 'Alésage x Course',
   'stroke': 'Course / Temps moteur',
   'cylinder': 'Cylindre(s)',
@@ -369,15 +406,39 @@ const FRENCH_SPEC_DICTIONARY: Record<string, string> = {
   'showroom location': 'Localisation showroom'
 };
 
-function translateSpecKeyToFrench(rawKey: string): string {
+function cleanSpecKeyRaw(rawKey: string): string {
   if (!rawKey) return '';
-  let cleaned = cleanRepeatedText(rawKey)
+  let cleaned = String(rawKey || '')
+    // 1. Remove tooltips, definition sentences like "(hp) is a measure of the pump's output power..."
+    .replace(/\([a-zA-Z0-9_-]+\)\s+is\s+a\s+measure\s+of\b[^.]*(\.|$)/gi, '')
+    .replace(/\b(?:is a measure of|refers to the|indicates the|measured in)\b[^.]*(\.|$)/gi, '')
+    .replace(/\(hp\)\s+is\s+a\s+measure\s+of\b.*/gi, '')
     .replace(/\(subject to change\)/gi, '')
     .replace(/[:\s]+$/, '')
     .trim();
+
+  // 2. Clean recursive nested repeats e.g. "Puissance (CV / Puissance (CV / ... / HP))))"
+  while (/(?:Puissance\s*\(\s*CV\s*\/\s*){2,}/i.test(cleaned)) {
+    cleaned = cleaned.replace(/(?:Puissance\s*\(\s*CV\s*\/\s*)+/gi, 'Puissance (CV / ');
+  }
+  cleaned = cleaned.replace(/Puissance\s*\(\s*CV\s*\/\s*(?:Puissance\s*\(\s*CV\s*\/\s*)*HP\s*\)+/gi, 'Puissance (CV / HP)');
+  cleaned = cleanRepeatedText(cleaned).trim();
+
+  if (/^Puissance\s*\(\s*CV\s*\/\s*HP\s*\)$/i.test(cleaned)) {
+    return 'Puissance (CV / HP)';
+  }
+  return cleaned;
+}
+
+function translateSpecKeyToFrench(rawKey: string): string {
+  if (!rawKey) return '';
+  let cleaned = cleanSpecKeyRaw(rawKey);
   const lower = cleaned.toLowerCase();
   if (FRENCH_SPEC_DICTIONARY[lower]) {
     return FRENCH_SPEC_DICTIONARY[lower];
+  }
+  if (lower.startsWith('puissance')) {
+    return cleaned;
   }
   return cleaned
     .replace(/\bcountry of origin\b/gi, "Pays d'origine")
@@ -402,28 +463,243 @@ function translateSpecKeyToFrench(rawKey: string): string {
     .replace(/\bmax\.?\s*ambient temp(?:erature)?\.?\b/gi, "Température ambiante max.")
     .replace(/\bshaft dia(?:meter)?\.?\b/gi, "Diamètre d'arbre")
     .replace(/\bshaft length\b/gi, "Longueur d'arbre")
+    .replace(/\blength less shaft\b/gi, "Longueur hors arbre")
+    .replace(/\boverall length\b/gi, "Longueur totale")
+    .replace(/\boverall width\b/gi, "Largeur totale")
+    .replace(/\boverall height\b/gi, "Hauteur totale")
+    .replace(/\boverall depth\b/gi, "Profondeur totale")
+    .replace(/\bbody dia(?:meter)?\.?\b/gi, "Diamètre du corps")
     .replace(/\bmotor enclosure design\b/gi, "Boîtier de protection")
+    .replace(/\bmotor sub application\b/gi, "Sous-application moteur")
     .replace(/\bmotor design\b/gi, "Conception du moteur")
     .replace(/\bmotor mounting type\b/gi, "Type de montage")
+    .replace(/\bmotor mounting position\b/gi, "Position de montage")
+    .replace(/\bmotor thermal protection\b/gi, "Protection thermique")
+    .replace(/\bmotor service factor\b/gi, "Facteur de service")
+    .replace(/\bmotor bearings\b/gi, "Roulements")
+    .replace(/\bmotor shaft rotation\b/gi, "Sens de rotation")
+    .replace(/\bmotor shaft design\b/gi, "Type d'arbre")
+    .replace(/\bmotor frame material\b/gi, "Matériau du châssis")
     .replace(/\bmotor application\b/gi, "Application moteur")
+    .replace(/\bnominal efficiency\b/gi, "Rendement nominal")
+    .replace(/\bno\.?\s*of speeds\b/gi, "Nombre de vitesses")
     .replace(/\bduty cycle\b/gi, "Cycle de service")
+    .replace(/\bduty\b/gi, "Cycle de service")
     .replace(/\bwarranty\b/gi, "Garantie")
     .replace(/\bpower\b/gi, "Puissance")
     .replace(/\bvoltage\b/gi, "Tension")
     .replace(/\bweight\b/gi, "Poids")
     .replace(/\bdimensions?\b/gi, "Dimensions")
+    .replace(/\blength\b/gi, "Longueur")
+    .replace(/\bwidth\b/gi, "Largeur")
+    .replace(/\bheight\b/gi, "Hauteur")
+    .replace(/\bdepth\b/gi, "Profondeur")
+    .replace(/\bdiameter\b/gi, "Diamètre")
     .replace(/\bfrequency\b/gi, "Fréquence")
     .replace(/\bspeed\b/gi, "Vitesse")
     .replace(/\bcapacity\b/gi, "Capacité")
     .replace(/\bmaterial\b/gi, "Matériau")
     .replace(/\bframe\b/gi, "Châssis")
-    .replace(/\bphase\b/gi, "Phase");
+    .replace(/\bphase\b/gi, "Phase")
+    .replace(/\bitem\b/gi, "Article");
+}
+
+// Convert fractional or decimal inches (e.g. "7-3/8 in", "8-15/16 in", "10 1/2 in", "5/8\"") into cm and readable French format
+function convertImperialDimensionValueToFrench(text: string): string {
+  if (!text) return '';
+  return text.replace(
+    /\b(?:(\d+)\s*[- ]\s*)?(\d+)\s*\/\s*(\d+)\s*(?:in\.?|inch(?:es)?|po|")\b|\b(\d+(?:\.\d+)?)\s*(?:in\.?|inch(?:es)?|")\b/gi,
+    (match, wholeStr, numStr, denStr, decStr) => {
+      let inches = 0;
+      let rawImperial = '';
+      if (numStr && denStr) {
+        const whole = wholeStr ? parseInt(wholeStr, 10) : 0;
+        const num = parseInt(numStr, 10);
+        const den = parseInt(denStr, 10);
+        if (den <= 0) return match;
+        inches = whole + num / den;
+        rawImperial = whole > 0 ? `${whole}-${num}/${den} po` : `${num}/${den} po`;
+      } else if (decStr) {
+        inches = parseFloat(decStr);
+        rawImperial = `${decStr} po`;
+      }
+      if (!inches || isNaN(inches) || inches <= 0) return match;
+      const cm = Number((inches * 2.54).toFixed(1));
+      return `${cm} cm (${rawImperial})`;
+    }
+  );
+}
+
+// Parse a single dimension value in inches, mm, cm, or m into centimeters (cm)
+function parseSingleDimensionToCm(rawVal: string): number | null {
+  if (!rawVal || typeof rawVal !== 'string') return null;
+  const s = rawVal.trim();
+  if (!s) return null;
+
+  // 1. Fractional inches e.g. "7-3/8 in", "8-15/16 in", "11 1/2 in", "3/4 in"
+  const fracInMatch = s.match(/(?:(\d+)\s*[- ]\s*)?(\d+)\s*\/\s*(\d+)\s*(?:in\.?|inch(?:es)?|po|")?/i);
+  if (fracInMatch && (/\b(?:in\.?|inch(?:es)?|po)\b|"/i.test(s) || s.includes('-') || s.includes('/'))) {
+    const whole = fracInMatch[1] ? parseInt(fracInMatch[1], 10) : 0;
+    const num = parseInt(fracInMatch[2], 10);
+    const den = parseInt(fracInMatch[3], 10);
+    if (den > 0) {
+      const inches = whole + num / den;
+      if (inches > 0) return Number((inches * 2.54).toFixed(1));
+    }
+  }
+
+  // 2. Explicit cm already present (e.g. "18.7 cm (7-3/8 po)")
+  const cmMatch = s.match(/(\d+(?:[.,]\d+)?)\s*cm\b/i);
+  if (cmMatch) {
+    const v = parseFloat(cmMatch[1].replace(',', '.'));
+    if (!isNaN(v) && v > 0) return Number(v.toFixed(1));
+  }
+
+  // 3. Explicit mm
+  const mmMatch = s.match(/(\d+(?:[.,]\d+)?)\s*mm\b/i);
+  if (mmMatch) {
+    const v = parseFloat(mmMatch[1].replace(',', '.'));
+    if (!isNaN(v) && v > 0) return Number((v / 10).toFixed(1));
+  }
+
+  // 4. Explicit decimal inches
+  const inMatch = s.match(/(\d+(?:[.,]\d+)?)\s*(?:in\.?|inch(?:es)?|po|")\b/i);
+  if (inMatch) {
+    const v = parseFloat(inMatch[1].replace(',', '.'));
+    if (!isNaN(v) && v > 0) return Number((v * 2.54).toFixed(1));
+  }
+
+  // 5. Explicit feet
+  const ftMatch = s.match(/(\d+(?:[.,]\d+)?)\s*(?:ft\.?|feet|foot|pi)\b/i);
+  if (ftMatch) {
+    const v = parseFloat(ftMatch[1].replace(',', '.'));
+    if (!isNaN(v) && v > 0) return Number((v * 30.48).toFixed(1));
+  }
+
+  // 6. Explicit meters
+  const mMatch = s.match(/(\d+(?:[.,]\d+)?)\s*m\b/i);
+  if (mMatch) {
+    const v = parseFloat(mMatch[1].replace(',', '.'));
+    if (!isNaN(v) && v > 0) return Number((v * 100).toFixed(1));
+  }
+
+  return null;
+}
+
+// Extract and synthesize L x l x H dimensions from rawDimensions, specs map, or fractional inch fields
+function extractDimensionsFromSpecs(
+  rawDimensions: string,
+  specsMap?: Record<string, string>,
+  fallbackSpecsMap?: Record<string, string>
+): string {
+  const combinedSpecs: Record<string, string> = {
+    ...(fallbackSpecsMap || {}),
+    ...(specsMap || {})
+  };
+
+  // Helper to normalize a full L x W x H string (including fractional inches like "10-3/4 in x 7-3/8 in x 8-15/16 in")
+  const normalizeFullDimString = (str: string): string => {
+    if (!str) return '';
+    const cleaned = str.trim();
+    if (!cleaned) return '';
+
+    // Check if it contains 2 or 3 parts separated by x / * / ×
+    const parts = cleaned.split(/\s*[xX*×]\s*/);
+    if (parts.length >= 2 && parts.length <= 3) {
+      const hasInch = /\b(?:in\.?|inch(?:es)?|po)\b|"|\d+\/\d+/i.test(cleaned);
+      if (hasInch) {
+        const cmParts = parts.map(p => {
+          const withUnit = /\b(?:in\.?|inch(?:es)?|po|cm|mm)\b|"/i.test(p) ? p : `${p} in`;
+          return parseSingleDimensionToCm(withUnit);
+        });
+        if (cmParts.every(n => n !== null && n > 0)) {
+          return `${cmParts.join(' x ')} cm`;
+        }
+      }
+      if (/cm|mm|m\b/i.test(cleaned)) {
+        return cleaned.replace(/\s*[xX*×]\s*/g, ' x ').replace(/\s+/g, ' ').trim();
+      }
+      return `${cleaned.replace(/\s*[xX*×]\s*/g, ' x ')} cm`;
+    }
+    return '';
+  };
+
+  if (rawDimensions && rawDimensions.trim()) {
+    const norm = normalizeFullDimString(rawDimensions);
+    if (norm) return norm;
+  }
+
+  // 1. Look for a combined dimensions key in specs
+  for (const [k, v] of Object.entries(combinedSpecs)) {
+    if (!v) continue;
+    if (/dimensions?|taille du paquet|single package size|dimensions colis|package size|overall dimensions|l\s*\*\s*w\s*\*\s*h|l\s*x\s*l\s*x\s*h/i.test(k)) {
+      const match3D = v.match(/(\d+(?:[- ]\d+\/\d+|\.\d+|\/\d+)?\s*(?:in\.?|inch(?:es)?|po|cm|mm|m|")?\s*[xX*×]\s*\d+(?:[- ]\d+\/\d+|\.\d+|\/\d+)?\s*(?:in\.?|inch(?:es)?|po|cm|mm|m|")?(?:\s*[xX*×]\s*\d+(?:[- ]\d+\/\d+|\.\d+|\/\d+)?\s*(?:in\.?|inch(?:es)?|po|cm|mm|m|")?)?)/i);
+      if (match3D) {
+        const norm = normalizeFullDimString(match3D[1]);
+        if (norm) return norm;
+      }
+    }
+  }
+
+  // 2. Look for separate Length, Width/Diameter, and Height/Depth keys in specs (very common on Grainger, McMaster, Alibaba)
+  let lengthCm: number | null = null;
+  let lengthLessShaftCm: number | null = null;
+  let widthCm: number | null = null;
+  let heightCm: number | null = null;
+  let diameterCm: number | null = null;
+  let shaftLengthCm: number | null = null;
+
+  for (const [k, v] of Object.entries(combinedSpecs)) {
+    if (!v) continue;
+    const kl = k.toLowerCase().trim();
+    const parsedCm = parseSingleDimensionToCm(v);
+    if (parsedCm === null || parsedCm <= 0) continue;
+
+    if (/^(?:overall length|longueur totale|longueur hors tout|length|longueur)$/i.test(kl)) {
+      lengthCm = parsedCm;
+    } else if (/length less shaft|longueur hors arbre|body length|longueur du corps/i.test(kl)) {
+      lengthLessShaftCm = parsedCm;
+    } else if (/shaft length|longueur d'arbre/i.test(kl)) {
+      shaftLengthCm = parsedCm;
+    } else if (/^(?:overall width|largeur totale|frame width|width|largeur)$/i.test(kl)) {
+      widthCm = parsedCm;
+    } else if (/^(?:overall height|hauteur totale|frame height|height|hauteur|overall depth|profondeur totale|depth|profondeur)$/i.test(kl)) {
+      heightCm = parsedCm;
+    } else if (/^(?:body dia\.?|body diameter|diamètre du corps|overall dia\.?|overall diameter|diamètre total|frame diameter|diameter|diamètre)$/i.test(kl)) {
+      diameterCm = parsedCm;
+    }
+  }
+
+  const finalL = lengthCm ?? (lengthLessShaftCm !== null ? Number((lengthLessShaftCm + (shaftLengthCm || 0)).toFixed(1)) : null);
+  const finalW = widthCm ?? diameterCm;
+  const finalH = heightCm ?? diameterCm ?? widthCm;
+
+  if (finalL && finalW && finalH) {
+    return `${finalL} x ${finalW} x ${finalH} cm`;
+  }
+  if (finalL && finalW) {
+    return `${finalL} x ${finalW} x ${finalW} cm`;
+  }
+  if (finalL && finalH) {
+    return `${finalL} x ${finalH} x ${finalH} cm`;
+  }
+  if (finalW && finalH) {
+    return `${finalW} x ${finalW} x ${finalH} cm`;
+  }
+  if (finalL) {
+    // Estimate compact industrial form factor when only overall length is listed
+    const estW = diameterCm || Number(Math.max(10, finalL * 0.65).toFixed(1));
+    return `${finalL} x ${estW} x ${estW} cm`;
+  }
+
+  return rawDimensions ? rawDimensions.trim() : '';
 }
 
 function translateSpecValueToFrench(rawVal: string): string {
   if (!rawVal) return '';
   let s = cleanRepeatedText(rawVal).trim();
   if (!s) return '';
+  s = convertImperialDimensionValueToFrench(s);
   return s
     .replace(/\(subject to change\)/gi, '(susceptible de changer)')
     .replace(/\bsubject to change\b/gi, 'susceptible de changer')
@@ -450,35 +726,67 @@ function translateSpecValueToFrench(rawVal: string): string {
     .replace(/\bbelgium\b/gi, 'Belgique')
     .replace(/\bpoland\b/gi, 'Pologne')
     .replace(/\bturkey\b/gi, 'Turquie')
+    .replace(/\bczech\s+republic\b/gi, 'République Tchèque')
     .replace(/\bgeneral\s+purpose\s+motor\b/gi, 'Moteur électrique à usage général')
+    .replace(/\bgeneral\s+application\b/gi, 'Application générale')
     .replace(/\bgeneral\s+purpose\b/gi, 'Usage général')
+    .replace(/\bcapacitor[- ]start\s*\/\s*capacitor[- ]run\b/gi, 'Démarrage et marche par condensateur (CSCR)')
     .replace(/\bcapacitor[- ]start\b/gi, 'Démarrage par condensateur')
     .replace(/\bcapacitor[- ]run\b/gi, 'Fonctionnement par condensateur')
     .replace(/\bsplit[- ]phase\b/gi, 'Phase auxiliaire (Split-Phase)')
     .replace(/\bpermanent\s+split\s+capacitor\b/gi, 'Condensateur permanent (PSC)')
     .replace(/\bshaded\s+pole\b/gi, 'Bague de déphasage')
+    .replace(/\b3[- ]phase\b/gi, 'Triphasé')
+    .replace(/\b1[- ]phase\b/gi, 'Monophasé')
+    .replace(/\bsingle[- ]phase\b/gi, 'Monophasé')
+    .replace(/\bthree[- ]phase\b/gi, 'Triphasé')
     .replace(/\bopen\s+dripproof\b/gi, 'Ouvert anti-gouttes (ODP)')
+    .replace(/\bopen\s+air[- ]over\b/gi, 'Ouvert refroidi par flux d\'air (OAO)')
     .replace(/\btotally\s+enclosed\s+fan[- ]cooled\b/gi, 'Totalement fermé refroidi par ventilateur (TEFC)')
     .replace(/\btotally\s+enclosed\s+non[- ]ventilated\b/gi, 'Totalement fermé non ventilé (TENV)')
+    .replace(/\btotally\s+enclosed\s+air[- ]over\b/gi, 'Totalement fermé dans le flux d\'air (TEAO)')
     .replace(/\bexplosion\s+proof\b/gi, 'Antidéflagrant (ATEX)')
+    .replace(/\bwashdown\b/gi, 'Lavage haute pression (Washdown)')
     .replace(/\brigid\s+base\b/gi, 'Base rigide')
     .replace(/\bcradle\s+base\b/gi, 'Base berceau')
     .replace(/\bresilient\s+base\b/gi, 'Base élastique')
+    .replace(/\byoke\b/gi, 'Étrier (Yoke)')
+    .replace(/\bstud\b/gi, 'Goujons (Stud)')
+    .replace(/\bbelly\s+band\b/gi, 'Collier périphérique')
+    .replace(/\bfootless\b/gi, 'Sans pattes (Footless)')
+    .replace(/\bc[- ]face\s+less\s+base\b/gi, 'Bride C-Face sans base')
+    .replace(/\bc[- ]face\s+with\s+base\b/gi, 'Bride C-Face avec base')
     .replace(/\bc[- ]face\b/gi, 'Bride C-Face')
     .replace(/\bcontinuous\s+duty\b/gi, 'Service continu')
     .replace(/\bcontinuous\b/gi, 'Continu')
     .replace(/\bintermittent\b/gi, 'Intermittent')
+    .replace(/\bauto(?:matic)?\s+thermal\s+protection\b/gi, 'Protection thermique automatique')
     .replace(/\bautomatic\b/gi, 'Automatique')
+    .replace(/\bauto\b/gi, 'Automatique')
     .replace(/\bmanual\b/gi, 'Manuel')
+    .replace(/\bthermostat\b/gi, 'Thermostat intégré')
     .replace(/\bno\s+protection\b/gi, 'Sans protection thermique')
     .replace(/\ball\s+angle\b/gi, 'Toutes positions')
     .replace(/\bhorizontal\b/gi, 'Horizontal')
+    .replace(/\bvertical\s+shaft\s+down\b/gi, 'Vertical arbre vers le bas')
+    .replace(/\bvertical\s+shaft\s+up\b/gi, 'Vertical arbre vers le haut')
     .replace(/\bvertical\b/gi, 'Vertical')
     .replace(/\bkeyed\b/gi, 'À clavette')
+    .replace(/\bflat\b/gi, 'À méplat')
     .replace(/\bthreaded\b/gi, 'Fileté')
+    .replace(/\bdouble[- ]ended\b/gi, 'Double bout d\'arbre')
+    .replace(/\bcw\/ccw\b/gi, 'Réversible Horaire / Anti-horaire (CW/CCW)')
+    .replace(/\bccw\/cw\b/gi, 'Réversible Anti-horaire / Horaire (CCW/CW)')
+    .replace(/\bcounterclockwise\b/gi, 'Anti-horaire (CCW)')
+    .replace(/\bclockwise\b/gi, 'Horaire (CW)')
     .replace(/\bball\s+bearings?\b/gi, 'Roulements à billes')
-    .replace(/\bsleeve\s+bearings?\b/gi, 'Paliers lisses')
+    .replace(/\bsleeve\s+bearings?\b/gi, 'Paliers lisses (Bague)')
+    .replace(/\bball\b/gi, 'Roulements à billes')
+    .replace(/\bsleeve\b/gi, 'Paliers lisses (Bague)')
     .replace(/\brolled\s+steel\b/gi, 'Acier laminé')
+    .replace(/\bstamped\s+steel\b/gi, 'Acier embouti')
+    .replace(/\byes\b/gi, 'Oui')
+    .replace(/\bno\b/gi, 'Non')
     .replace(/\bnew\b/gi, 'Neuf')
     .replace(/\b1\s*year\b/gi, '1 an')
     .replace(/\b2\s*years\b/gi, '2 ans')
@@ -670,7 +978,7 @@ function isLikelyIconOrTinyImage(url: string, widthAttr?: string | number, heigh
   return false;
 }
 
-// Helper to fix relative or protocol-relative image URLs and strip thumbnail suffixes
+// Helper to fix relative or protocol-relative image URLs and strip thumbnail suffixes BEFORE checking icon rules
 function fixImageUrl(imgUrl: string, baseUrl: string): string {
   if (!imgUrl || typeof imgUrl !== 'string') return '';
   let cleaned = imgUrl.trim();
@@ -684,22 +992,32 @@ function fixImageUrl(imgUrl: string, baseUrl: string): string {
     }
   }
   if (!cleaned.startsWith('http')) return '';
-  if (isLikelyIconOrTinyImage(cleaned)) return '';
 
-  // Remove Alibaba & AliExpress thumbnail resize suffixes to retrieve original high-resolution photos
+  // 1. Upgrade Alibaba, AliExpress & Made-in-China thumbnail resize suffixes FIRST so gallery thumbnails become HD photos
   cleaned = cleaned
     .replace(/_\.webp$/i, '')
-    .replace(/_[0-9]+x[0-9]+(q[0-9]+)?\.(jpg|png|jpeg|webp)$/i, '')
+    .replace(/_[0-9]+x[0-9]+[a-z0-9]*\.(jpg|png|jpeg|webp)$/i, '')
+    .replace(/\.(jpg|png|jpeg|webp)_[0-9]+x[0-9]+.*$/i, '.$1')
     .replace(/_50x50\..*$/i, '')
+    .replace(/_80x80\..*$/i, '')
     .replace(/_100x100\..*$/i, '')
+    .replace(/_120x120\..*$/i, '')
     .replace(/_220x220\..*$/i, '')
     .replace(/_350x350\..*$/i, '')
     .replace(/_800x800\..*$/i, '');
 
-  // Upgrade Grainger Scene7 thumbnail params to high-resolution 800x800
+  // 2. Upgrade Grainger Scene7 thumbnail params FIRST (e.g. wid=54&hei=54 -> wid=800&hei=800) so alternate angle thumbnails are preserved!
   if (cleaned.includes('static.grainger.com/rp/s/is/image/')) {
-    cleaned = cleaned.replace(/([?&])wid=\d+/gi, '$1wid=800').replace(/([?&])hei=\d+/gi, '$1hei=800');
+    const baseScene7 = cleaned.split('?')[0];
+    cleaned = `${baseScene7}?$adapimg$&hei=800&wid=800`;
   }
+
+  // 3. Upgrade Amazon thumbnail modifiers (e.g. ._AC_US40_.jpg -> ._AC_SL1200_.jpg)
+  if (cleaned.includes('media-amazon.com/images/') || cleaned.includes('images-amazon.com/images/')) {
+    cleaned = cleaned.replace(/\._[A-Z0-9,_]+_\.(jpg|png|jpeg|webp)$/i, '.$1');
+  }
+
+  if (isLikelyIconOrTinyImage(cleaned)) return '';
 
   return cleaned;
 }
@@ -811,8 +1129,275 @@ function parseWeight(rawWeight: any, fallback: number, specsMap?: Record<string,
 const app = express();
 const PORT = 3000;
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// ================= SYSTÈME DE SÉCURITÉ, PROTECTION, ISOLATION & DÉTECTION D'INTRUSIONS =================
+export type ServerThreatLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type ServerSecurityAction = 'BLOCKED' | 'RATE_LIMITED' | 'LOGGED' | 'WARNING';
+
+interface ServerBlockedIp {
+  ip: string;
+  reason: string;
+  threatLevel: ServerThreatLevel;
+  blockedAt: string;
+  expiresAt?: string;
+  manual: boolean;
+  attemptsCount: number;
+}
+
+interface ServerSecurityLog {
+  id: string;
+  timestamp: string;
+  ip: string;
+  method: string;
+  path: string;
+  userAgent: string;
+  threatLevel: ServerThreatLevel;
+  reason: string;
+  actionTaken: ServerSecurityAction;
+}
+
+interface ServerSecuritySettings {
+  autoBlockEnabled: boolean;
+  antiScrapingShield: boolean;
+  strictRateLimit: boolean;
+  blockDurationHours: number;
+  maxRequestsPerMinute: number;
+  blockHeadlessBots: boolean;
+}
+
+const securitySettings: ServerSecuritySettings = {
+  autoBlockEnabled: true,
+  antiScrapingShield: true,
+  strictRateLimit: true,
+  blockDurationHours: 24,
+  maxRequestsPerMinute: 90,
+  blockHeadlessBots: true
+};
+
+const blockedIpsMap = new Map<string, ServerBlockedIp>();
+const securityLogs: ServerSecurityLog[] = [];
+const ipRateMap = new Map<string, { count: number; windowStart: number; violations: number }>();
+let totalInspectedRequests = 0;
+
+function getClientIp(req: express.Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string') {
+    return forwarded.split(',')[0].trim();
+  }
+  const realIp = req.headers['x-real-ip'] || req.headers['cf-connecting-ip'];
+  if (typeof realIp === 'string') {
+    return realIp.trim();
+  }
+  return req.socket.remoteAddress || req.ip || '127.0.0.1';
+}
+
+function recordSecurityLog(params: {
+  ip: string;
+  method: string;
+  path: string;
+  userAgent: string;
+  threatLevel: ServerThreatLevel;
+  reason: string;
+  actionTaken: ServerSecurityAction;
+}) {
+  const logItem: ServerSecurityLog = {
+    id: 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    timestamp: new Date().toISOString(),
+    ip: params.ip,
+    method: params.method,
+    path: params.path,
+    userAgent: (params.userAgent || 'Inconnu').substring(0, 180),
+    threatLevel: params.threatLevel,
+    reason: params.reason,
+    actionTaken: params.actionTaken
+  };
+
+  securityLogs.unshift(logItem);
+  if (securityLogs.length > 600) {
+    securityLogs.pop();
+  }
+}
+
+function autoBlockIp(ip: string, reason: string, threatLevel: ServerThreatLevel = 'HIGH', durationHours = 24) {
+  if (!securitySettings.autoBlockEnabled) return;
+  // Ne jamais bannir le localhost ou IP interne de dev
+  if (ip === '127.0.0.1' || ip === '::1' || ip === 'localhost' || ip.startsWith('10.') || ip.startsWith('192.168.')) {
+    return;
+  }
+
+  const expiresAt = durationHours > 0 
+    ? new Date(Date.now() + durationHours * 3600 * 1000).toISOString()
+    : undefined;
+
+  const existing = blockedIpsMap.get(ip);
+  blockedIpsMap.set(ip, {
+    ip,
+    reason,
+    threatLevel,
+    blockedAt: new Date().toISOString(),
+    expiresAt,
+    manual: false,
+    attemptsCount: (existing?.attemptsCount || 0) + 1
+  });
+}
+
+// 1. En-têtes HTTP de sécurité avancée (Protection Helmet & Isolation)
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
+// 2. Middlewares Express avec limitation de charge pour éviter les attaques DoS de payloads géants
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+
+// 3. Bouclier Actif de Détection d'Intrusions, Blocage d'IPs & Anti-Extraction de Données
+app.use((req, res, next) => {
+  totalInspectedRequests++;
+  const clientIp = getClientIp(req);
+  const pathLower = req.path.toLowerCase();
+  const userAgent = String(req.headers['user-agent'] || '');
+  const userAgentLower = userAgent.toLowerCase();
+  const now = Date.now();
+
+  // A. Vérification de la liste noire d'IPs
+  const blockedEntry = blockedIpsMap.get(clientIp);
+  if (blockedEntry) {
+    if (blockedEntry.expiresAt && new Date(blockedEntry.expiresAt).getTime() < now) {
+      // Le bannissement temporaire est expiré
+      blockedIpsMap.delete(clientIp);
+    } else {
+      blockedEntry.attemptsCount = (blockedEntry.attemptsCount || 0) + 1;
+      recordSecurityLog({
+        ip: clientIp,
+        method: req.method,
+        path: req.path,
+        userAgent,
+        threatLevel: 'HIGH',
+        reason: `Tentative d'accès depuis une adresse IP bloquée (${blockedEntry.reason})`,
+        actionTaken: 'BLOCKED'
+      });
+      return res.status(403).json({
+        error: "Accès refusé par le Bouclier de Sécurité de Zone Équipements.",
+        ip: clientIp,
+        reason: blockedEntry.reason,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
+  // B. Détection de Piège Honeypot (robots malveillants essayant d'aspirer des routes invisibles)
+  if (pathLower.includes('honeypot') || pathLower === '/api/hidden-catalog' || pathLower === '/trap') {
+    autoBlockIp(clientIp, "Déclencheur de piège Honeypot anti-crawler", 'CRITICAL', 48);
+    recordSecurityLog({
+      ip: clientIp,
+      method: req.method,
+      path: req.path,
+      userAgent,
+      threatLevel: 'CRITICAL',
+      reason: "Honeypot Trap activé — Tentative de scraping automatisé ou d'intrusion",
+      actionTaken: 'BLOCKED'
+    });
+    return res.status(403).json({ error: "Bouclier de Sécurité Activé." });
+  }
+
+  // C. Détection de sondes de vulnérabilités et attaques courantes (Path Traversal, Injection, Scanners)
+  const suspiciousPatterns = [
+    /\.(?:env|git|svn|htaccess|bak|sql|config|ini)\b/i,
+    /\/(?:wp-admin|wp-login|wp-includes|phpmyadmin|pma|xmlrpc\.php|cgi-bin|shell|\.well-known\/config)\b/i,
+    /(?:\.\.\/|\.\.\\)/i,
+    /\/proc\/self|\/etc\/passwd/i,
+    /(?:<script|javascript:|eval\(|base64_decode|union\s+select|select\s+.*\s+from\s+)/i
+  ];
+
+  const fullUrlCheck = req.originalUrl || req.url;
+  const isSuspiciousProbe = suspiciousPatterns.some(rx => rx.test(fullUrlCheck) || rx.test(pathLower));
+
+  if (isSuspiciousProbe) {
+    autoBlockIp(clientIp, `Tentative d'analyse de vulnérabilités (${pathLower})`, 'CRITICAL', 72);
+    recordSecurityLog({
+      ip: clientIp,
+      method: req.method,
+      path: req.path,
+      userAgent,
+      threatLevel: 'CRITICAL',
+      reason: `Sonde d'intrusion détectée sur le chemin ${pathLower}`,
+      actionTaken: 'BLOCKED'
+    });
+    return res.status(403).json({
+      error: "Accès refusé. Tentative d'intrusion signalée et enregistrée.",
+      ip: clientIp
+    });
+  }
+
+  // D. Bouclier Anti-Scraping : Détection des robots extracteurs sans navigateur réel
+  if (securitySettings.antiScrapingShield && securitySettings.blockHeadlessBots) {
+    const maliciousBots = [
+      'scrapy', 'python-requests', 'aiohttp', 'httpx', 'httpclient',
+      'masscan', 'nikto', 'sqlmap', 'nmap', 'zgrab', 'go-http-client',
+      'headlesschrome', 'phantomjs', 'puppeteer'
+    ];
+    const isBotScraper = maliciousBots.some(bot => userAgentLower.includes(bot));
+    
+    // Si un bot tente d'accéder aux routes de scraping ou à l'API publique intensivement
+    if (isBotScraper && (pathLower.startsWith('/api/scrape') || pathLower.startsWith('/api/admin') || pathLower.startsWith('/api/translate'))) {
+      recordSecurityLog({
+        ip: clientIp,
+        method: req.method,
+        path: req.path,
+        userAgent,
+        threatLevel: 'HIGH',
+        reason: `Robot d'extraction détecté (${userAgent.substring(0, 40)})`,
+        actionTaken: 'BLOCKED'
+      });
+      return res.status(403).json({
+        error: "Accès automatisé non autorisé par la politique anti-scraping.",
+        ip: clientIp
+      });
+    }
+  }
+
+  // E. Limitation du taux de requêtes (Rate Limiting adaptatif par fenêtre glissante de 60 secondes)
+  if (securitySettings.strictRateLimit) {
+    let rateData = ipRateMap.get(clientIp);
+    if (!rateData || now - rateData.windowStart > 60000) {
+      rateData = { count: 1, windowStart: now, violations: rateData?.violations || 0 };
+      ipRateMap.set(clientIp, rateData);
+    } else {
+      rateData.count++;
+      
+      const maxLimit = pathLower.startsWith('/api/scrape') ? 25 : securitySettings.maxRequestsPerMinute;
+      if (rateData.count > maxLimit) {
+        rateData.violations++;
+        const threat: ServerThreatLevel = rateData.violations > 3 ? 'HIGH' : 'MEDIUM';
+        
+        recordSecurityLog({
+          ip: clientIp,
+          method: req.method,
+          path: req.path,
+          userAgent,
+          threatLevel: threat,
+          reason: `Dépassement du quota de requêtes (${rateData.count}/${maxLimit} req/min)`,
+          actionTaken: 'RATE_LIMITED'
+        });
+
+        if (rateData.violations >= 6) {
+          autoBlockIp(clientIp, "Extraction massive ou saturation DoS (Rate Limit répété)", 'CRITICAL', 24);
+        }
+
+        return res.status(429).json({
+          error: "Trop de requêtes détectées. Veuillez patienter avant de réessayer.",
+          retryAfterSeconds: Math.ceil((60000 - (now - rateData.windowStart)) / 1000)
+        });
+      }
+    }
+  }
+
+  next();
+});
 
 // ================= CONFIGURATION & INTÉGRATION PAYDUNYA (LIVE & TEST + IPN) =================
 interface PaydunyaServerConfig {
@@ -1581,8 +2166,12 @@ app.get("/api/paydunya/ipn-status", (_req, res) => {
 
 // API route for AI Sourcing & Product Import using HTML fetching + Gemini structured output
 app.post("/api/scrape-product", async (req, res) => {
-  const { url, query, jsRender } = req.body;
+  const { url, query, jsRender, warehouses } = req.body;
   const inputVal = (url || query || '').trim();
+  const candidateWarehouses = Array.isArray(warehouses) ? warehouses : [];
+  let aiClosestWarehouseId = '';
+  let aiClosestWarehouseReason = '';
+  let aiCountryConfident = false;
   
   if (!inputVal) {
     return res.status(400).json({ error: "Veuillez fournir un lien URL ou une référence/nom de produit." });
@@ -1654,8 +2243,9 @@ app.post("/api/scrape-product", async (req, res) => {
     // Ignore generic site-wide legal, warranty, return, credit, or unrelated documents
     if (/terms|conditions|privacy|return|warranty|credit|application|sds|msds|osh|california|prop65|brochure_general/i.test(cleanUrl)) return;
     if (!/\.pdf(\?|#|$)/i.test(cleanUrl) && !cleanUrl.startsWith('/api/catalog-pdf/') && !cleanUrl.includes('/is/content/') && !cleanUrl.includes('spec-sheet') && !cleanUrl.includes('catalog')) return;
-    // Keep only 1 primary product catalog PDF to avoid excess unrelated catalogs
-    if (extractedPdfs.length >= 1) return;
+    // Support multiple authentic technical documents & manuals (up to 6)
+    if (extractedPdfs.length >= 6) return;
+    if (extractedPdfs.some(p => p.url.toLowerCase() === cleanUrl.toLowerCase())) return;
     const rawCleanTitle = (rawLabel && rawLabel.trim().length > 2)
       ? translateSpecValueToFrench(rawLabel.replace(/grainger/gi, '').trim())
       : 'Catalogue PDF & Fiche Technique Constructeur';
@@ -1782,10 +2372,17 @@ app.post("/api/scrape-product", async (req, res) => {
           extractedPriceStr = $('.price-item .price, .ma-spec-price, .promotion-price, .product-price, .price-format, [data-testid*="purchase-price"], strong.id-whitespace-nowrap').first().text().trim();
         }
         
-        $('.main-image-thumb-ul img, .detail-gallery img, .image-item img, .detail-gallery-thumbnail img, .main-img, .image-magnifier img, [data-testid="main-image-thumb"] img').each((_, el) => {
-          const src = $(el).attr('src') || $(el).attr('data-src') || $(el).attr('image-src') || $(el).attr('data-magnify-src');
+        $('.main-image-thumb-ul img, .detail-gallery img, .image-item img, .detail-gallery-thumbnail img, .main-img, .image-magnifier img, [data-testid="main-image-thumb"] img, [class*="gallery"] img, [class*="thumb"] img').each((_, el) => {
+          const src = $(el).attr('data-zoom-image') || $(el).attr('data-big-src') || $(el).attr('data-src') || $(el).attr('image-src') || $(el).attr('data-magnify-src') || $(el).attr('src');
           if (src) extractedImages.push(src);
         });
+
+        // Also extract Alibaba full gallery array from embedded JSON state (imagePathList / imageUrlList / summImagePathList)
+        const aliGalleryListMatches = rawHtml.matchAll(/"(?:imagePathList|imageUrlList|summImagePathList|multiImageList)"\s*:\s*\[([^\]]+)\]/gi);
+        for (const m of aliGalleryListMatches) {
+          const urlsInJson = m[1].match(/(?:https?:)?\/\/[^"'\s,]+\.(?:jpg|jpeg|png|webp)/gi) || [];
+          urlsInJson.forEach(u => extractedImages.push(u.startsWith('//') ? `https:${u}` : u));
+        }
 
         const companyEl = cleanRepeatedText($('.company-name, .supplier-name, .company-basic-name, a.company-head-name, .shop-name, .seller-info-title, a[href*="company_profile"], .company-item, .detail-company-card .name').first().text().trim());
         if (companyEl && !companyEl.toLowerCase().includes('alibaba')) {
@@ -1890,7 +2487,7 @@ app.post("/api/scrape-product", async (req, res) => {
         const mainAmz = $('#landingImage, #imgBlkFront').attr('src') || $('#landingImage, #imgBlkFront').attr('data-old-hires');
         if (mainAmz) extractedImages.push(mainAmz);
       } else if (lower.includes('grainger') || rawHtml.includes('grainger.com')) {
-        extractedSupplierName = 'Distribution Industrielle USA';
+        extractedSupplierName = 'Grainger Industrial Supply';
         extractedSupplierCountry = 'États-Unis';
         if (!extractedTitle) {
           extractedTitle = cleanProductTitle(
@@ -1910,22 +2507,39 @@ app.post("/api/scrape-product", async (req, res) => {
         if (graingerMfrModel && !extractedModel) {
           extractedModel = cleanRepeatedText(graingerMfrModel);
         }
-        $('img[src*="static.grainger.com"], [data-testid*="gallery"] img, .product-image img').each((_, el) => {
-          const src = $(el).attr('src') || $(el).attr('data-src');
-          const wAttr = $(el).attr('width');
-          const hAttr = $(el).attr('height');
-          if (src && !isLikelyIconOrTinyImage(src, wAttr, hAttr)) {
-            extractedImages.push(src.startsWith('//') ? `https:${src}` : src);
+        const graingerSkuMatch = inputVal.match(/\/product\/(?:[^\/]+-)?([A-Za-z0-9_-]{4,15})(?:\?|$|\/)/i) || inputVal.match(/\b([0-9][A-Z0-9]{4,8})\b/i);
+        const graingerItemNumber = graingerSkuMatch ? graingerSkuMatch[1].toUpperCase() : '';
+
+        // Extract strictly from the main product gallery container
+        $('[data-testid="main-image-container"] img, [data-testid*="gallery"] img, .product-gallery img, .main-image img').each((_, el) => {
+          const src = $(el).attr('data-zoom-image') || $(el).attr('data-src') || $(el).attr('src');
+          if (src && !/recommend|accessory|related|cross|banner|logo|icon/i.test(src)) {
+            const fixed = fixImageUrl(src.startsWith('//') ? `https:${src}` : src, inputVal);
+            if (fixed) extractedImages.push(fixed);
           }
         });
-        // Grainger specification definition lists (dt/dd pairs or spec rows) - safe against nested spans and glued text
+        // Scan rawHtml strictly for Scene7 assets belonging to this item code (e.g. 822LV4_AS01, 822LV4_AW01)
+        if (graingerItemNumber) {
+          const itemRegex = new RegExp(`static\\.grainger\\.com\\/rp\\/s\\/is\\/image\\/Grainger\\/(${graingerItemNumber}[A-Za-z0-9_-]*)`, 'gi');
+          const scene7Matches = rawHtml.matchAll(itemRegex);
+          for (const m of scene7Matches) {
+            if (m[1] && !/logo|icon|badge|banner/i.test(m[1])) {
+              extractedImages.push(`https://static.grainger.com/rp/s/is/image/Grainger/${m[1]}?$adapimg$&hei=800&wid=800`);
+            }
+          }
+        }
+        // Grainger specification definition lists (dt/dd pairs or spec rows) - safe against nested spans, buttons and tooltips
         $('dl div, [data-testid*="specification"] li, [class*="specification"] div, .spec-row').each((_, el) => {
-          let dt = $(el).find('dt, [class*="spec-name"], [class*="label"]').first().text().replace(/[:\s]+$/, '').trim();
+          const nameEl = $(el).find('dt, [class*="spec-name"], [class*="label"]').first().clone();
+          nameEl.find('button, svg, [role="tooltip"], [aria-label], [class*="tooltip"], [class*="popover"], [class*="help"]').remove();
+          let dt = nameEl.text().replace(/[:\s]+$/, '').trim();
           let dd = $(el).find('dd, [class*="spec-value"], [class*="value"]').first().text().trim();
           if (!dt || !dd) {
             const directSpans = $(el).children('span, div');
             if (directSpans.length >= 2) {
-              dt = $(directSpans[0]).text().replace(/[:\s]+$/, '').trim();
+              const spClone = $(directSpans[0]).clone();
+              spClone.find('button, svg, [role="tooltip"], [aria-label]').remove();
+              dt = spClone.text().replace(/[:\s]+$/, '').trim();
               dd = directSpans.slice(1).map((__, sEl) => $(sEl).text().trim()).get().join(' ').trim();
             } else {
               const fullText = $(el).text().replace(/\s+/g, ' ').trim();
@@ -1936,6 +2550,7 @@ app.post("/api/scrape-product", async (req, res) => {
               }
             }
           }
+          dt = cleanSpecKeyRaw(dt);
           if (dt && dd && dt !== dd && dt.length < 70 && dd.length < 250) {
             const fk = translateSpecKeyToFrench(dt);
             const fv = translateSpecValueToFrench(dd);
@@ -1944,26 +2559,33 @@ app.post("/api/scrape-product", async (req, res) => {
         });
       }
 
-      // Universal PDF catalog / technical datasheet link extraction (only for the main product, ignoring Grainger raw links)
-      if (!lower.includes('grainger.com')) {
-        $('a[href$=".pdf"], a[href*=".pdf?"]').each((_, el) => {
-          const href = $(el).attr('href');
-          const label = ($(el).text().trim() || $(el).attr('title') || 'Fiche technique & Catalogue PDF').replace(/grainger/gi, '').trim();
-          if (href && !href.toLowerCase().includes('grainger.com')) {
-            addPdfDocument(href, label);
-          }
-        });
+      // Universal PDF catalog & technical documentation extraction (all platforms including Grainger manuals & specs)
+      $('a[href*=".pdf"], a[href*="/ec/pdf/"]').each((_, el) => {
+        const href = $(el).attr('href');
+        let label = ($(el).text().trim() || $(el).attr('title') || $(el).attr('aria-label') || '').replace(/grainger/gi, '').trim();
+        if (!label) {
+          if (/instruction|manual|oipm|om/i.test(href || '')) label = "Manuel d'utilisation & Instructions (PDF)";
+          else if (/spec|sheet|ds/i.test(href || '')) label = "Fiche technique constructeur (PDF)";
+          else if (/part|diagram|drawing/i.test(href || '')) label = "Schéma des pièces & Vue éclatée (PDF)";
+          else label = "Notice technique officielle (PDF)";
+        }
+        if (href) {
+          addPdfDocument(href, label);
+        }
+      });
+
+      // Also scan rawHtml for any /ec/pdf/... links
+      const embeddedPdfs = rawHtml.matchAll(/(?:https?:\/\/[^\s"'<>]+)?\/ec\/pdf\/([A-Za-z0-9_.-]+\.pdf)/gi);
+      for (const m of embeddedPdfs) {
+        const fullPdfUrl = `https://www.grainger.com/ec/pdf/${m[1]}`;
+        addPdfDocument(fullPdfUrl, `Notice Technique & Manuel d'Utilisation (${m[1].split('-')[0] || 'PDF'})`);
       }
 
       // Universal attributes & specifications table extraction across all platforms
       $('[data-testid="module-attribute-row"], tr, .lead-item, .spec-item, .do-entry-item, .attribute-item, dl.do-entry-item, [class*="specification"] li, #productDetails_techSpec_section_1 tr').each((_, el) => {
-        let key = $(el).find('[data-testid="module-attribute-name-text"]').first().text().trim();
-        if (!key) {
-          key = $(el).find('[data-testid="module-attribute-name"]').first().clone().children().remove().end().text().trim();
-        }
-        if (!key) {
-          key = $(el).find('.do-entry-item-title, .key, dt, th, .spec-title, .attr-name').first().text().replace(/[:\s]+$/, '').trim();
-        }
+        const keyClone = $(el).find('[data-testid="module-attribute-name-text"], [data-testid="module-attribute-name"], .do-entry-item-title, .key, dt, th, .spec-title, .attr-name').first().clone();
+        keyClone.find('button, svg, [role="tooltip"], [aria-label], [class*="tooltip"], [class*="popover"], [class*="help"]').remove();
+        let key = keyClone.text().replace(/[:\s]+$/, '').trim();
 
         let val = $(el).find('[data-testid="module-attribute-value-text"]').first().text().trim();
         if (!val) {
@@ -2052,12 +2674,12 @@ app.post("/api/scrape-product", async (req, res) => {
     }
   }
 
-  // Dedicated USA Industrial Catalog Intelligence (handles Akamai WAF protection + URL slug/item# parsing without exposing third-party distributor name)
+  // Dedicated USA Industrial Catalog Intelligence (handles Akamai WAF protection + URL slug/item# parsing without exposing third-party distributor name on public catalog)
   if (lower.includes('grainger.com')) {
     detectedPlatform = 'USA';
     defaultCurrency = 'USD';
     extractedCurrency = 'USD';
-    extractedSupplierName = resolvedBrand || 'Constructeur Industriel USA';
+    extractedSupplierName = 'Grainger Industrial Supply';
     extractedSupplierCountry = 'États-Unis';
     country = 'États-Unis';
 
@@ -2117,9 +2739,8 @@ app.post("/api/scrape-product", async (req, res) => {
 
       if (normalizedItemCode && /^[A-Z0-9]{4,8}$/.test(normalizedItemCode)) {
         const cdnMain = `https://static.grainger.com/rp/s/is/image/Grainger/${normalizedItemCode}_AS01?$adapimg$&hei=800&wid=800`;
-        const cdnAlt = `https://static.grainger.com/rp/s/is/image/Grainger/${normalizedItemCode}_AS01`;
-        if (!extractedImages.includes(cdnMain)) {
-          extractedImages.unshift(cdnMain, cdnAlt);
+        if (!extractedImages.some(u => u.includes(`${normalizedItemCode}_AS01`))) {
+          extractedImages.unshift(cdnMain);
         }
         // Single direct-download PDF Catalog for the product (no external Grainger link or name)
         extractedPdfs = [{
@@ -2132,7 +2753,7 @@ app.post("/api/scrape-product", async (req, res) => {
       if (normalizedItemCode === '6XH99' || lower.includes('6xh99')) {
         resolvedBrand = 'DAYTON';
         extractedModel = '6XH99';
-        extractedSupplierName = 'DAYTON Industrial USA';
+        extractedSupplierName = 'Grainger Industrial Supply';
         category = 'Moteurs';
         subcategory = 'Moteurs électriques monophasés';
         extractedTitle = 'Moteur électrique monophasé à usage général — 1/2 CV (HP), 1725 tr/min, 115/208-230V AC, Châssis 56 — DAYTON';
@@ -2198,7 +2819,7 @@ app.post("/api/scrape-product", async (req, res) => {
     }
   }
 
-  // Step 3: Use Gemini 3.8 Flash ONLY when actual page content / title / specs were extracted (NO fictional generation from thin air)
+  // Step 3: Use Gemini 3.8 Flash as the primary engine for product extraction AND country/warehouse intelligence
   const isGraingerAlreadyResolved = lower.includes('grainger.com') && Boolean(extractedTitle && Object.keys(translatedSpecs).length >= 5);
   const hasRealPageData = !isGraingerAlreadyResolved && Boolean(
     (rawHtml && rawHtml.length > 200 && !/access denied|pardon our interruption/i.test(rawHtml)) ||
@@ -2207,7 +2828,7 @@ app.post("/api/scrape-product", async (req, res) => {
     extractedPriceStr
   );
 
-  if (apiKey && hasRealPageData) {
+  if (apiKey && (hasRealPageData || candidateWarehouses.length > 0 || inputVal)) {
     try {
       const ai = new GoogleGenAI({
         apiKey,
@@ -2217,6 +2838,47 @@ app.post("/api/scrape-product", async (req, res) => {
           }
         }
       });
+
+      if (!hasRealPageData) {
+        // Appel IA léger ciblé sur l'identification du pays du fournisseur/produit et de l'entrepôt le plus proche
+        const geoPrompt = `Tu es l'IA logistique principale de Zone Équipements.
+Analyse ce lien/produit : "${inputVal}" (Titre: "${extractedTitle}", Marque: "${resolvedBrand}", Fournisseur: "${extractedSupplierName}", Pays détecté: "${extractedSupplierCountry || country}").
+Entrepôts disponibles : ${JSON.stringify(candidateWarehouses)}.
+
+Détermine :
+1. "fournisseur_pays" : Le pays réel du fournisseur ou d'origine du produit en français (ex: "États-Unis", "Chine", "France", "Allemagne"). Si tu es confus ou que l'information est introuvable, renvoie "".
+2. "entrepot_proche_id" : L'ID exact de l'entrepôt géographiquement le plus proche parmi la liste fournie (en analysant son adresse, son téléphone et son pays). Si aucun entrepôt ne correspond ou si tu es confus, renvoie "".
+3. "entrepot_proche_motif" : Explication courte en français du choix de l'entrepôt par l'IA.
+4. "ia_pays_confiant" : true si tu as pu identifier clairement le pays et/ou l'entrepôt, false si tu es confus ou que l'information est absente (auquel cas l'utilisateur utilisera la sélection manuelle de pays de secours).`;
+
+        const geoResp = await ai.models.generateContent({
+          model: "gemini-3.8-flash",
+          contents: [{ role: "user", parts: [{ text: geoPrompt }] }],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                fournisseur_pays: { type: Type.STRING },
+                entrepot_proche_id: { type: Type.STRING },
+                entrepot_proche_motif: { type: Type.STRING },
+                ia_pays_confiant: { type: Type.BOOLEAN }
+              },
+              required: ["fournisseur_pays", "ia_pays_confiant"]
+            }
+          }
+        });
+        const parsedGeo = JSON.parse((geoResp.text || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+        if (parsedGeo.fournisseur_pays && parsedGeo.fournisseur_pays.trim()) {
+          extractedSupplierCountry = translateSpecValueToFrench(parsedGeo.fournisseur_pays.trim());
+          aiCountryConfident = Boolean(parsedGeo.ia_pays_confiant);
+        }
+        if (parsedGeo.entrepot_proche_id && candidateWarehouses.some((w: any) => w.id === parsedGeo.entrepot_proche_id)) {
+          aiClosestWarehouseId = parsedGeo.entrepot_proche_id;
+          aiClosestWarehouseReason = parsedGeo.entrepot_proche_motif || 'Assigné automatiquement par l\'IA';
+          aiCountryConfident = true;
+        }
+      } else {
       const promptContent = `Tu es un expert en matériel industriel, équipement MRO et sourcing B2B international.
 RÈGLE STRICTE ET ABSOLUE : ZÉRO DONNÉE FICTIVE OU INVENTÉE !
 IDENTIFICATION STRICTE DU PRODUIT PRINCIPAL : La page source peut contenir des produits similaires, sponsorisés ou recommandés. Tu dois identifier UNIQUEMENT le produit principal correspondant au Titre brut ("${extractedTitle}") et à l'URL ("${inputVal}"), et ignorer totalement les prix, poids ou modèles des produits secondaires/recommandés.
@@ -2233,11 +2895,14 @@ Champs attendus :
 8. "devise" : Devise détectée ("USD", "EUR", "CNY", "XOF").
 9. "poids_kg" : Poids unitaire réel en kg du produit principal mentionné dans la source (convertir lb/oz/g en kg si nécessaire). Si aucun poids n'est indiqué, renvoyer 0.
 10. "dimensions" : Dimensions réelles du produit principal mentionnées dans la source. Si absentes, renvoyer "".
-11. "fournisseur_nom" : Raison sociale réelle du fabricant/fournisseur (sans mentionner Grainger ni Alibaba).
-12. "fournisseur_pays" : Pays d'origine réel mentionné dans la source. Si absent, renvoyer "".
+11. "fournisseur_nom" : Raison sociale réelle de l'entreprise vendeuse / distributeur / boutique fournisseur du lien (ex: "Shenzhen Industrial Co., Ltd.", "Grainger Industrial Supply", "Manutan Europe"). RÈGLE ABSOLUE : Ne JAMAIS confondre ni mettre la marque du produit ("marque") dans le champ "fournisseur_nom" ! Si seul le nom de la marque est visible sans raison sociale d'entreprise vendeuse distincte, renvoie "" pour "fournisseur_nom".
+12. "fournisseur_pays" : Pays d'origine réel du fournisseur ou du produit identifié par l'IA (en français, ex: "Chine", "États-Unis", "France", "Allemagne"). Si tu es confus ou que cette information est introuvable, renvoie "" (le champ Pays manuel ne te remplace pas, il servira uniquement de secours si tu ne trouves pas).
 13. "images_hd" : Liste des vraies URLs d'images du produit principal présentes dans la source.
 14. "variantes" : UNIQUEMENT les vraies options techniques d'achat du produit principal (puissances, tensions, phases, motorisations, modèles), traduites en français, sans aucune couleur cosmétique (White, Yellow, Red, etc.).
 15. "caracteristiques_techniques" : Traduction INTÉGRALE en FRANÇAIS (100% des clés ET 100% des valeurs en français) de TOUTES les spécifications techniques du produit principal.
+16. "entrepot_proche_id" : Tu es le moteur principal de sélection d'entrepôt : analyse l'adresse complète, la ville, l'indicatif téléphonique (+86, +33, +1, etc.) et le pays des entrepôts ci-dessous pour sélectionner l'ID exact de l'entrepôt géographiquement le plus proche du fournisseur/produit. Si tu es confus ou ne peux pas déterminer l'entrepôt, renvoie "".
+17. "entrepot_proche_motif" : Explication courte en français (ex: "IA : Entrepôt situé à Miami/Doral (+1) le plus proche du fournisseur américain Grainger").
+18. "ia_pays_confiant" : true si tu as identifié avec certitude le pays du fournisseur/produit et l'entrepôt proche, false si tu es confus ou que l'information est introuvable.
 
 Données extraites du DOM du produit principal :
 - URL source: "${inputVal}"
@@ -2248,6 +2913,7 @@ Données extraites du DOM du produit principal :
 - Dimensions brutes: "${extractedDimensions}"
 - Marque détectée: "${cleanRepeatedText(resolvedBrand)}"
 - Fournisseur détecté: "${cleanRepeatedText(extractedSupplierName)}"
+- Entrepôts de transit disponibles (ID, libellé, adresse brute, téléphone) : ${JSON.stringify(candidateWarehouses)}
 - Options / Variantes SKU extraites du DOM: ${JSON.stringify(extractedOptions)}
 - Spécifications brutes à traduire intégralement: ${JSON.stringify(extractedSpecs).substring(0, 6000)}
 ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${cleanedMainHtmlSnippet}` : ''}`;
@@ -2272,6 +2938,9 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
               dimensions: { type: Type.STRING },
               fournisseur_nom: { type: Type.STRING },
               fournisseur_pays: { type: Type.STRING },
+              entrepot_proche_id: { type: Type.STRING },
+              entrepot_proche_motif: { type: Type.STRING },
+              ia_pays_confiant: { type: Type.BOOLEAN },
               images_hd: { type: Type.ARRAY, items: { type: Type.STRING } },
               variantes: {
                 type: Type.ARRAY,
@@ -2336,11 +3005,26 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
       if (parsedAi.dimensions && !extractedDimensions) {
         extractedDimensions = parsedAi.dimensions.trim();
       }
-      if (parsedAi.fournisseur_nom && !parsedAi.fournisseur_nom.toLowerCase().includes('alibaba')) {
+      if (
+        parsedAi.fournisseur_nom &&
+        !parsedAi.fournisseur_nom.toLowerCase().includes('alibaba') &&
+        parsedAi.fournisseur_nom.trim().toLowerCase() !== (resolvedBrand || '').trim().toLowerCase() &&
+        parsedAi.fournisseur_nom.trim().toLowerCase() !== (parsedAi.marque || '').trim().toLowerCase() &&
+        !lower.includes('grainger.com') &&
+        !lower.includes('mcmaster.com') &&
+        !lower.includes('manutan') &&
+        !lower.includes('rs-online')
+      ) {
         extractedSupplierName = cleanRepeatedText(parsedAi.fournisseur_nom);
       }
-      if (parsedAi.fournisseur_pays) {
-        extractedSupplierCountry = translateSpecValueToFrench(parsedAi.fournisseur_pays);
+      if (parsedAi.fournisseur_pays && parsedAi.fournisseur_pays.trim()) {
+        extractedSupplierCountry = translateSpecValueToFrench(parsedAi.fournisseur_pays.trim());
+        aiCountryConfident = parsedAi.ia_pays_confiant !== false;
+      }
+      if (parsedAi.entrepot_proche_id && candidateWarehouses.some((w: any) => w.id === parsedAi.entrepot_proche_id)) {
+        aiClosestWarehouseId = parsedAi.entrepot_proche_id;
+        aiClosestWarehouseReason = parsedAi.entrepot_proche_motif || 'Assigné automatiquement par l\'IA';
+        aiCountryConfident = true;
       }
       if (Array.isArray(parsedAi.images_hd) && parsedAi.images_hd.length > 0) {
         extractedImages.unshift(...parsedAi.images_hd);
@@ -2369,6 +3053,7 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
             }
           }
         });
+      }
       }
     } catch (aiErr) {
       console.warn("Notice: Gemini 3.8 Flash synthesis warning:", aiErr);
@@ -2441,10 +3126,21 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
   }
 
   const finalWeight = parseWeight(extractedWeightStr, 0, translatedSpecs);
+  const finalDimensions = extractDimensionsFromSpecs(extractedDimensions, translatedSpecs, extractedSpecs);
+  if (finalDimensions && !translatedSpecs['Dimensions (L*l*H)'] && !translatedSpecs['Dimensions']) {
+    translatedSpecs['Dimensions (L*l*H)'] = finalDimensions;
+  }
 
-  const validImages = Array.from(new Set(extractedImages))
+  const seenImageBasePaths = new Set<string>();
+  const validImages = extractedImages
     .map(img => fixImageUrl(img, inputVal))
-    .filter(u => u && !isLikelyIconOrTinyImage(u) && (u.includes('alicdn') || u.includes('amazon') || u.includes('http') || u.includes('.jpg') || u.includes('.png') || u.includes('.webp')));
+    .filter(u => {
+      if (!u || isLikelyIconOrTinyImage(u)) return false;
+      const baseKey = u.split('?')[0].toLowerCase();
+      if (seenImageBasePaths.has(baseKey)) return false;
+      seenImageBasePaths.add(baseKey);
+      return u.includes('alicdn') || u.includes('amazon') || u.includes('http') || u.includes('.jpg') || u.includes('.png') || u.includes('.webp');
+    });
 
   const bestImage = validImages.length > 0 ? validImages[0] : '';
   const finalTitle = forceTranslateProductTextToFrench(extractedTitle) || '';
@@ -2452,11 +3148,43 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
     ? forceTranslateProductTextToFrench(extractedDesc)
     : '';
 
-  if (extractedSupplierName && /alibaba|aliexpress|grainger/i.test(extractedSupplierName)) {
-    extractedSupplierName = resolvedBrand || '';
+  resolvedBrand = cleanRepeatedText(resolvedBrand).replace(/grainger/gi, '').trim() || '';
+
+  // Ne jamais confondre la marque (resolvedBrand) dans le champ fournisseur (extractedSupplierName)
+  if (
+    extractedSupplierName &&
+    resolvedBrand &&
+    extractedSupplierName.trim().toLowerCase() === resolvedBrand.trim().toLowerCase()
+  ) {
+    extractedSupplierName = '';
   }
 
-  resolvedBrand = cleanRepeatedText(resolvedBrand).replace(/grainger/gi, '').trim() || '';
+  if (!extractedSupplierName || /^(alibaba|aliexpress)$/i.test(extractedSupplierName.trim())) {
+    if (lower.includes('grainger')) {
+      extractedSupplierName = 'Grainger Industrial Supply';
+    } else if (lower.includes('mcmaster')) {
+      extractedSupplierName = 'McMaster-Carr USA';
+    } else if (lower.includes('manutan')) {
+      extractedSupplierName = 'Manutan Europe';
+    } else if (lower.includes('rs-online')) {
+      extractedSupplierName = 'RS Components Europe';
+    } else if (lower.includes('1688')) {
+      extractedSupplierName = '1688 Chine Direct';
+    } else if (lower.includes('made-in-china')) {
+      extractedSupplierName = 'Made-in-China Direct';
+    } else if (lower.includes('aliexpress')) {
+      extractedSupplierName = 'AliExpress B2B';
+    } else if (lower.includes('alibaba')) {
+      extractedSupplierName = 'Alibaba Trade Assurance';
+    } else if (inputVal.startsWith('http')) {
+      try {
+        const host = new URL(inputVal).hostname.replace(/^www\./i, '').split('.')[0];
+        extractedSupplierName = host ? `${host.charAt(0).toUpperCase() + host.slice(1)} Direct` : 'Fournisseur Direct';
+      } catch {
+        extractedSupplierName = 'Fournisseur Direct';
+      }
+    }
+  }
 
   // Ensure any remaining Model in translatedSpecs is captured if extractedModel is still empty
   if (!extractedModel) {
@@ -2478,15 +3206,11 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
     }
   });
 
-  // Normalize PDF catalog to a single direct-downloadable product datasheet without external Grainger URLs
-  const singleProductPdf = extractedPdfs.length > 0
-    ? {
-        title: (extractedPdfs[0].title || `Fiche Technique & Catalogue (${extractedModel || resolvedBrand || 'PDF'})`).replace(/grainger/gi, '').replace(/\s+/g, ' ').trim(),
-        url: extractedPdfs[0].url.toLowerCase().includes('grainger.com')
-          ? `/api/catalog-pdf/${encodeURIComponent(extractedModel || 'REF')}?brand=${encodeURIComponent(resolvedBrand || 'CONSTRUCTEUR')}&title=${encodeURIComponent(finalTitle || extractedModel || 'Equipement')}`
-          : extractedPdfs[0].url
-      }
-    : undefined;
+  // Support multiple authentic PDF technical documents (manuals, specs, exploded views)
+  const normalizedPdfList = extractedPdfs.map((p, idx) => ({
+    title: (p.title || `Fiche Technique & Documentation ${idx > 0 ? `#${idx + 1}` : ''} (${extractedModel || resolvedBrand || 'PDF'})`).replace(/grainger/gi, '').replace(/\s+/g, ' ').trim(),
+    url: p.url
+  }));
 
   return res.json({
     success: true,
@@ -2502,15 +3226,19 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
       country: extractedSupplierCountry || country,
       platform: detectedPlatform,
       weight: finalWeight,
-      dimensions: extractedDimensions || '',
+      dimensions: finalDimensions || '',
       imageUrl: bestImage,
       images: validImages.slice(0, 15),
-      catalogPdfUrl: singleProductPdf ? singleProductPdf.url : undefined,
-      pdfUrls: singleProductPdf ? [singleProductPdf] : undefined,
+      catalogPdfUrl: normalizedPdfList.length > 0 ? normalizedPdfList[0].url : undefined,
+      pdfUrls: normalizedPdfList.length > 0 ? normalizedPdfList : undefined,
       options: cleanFinalVariantItems.length > 0 ? cleanFinalVariantItems : undefined,
       variants: cleanFinalVariantItems.length > 0 ? cleanFinalVariantItems : undefined,
       description: finalDesc.replace(/grainger/gi, '').replace(/\s+/g, ' ').trim(),
       specs: translatedSpecs,
+      closestWarehouseId: aiClosestWarehouseId || undefined,
+      closestWarehouseReason: aiClosestWarehouseReason || undefined,
+      aiCountryConfident: Boolean(aiCountryConfident || extractedSupplierCountry || country),
+      aiWarehouseResolved: Boolean(aiClosestWarehouseId),
       supplier: {
         name: extractedSupplierName,
         platform: detectedPlatform,
@@ -2520,6 +3248,85 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
       }
     }
   });
+});
+
+// Endpoint IA dédié à la détection automatique du pays et de l'entrepôt le plus proche (Fournisseur, Produit ou Entrepôt)
+// Le sélecteur manuel de pays ne remplace pas l'IA : il n'intervient que si l'IA est confuse ou ne trouve pas ces informations.
+app.post("/api/ai-resolve-logistics", async (req, res) => {
+  const { entityType, name, brand, address, phone, url, platform, currency, warehouses } = req.body || {};
+  const apiKey = process.env.GEMINI_API_KEY;
+  const candidateWarehouses = Array.isArray(warehouses) ? warehouses : [];
+
+  if (!apiKey) {
+    return res.json({
+      success: false,
+      aiConfident: false,
+      reason: "IA indisponible — utilisez la sélection de pays de secours."
+    });
+  }
+
+  try {
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+
+    const prompt = `Tu es le moteur d'intelligence logistique principal de Zone Équipements.
+Type d'élément à analyser : "${entityType || 'product'}" (warehouse = entrepôt, supplier = fournisseur, product = produit).
+Informations fournies :
+- Nom / Désignation : "${name || ''}"
+- Marque : "${brand || ''}"
+- Adresse : "${address || ''}"
+- Téléphone : "${phone || ''}"
+- Lien / URL : "${url || ''}"
+- Plateforme : "${platform || ''}"
+- Devise : "${currency || ''}"
+- Entrepôts réels disponibles : ${JSON.stringify(candidateWarehouses)}
+
+RÈGLE :
+1. Déduis le pays exact en français ("detectedCountry", ex: "Chine", "États-Unis", "France", "Allemagne", "Italie", "Royaume-Uni", "Turquie", "Émirats Arabes Unis", "Sénégal", etc.) et la ville ("detectedCity") à partir des indices (adresse, code postal, ville, indicatif téléphonique +86/+1/+33, nom de l'entreprise/fournisseur, marque ou URL).
+2. Si des entrepôts sont fournis, sélectionne l'ID de l'entrepôt géographiquement le plus proche ("closestWarehouseId") et explique pourquoi ("closestWarehouseReason").
+3. Si les informations fournies sont trop vagues, contradictoires ou que tu ne trouves pas le pays avec certitude, mets "aiConfident": false et "detectedCountry": "" afin que l'administrateur utilise la sélection manuelle de pays de secours.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.8-flash",
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            detectedCountry: { type: Type.STRING },
+            detectedCity: { type: Type.STRING },
+            closestWarehouseId: { type: Type.STRING },
+            closestWarehouseReason: { type: Type.STRING },
+            aiConfident: { type: Type.BOOLEAN }
+          },
+          required: ["detectedCountry", "aiConfident"]
+        }
+      }
+    });
+
+    const parsed = JSON.parse((response.text || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
+    return res.json({
+      success: true,
+      detectedCountry: parsed.detectedCountry ? translateSpecValueToFrench(parsed.detectedCountry.trim()) : '',
+      detectedCity: parsed.detectedCity || '',
+      closestWarehouseId: parsed.closestWarehouseId || '',
+      closestWarehouseReason: parsed.closestWarehouseReason || '',
+      aiConfident: Boolean(parsed.aiConfident && parsed.detectedCountry)
+    });
+  } catch (err: any) {
+    return res.json({
+      success: false,
+      aiConfident: false,
+      reason: "L'IA n'a pas pu déterminer le pays — sélection manuelle de secours activée."
+    });
+  }
 });
 
 // Helper to build a valid binary PDF document (%PDF-1.4) for direct download without redirection or third-party branding
@@ -2643,31 +3450,181 @@ function getSpecsRowsForSku(sku: string, brand: string, title: string): Array<[s
   ];
 }
 
+// ================= ROUTES DE CONTRÔLE DE SÉCURITÉ, BLOCAGE D'IPS & AUDIT =================
+app.get("/api/security/status", (req, res) => {
+  const activeBlockedIps = Array.from(blockedIpsMap.values());
+  const now = Date.now();
+  const validBlockedIps = activeBlockedIps.filter(b => !b.expiresAt || new Date(b.expiresAt).getTime() > now);
+
+  return res.json({
+    success: true,
+    stats: {
+      totalInspectedRequests,
+      activeBlockedCount: validBlockedIps.length,
+      totalSecurityLogs: securityLogs.length,
+      antiScrapingActive: securitySettings.antiScrapingShield,
+      autoBlockActive: securitySettings.autoBlockEnabled
+    },
+    settings: securitySettings,
+    blockedIps: validBlockedIps,
+    logs: securityLogs.slice(0, 200)
+  });
+});
+
+app.post("/api/security/block-ip", (req, res) => {
+  const { ip, reason, threatLevel, durationHours } = req.body || {};
+  const cleanIp = String(ip || '').trim();
+  if (!cleanIp) {
+    return res.status(400).json({ success: false, error: "Adresse IP manquante." });
+  }
+
+  const hours = typeof durationHours === 'number' ? durationHours : 24;
+  const expiresAt = hours > 0 ? new Date(Date.now() + hours * 3600 * 1000).toISOString() : undefined;
+  const threat: ServerThreatLevel = (threatLevel as ServerThreatLevel) || 'HIGH';
+  const why = String(reason || 'Blocage manuel administrateur').trim();
+
+  blockedIpsMap.set(cleanIp, {
+    ip: cleanIp,
+    reason: why,
+    threatLevel: threat,
+    blockedAt: new Date().toISOString(),
+    expiresAt,
+    manual: true,
+    attemptsCount: 1
+  });
+
+  recordSecurityLog({
+    ip: cleanIp,
+    method: 'ADMIN',
+    path: '/api/security/block-ip',
+    userAgent: 'Admin Dashboard',
+    threatLevel: threat,
+    reason: `Blocage manuel appliqué : ${why}`,
+    actionTaken: 'BLOCKED'
+  });
+
+  return res.json({ success: true, message: `Adresse IP ${cleanIp} bloquée avec succès.` });
+});
+
+app.post("/api/security/unblock-ip", (req, res) => {
+  const { ip } = req.body || {};
+  const cleanIp = String(ip || '').trim();
+  if (!cleanIp) {
+    return res.status(400).json({ success: false, error: "Adresse IP manquante." });
+  }
+
+  blockedIpsMap.delete(cleanIp);
+  recordSecurityLog({
+    ip: cleanIp,
+    method: 'ADMIN',
+    path: '/api/security/unblock-ip',
+    userAgent: 'Admin Dashboard',
+    threatLevel: 'LOW',
+    reason: "Déblocage manuel administrateur",
+    actionTaken: 'LOGGED'
+  });
+
+  return res.json({ success: true, message: `Adresse IP ${cleanIp} débloquée avec succès.` });
+});
+
+app.post("/api/security/settings", (req, res) => {
+  const newSettings = req.body || {};
+  if (typeof newSettings.autoBlockEnabled === 'boolean') securitySettings.autoBlockEnabled = newSettings.autoBlockEnabled;
+  if (typeof newSettings.antiScrapingShield === 'boolean') securitySettings.antiScrapingShield = newSettings.antiScrapingShield;
+  if (typeof newSettings.strictRateLimit === 'boolean') securitySettings.strictRateLimit = newSettings.strictRateLimit;
+  if (typeof newSettings.blockHeadlessBots === 'boolean') securitySettings.blockHeadlessBots = newSettings.blockHeadlessBots;
+  if (typeof newSettings.maxRequestsPerMinute === 'number') securitySettings.maxRequestsPerMinute = Math.max(20, newSettings.maxRequestsPerMinute);
+  if (typeof newSettings.blockDurationHours === 'number') securitySettings.blockDurationHours = Math.max(1, newSettings.blockDurationHours);
+
+  return res.json({ success: true, settings: securitySettings });
+});
+
+app.post("/api/security/clear-logs", (req, res) => {
+  securityLogs.length = 0;
+  return res.json({ success: true });
+});
+
+// Honeypot Trap endpoint pour piéger les extracteurs de données
+app.get("/api/security/honeypot-trap", (req, res) => {
+  const clientIp = getClientIp(req);
+  autoBlockIp(clientIp, "Déclenchement du piège Honeypot anti-scraping", 'CRITICAL', 48);
+  recordSecurityLog({
+    ip: clientIp,
+    method: 'GET',
+    path: '/api/security/honeypot-trap',
+    userAgent: String(req.headers['user-agent'] || ''),
+    threatLevel: 'CRITICAL',
+    reason: "Robot crawler intercepté sur le piège Honeypot",
+    actionTaken: 'BLOCKED'
+  });
+  return res.status(403).json({ error: "Bouclier de Sécurité Activé." });
+});
+
 // Route officielle de téléchargement direct de Fiche Technique & Catalogue PDF (sans redirection ni mention Grainger)
 app.get("/api/catalog-pdf/:sku", (req, res) => {
-  const sku = String(req.params.sku || 'REF').replace(/grainger/gi, '').trim().toUpperCase() || 'REF';
+  const rawSku = String(req.params.sku || 'REF').replace(/grainger/gi, '').trim().toUpperCase() || 'REF';
+  const sku = rawSku.replace(/__cookie_check[^\.]*/i, 'PROD').replace(/[^a-zA-Z0-9_-]/g, '_');
   const brand = String(req.query.brand || 'CONSTRUCTEUR').replace(/grainger/gi, '').trim().toUpperCase() || 'CONSTRUCTEUR';
-  const title = String(req.query.title || `Equipement Industriel Ref. ${sku}`).replace(/grainger/gi, '').trim();
+  const title = String(req.query.title || `Equipement Industriel Ref. ${sku}`).replace(/grainger/gi, '').replace(/__cookie_check[^\.]*/i, 'Catalogue').trim();
   const specsRows = getSpecsRowsForSku(sku, brand, title);
 
   const pdfBuffer = buildDirectCatalogPdfBuffer({ sku, brand, title, specsRows });
-  const safeFile = `Catalogue-Technique-${sku.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`;
+  const safeFile = `Catalogue-Technique-${sku}.pdf`;
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${safeFile}"`);
   res.setHeader('Content-Length', String(pdfBuffer.length));
   return res.send(pdfBuffer);
 });
 
-// Route universelle de téléchargement direct de PDF sans redirection externe ni affichage de lien tiers
+// Route universelle de téléchargement direct de PDF sans redirection externe ni conversion HTML
 app.get("/api/download-pdf", async (req, res) => {
   const rawUrl = String(req.query.url || '').trim();
-  const rawFilename = String(req.query.filename || 'Catalogue-Technique').replace(/grainger/gi, '').trim();
-  const safeFilename = (rawFilename.replace(/[^a-zA-Z0-9_\-\s]/g, '').trim().replace(/\s+/g, '-') || 'Catalogue-Technique') + '.pdf';
+  const rawFilename = String(req.query.filename || 'Catalogue-Technique')
+    .replace(/grainger/gi, '')
+    .replace(/__cookie_check[^\.]*/i, 'Catalogue-Technique')
+    .trim();
+  
+  let cleanBaseName = rawFilename.replace(/[^a-zA-Z0-9_\-\s]/g, '').trim().replace(/\s+/g, '-') || 'Catalogue-Technique';
+  if (cleanBaseName.toLowerCase().includes('cookie_check')) {
+    cleanBaseName = 'Catalogue-Technique-Officiel';
+  }
+  const safeFilename = `${cleanBaseName}.pdf`;
+  const zenrowsKey = process.env.ZENROWS_API_KEY;
+
+  if (!rawUrl) {
+    return res.status(400).send("URL du catalogue manquante");
+  }
+
+  // Si l'URL contient un challenge de bot (__cookie_check) ou pointe vers Grainger,
+  // ne JAMAIS tenter de télécharger la page HTML de protection Akamai !
+  // Générer directement le document technique PDF officiel certifié.
+  const isAkamaiChallengeOrGrainger = 
+    rawUrl.includes('cookie_check') || 
+    rawUrl.includes('__cookie_check') || 
+    rawUrl.toLowerCase().includes('grainger.com') ||
+    rawUrl.toLowerCase().includes('mcmaster.com');
+
+  if (isAkamaiChallengeOrGrainger) {
+    const skuFromQuery = (String(req.query.sku || cleanBaseName).replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 20).toUpperCase()) || 'REF';
+    const brandParam = (String(req.query.brand || 'CONSTRUCTEUR')).replace(/grainger/gi, '').trim() || 'CONSTRUCTEUR';
+    const titleParam = (String(req.query.title || rawFilename || `Equipement ${skuFromQuery}`)).replace(/grainger/gi, '').replace(/__cookie_check[^\.]*/i, 'Catalogue').trim();
+    const specsRows = getSpecsRowsForSku(skuFromQuery, brandParam, titleParam);
+    const pdfBuffer = buildDirectCatalogPdfBuffer({
+      sku: skuFromQuery,
+      brand: brandParam,
+      title: titleParam,
+      specsRows
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    res.setHeader('Content-Length', String(pdfBuffer.length));
+    return res.send(pdfBuffer);
+  }
 
   try {
-    // 1. If the URL is a local /api/catalog-pdf/:sku route or references a Grainger item, generate the clean PDF directly
-    if (rawUrl.startsWith('/api/catalog-pdf/') || rawUrl.toLowerCase().includes('grainger.com')) {
-      const parsedLocal = new URL(rawUrl.startsWith('http') ? rawUrl : `http://localhost${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`);
+    // 1. If the URL is explicitly a local /api/catalog-pdf/:sku route
+    if (rawUrl.startsWith('/api/catalog-pdf/')) {
+      const parsedLocal = new URL(`http://localhost${rawUrl}`);
       const pathParts = parsedLocal.pathname.split('/').filter(Boolean);
       const lastSegment = pathParts[pathParts.length - 1] || 'REF';
       const skuFromUrl = lastSegment.replace(/_catalog\.pdf$/i, '').replace(/\.pdf$/i, '').toUpperCase();
@@ -2686,30 +3643,64 @@ app.get("/api/download-pdf", async (req, res) => {
       return res.send(pdfBuffer);
     }
 
-    // 2. If it's an external direct PDF URL, stream it server-side so the user never gets redirected
+    // 2. Direct external PDF fetch (strictly valid %PDF binary only)
     if (rawUrl.startsWith('http')) {
-      const extRes = await fetch(rawUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'application/pdf,*/*'
+      let candidateBuf: Buffer | null = null;
+      let isPdf = false;
+
+      try {
+        const extRes = await fetch(rawUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'application/pdf,*/*'
+          }
+        });
+        const contentType = (extRes.headers.get('content-type') || '').toLowerCase();
+        // Discard any HTML response (like Cookie Check or Captcha pages)
+        if (extRes.ok && !contentType.includes('text/html') && !extRes.url.includes('cookie_check')) {
+          const ab = await extRes.arrayBuffer();
+          const testBuf = Buffer.from(ab);
+          if (testBuf.length > 50 && testBuf.slice(0, 5).toString('ascii').startsWith('%PDF')) {
+            candidateBuf = testBuf;
+            isPdf = true;
+          }
         }
-      });
-      const contentType = extRes.headers.get('content-type') || '';
-      if (extRes.ok && contentType.toLowerCase().includes('pdf')) {
-        const arrayBuf = await extRes.arrayBuffer();
-        const buf = Buffer.from(arrayBuf);
+      } catch (directErr) {
+        console.warn('Direct fetch attempt failed:', directErr);
+      }
+
+      // If direct fetch was blocked and ZenRows is available:
+      if (!isPdf && zenrowsKey) {
+        try {
+          const zenUrl = `https://api.zenrows.com/v1/?apikey=${zenrowsKey}&url=${encodeURIComponent(rawUrl)}`;
+          const zenRes = await fetch(zenUrl);
+          const zenContentType = (zenRes.headers.get('content-type') || '').toLowerCase();
+          if (zenRes.ok && !zenContentType.includes('text/html')) {
+            const ab = await zenRes.arrayBuffer();
+            const testBuf = Buffer.from(ab);
+            if (testBuf.length > 50 && testBuf.slice(0, 5).toString('ascii').startsWith('%PDF')) {
+              candidateBuf = testBuf;
+              isPdf = true;
+            }
+          }
+        } catch (zenErr) {
+          console.warn('ZenRows PDF fetch failed:', zenErr);
+        }
+      }
+
+      if (isPdf && candidateBuf) {
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-        res.setHeader('Content-Length', String(buf.length));
-        return res.send(buf);
+        res.setHeader('Content-Length', String(candidateBuf.length));
+        return res.send(candidateBuf);
       }
     }
   } catch (err) {
     console.warn('Direct PDF proxy fallback triggered:', err);
   }
 
-  // 3. Fallback: always generate and serve a valid binary PDF datasheet so download never fails or redirects
-  const fallbackSku = safeFilename.replace(/\.pdf$/i, '').substring(0, 24).toUpperCase();
+  // 3. Fallback: generate and serve a clean binary PDF datasheet so download never fails or serves HTML
+  const fallbackSku = cleanBaseName.substring(0, 24).toUpperCase() || 'REF';
   const fallbackBuffer = buildDirectCatalogPdfBuffer({
     sku: fallbackSku,
     brand: 'ZONE EQUIPEMENTS',
