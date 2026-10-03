@@ -89,6 +89,19 @@ export default function Shop() {
   const { addItem } = useCart();
   const { user, profile } = useAuth();
   const navigate = useNavigate();
+
+  const handleLikeClick = (e: React.MouseEvent, productId: number | string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!user) {
+      alert("Veuillez vous connecter à votre compte client pour ajouter ce matériel à vos favoris.");
+      navigate('/login');
+      return;
+    }
+    catalogService.toggleLikedProduct(productId, user.uid);
+    setLikedIds(catalogService.getLikedProductIds());
+  };
+
   const [likedIds, setLikedIds] = useState<number[]>(() => catalogService.getLikedProductIds());
 
   useEffect(() => {
@@ -428,18 +441,18 @@ export default function Shop() {
 
       {/* 2. Main Workspace Layout */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex flex-col lg:flex-row gap-8">
+        <div className="flex flex-col md:flex-row gap-6 lg:gap-8">
           
           {/* ================= LEFT COLUMN: NESTED INDUSTRIAL FILTER PANEL ================= */}
-          <aside className="w-full lg:w-80 flex-shrink-0">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 lg:p-5 lg:sticky lg:top-24 lg:max-h-[90vh] lg:overflow-y-auto custom-scrollbar">
+          <aside className="w-full md:w-64 lg:w-80 flex-shrink-0">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 lg:p-5 md:sticky md:top-24 md:max-h-[90vh] md:overflow-y-auto custom-scrollbar">
               
               {/* Header Controls (Clickable accordion trigger on mobile, collapsed by default) */}
-              <div className={`flex items-center justify-between ${isMobileFiltersOpen ? 'border-b border-gray-100 pb-4 mb-5' : 'lg:border-b lg:border-gray-100 lg:pb-4 lg:mb-5'}`}>
+              <div className={`flex items-center justify-between ${isMobileFiltersOpen ? 'border-b border-gray-100 pb-4 mb-5' : 'md:border-b md:border-gray-100 md:pb-4 md:mb-5'}`}>
                 <button
                   type="button"
                   onClick={() => setIsMobileFiltersOpen(prev => !prev)}
-                  className="flex items-center justify-between w-full lg:w-auto gap-2 text-xs font-black text-[#003366] uppercase tracking-widest text-left"
+                  className="flex items-center justify-between w-full md:w-auto gap-2 text-xs font-black text-[#003366] uppercase tracking-widest text-left"
                 >
                   <div className="flex items-center gap-2">
                     <Filter className="w-4 h-4 text-[#FF6600]" />
@@ -450,7 +463,7 @@ export default function Shop() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 lg:hidden text-[10px] font-bold text-slate-500 normal-case tracking-normal">
+                  <div className="flex items-center gap-1.5 md:hidden text-[10px] font-bold text-slate-500 normal-case tracking-normal">
                     <span>{isMobileFiltersOpen ? 'Masquer' : 'Afficher'}</span>
                     <ChevronDown className={`w-4 h-4 text-[#003366] transition-transform duration-200 ${isMobileFiltersOpen ? 'rotate-180' : ''}`} />
                   </div>
@@ -458,17 +471,17 @@ export default function Shop() {
                 {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || selectedProvenances.length > 0 || priceTier !== 'Tous' || !onlyInStock || searchTerm !== '') && (
                   <button 
                     onClick={resetAllFilters}
-                    className="hidden lg:flex text-[10px] text-[#FF6600] font-extrabold hover:underline uppercase tracking-wider items-center gap-1"
+                    className="hidden md:flex text-[10px] text-[#FF6600] font-extrabold hover:underline uppercase tracking-wider items-center gap-1"
                   >
                     <RefreshCw className="w-2.5 h-2.5 animate-spin" style={{ animationDuration: '4s' }} /> {translateText('Réinitialiser')}
                   </button>
                 )}
               </div>
 
-              {/* Collapsible Filter Body: Collapsed by default on mobile, always visible on desktop */}
-              <div className={`${isMobileFiltersOpen ? 'block' : 'hidden'} lg:block`}>
+              {/* Collapsible Filter Body: Collapsed by default on mobile, always visible on tablet & desktop */}
+              <div className={`${isMobileFiltersOpen ? 'block' : 'hidden'} md:block`}>
                 {(selectedCategory !== 'Tous' || selectedSubcategory !== 'Tous' || selectedBrands.length > 0 || selectedSectors.length > 0 || selectedProvenances.length > 0 || priceTier !== 'Tous' || availabilityFilter !== 'all' || searchTerm !== '') && (
-                  <div className="flex justify-end mb-4 lg:hidden">
+                  <div className="flex justify-end mb-4 md:hidden">
                     <button 
                       onClick={resetAllFilters}
                       className="text-[10px] text-[#FF6600] font-extrabold hover:underline uppercase tracking-wider flex items-center gap-1"
@@ -773,10 +786,10 @@ export default function Shop() {
           </aside>
 
           {/* ================= RIGHT COLUMN: PRODUCT BROWSER ================= */}
-          <main className="flex-grow">
+          <main className="flex-grow min-w-0">
             
             {/* Breadcrumb row */}
-            <div className="mb-6 flex items-center flex-wrap gap-2 text-[10px] text-gray-400 uppercase tracking-widest font-extrabold">
+            <div className="mb-4 flex items-center flex-wrap gap-2 text-[10px] text-gray-400 uppercase tracking-widest font-extrabold">
               <Link to="/" className="hover:text-[#003366]">{siteSettings.companyName || 'ZONE ÉQUIPEMENTS'}</Link>
               <ChevronRight className="w-3 h-3" />
               <button onClick={() => {setSelectedCategory('Tous'); setSelectedSubcategory('Tous');}} className="hover:text-[#003366]">{translateText('Catalogue')}</button>
@@ -859,8 +872,8 @@ export default function Shop() {
                 /* ================= A. GRID VIEW MODE (CLEAN STREAMLINED PREVIEW) ================= */
                 if (viewMode === 'grid') {
                   return (
-                    <div key={product.id} className="bg-white rounded-xl shadow-xs border border-gray-200 overflow-hidden group hover:shadow-md transition-all duration-300 flex flex-col justify-between">
-                      <div>
+                    <div key={product.id} className="bg-white rounded-xl shadow-xs border border-gray-200 overflow-hidden group hover:shadow-md transition-all duration-300 flex flex-col h-full">
+                      <div className="flex-1 flex flex-col">
                         {/* Top Banner Row: Brand and Provenance badges */}
                         <div className="bg-gray-50 border-b border-gray-100 px-3 py-2 flex items-center justify-between text-[10px] font-mono">
                           <div className="flex flex-col gap-1 items-start min-w-0">
@@ -892,17 +905,14 @@ export default function Shop() {
                           <div className="absolute top-2 right-2 flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                catalogService.toggleLikedProduct(product.id, user?.uid);
-                                setLikedIds(catalogService.getLikedProductIds());
-                              }}
+                              onClick={(e) => handleLikeClick(e, product.id)}
                               className={`p-1.5 rounded-full shadow-sm transition-all border ${
                                 isLiked
                                   ? 'bg-rose-50 text-rose-500 border-rose-200'
                                   : 'bg-white/90 text-gray-400 border-gray-200 hover:text-rose-500'
                               }`}
-                              title={isLiked ? 'Retirer des produits aimés' : 'Ajouter aux produits aimés'}
+                              title={isLiked ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                              aria-label="Favoris"
                             >
                               <Heart className={`w-3.5 h-3.5 ${isLiked ? 'fill-rose-500 text-rose-500' : ''}`} />
                             </button>
@@ -952,47 +962,54 @@ export default function Shop() {
                         </div>
                       </div>
 
-                      {/* Pricing and Action buttons footer */}
-                      <div className="border-t border-gray-100 bg-gray-50/60 p-3.5 flex items-center justify-between gap-2">
+                      {/* Pricing and Action buttons footer - perfectly aligned */}
+                      <div className="mt-auto border-t border-gray-100 bg-gray-50/70 p-3 sm:p-3.5 flex items-center justify-between gap-2 min-h-[64px]">
                         {/* Left: Price respecting VAT settings */}
-                        <div className="flex flex-col min-w-0 pr-2">
-                          <span className="text-[10px] text-gray-400 font-medium">Prix unitaire</span>
-                          <div className="flex items-baseline gap-1">
-                            <span className="text-base sm:text-lg font-bold text-[#003366] font-mono leading-tight">
+                        <div className="flex flex-col justify-center min-w-0 flex-1 pr-1">
+                          <div className="flex items-baseline gap-1 flex-wrap">
+                            <span className="text-sm sm:text-base font-bold text-[#003366] font-mono leading-none truncate">
                               {displayBasePrice > 0 ? displayBasePrice.toLocaleString('fr-FR') : 'Sur devis'}
                             </span>
                             {displayBasePrice > 0 && (
-                              <span className="text-[10px] font-semibold text-gray-500">
+                              <span className="text-[9px] sm:text-[10px] font-semibold text-gray-500 shrink-0">
                                 {isVatActive ? 'FCFA HT' : 'FCFA'}
                               </span>
                             )}
                           </div>
-                          {isVatActive && displayBasePrice > 0 && (
-                            <span className="text-[10px] font-mono text-gray-400">
+                          {isVatActive && displayBasePrice > 0 ? (
+                            <span className="text-[9px] sm:text-[10px] font-mono text-gray-400 mt-0.5 leading-tight truncate">
                               {priceTtc.toLocaleString('fr-FR')} TTC
+                            </span>
+                          ) : (
+                            <span className="text-[9px] sm:text-[10px] text-gray-400 font-medium mt-0.5 leading-tight truncate">
+                              Prix unitaire
                             </span>
                           )}
                         </div>
 
-                        {/* Right: Enlarged action button (Solo: Cart if price, Quote if no price) */}
-                        <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
+                        {/* Right: Compact action button tailored so it never crowds the price */}
+                        <div className="flex items-center justify-end shrink-0">
                           {displayBasePrice > 0 ? (
                             <button 
                               type="button"
                               onClick={() => handleAddToCart(rawProduct)}
-                              className="bg-[#003366] hover:bg-[#002244] text-white py-2 px-3 sm:px-3.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer whitespace-nowrap"
+                              className="bg-[#003366] hover:bg-[#002244] text-white py-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 shadow-xs active:scale-95 cursor-pointer whitespace-nowrap"
+                              title={t('add_to_cart_btn')}
                             >
-                              <ShoppingCart className="w-3.5 h-3.5" />
-                              <span>{t('add_to_cart_btn')}</span>
+                              <ShoppingCart className="w-3.5 h-3.5 shrink-0" />
+                              <span className="hidden xs:inline sm:inline">{t('add_to_cart_btn')}</span>
+                              <span className="xs:hidden sm:hidden">Ajouter</span>
                             </button>
                           ) : (
                             <button 
                               type="button"
                               onClick={() => openQuoteModal(rawProduct)}
-                              className="bg-[#FF6600] hover:bg-[#e65c00] text-white py-2 px-3 sm:px-3.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer whitespace-nowrap"
+                              className="bg-[#FF6600] hover:bg-[#e65c00] text-white py-1.5 px-2.5 sm:px-3 rounded-lg text-[11px] font-bold transition-all flex items-center justify-center gap-1 shadow-xs cursor-pointer whitespace-nowrap"
+                              title={t('quote_pro_btn')}
                             >
-                              <FileText className="w-3.5 h-3.5" />
-                              <span>{t('quote_pro_btn')}</span>
+                              <FileText className="w-3.5 h-3.5 shrink-0" />
+                              <span className="hidden xs:inline sm:inline">{t('quote_pro_btn')}</span>
+                              <span className="xs:hidden sm:hidden">Devis</span>
                             </button>
                           )}
                         </div>
@@ -1032,17 +1049,14 @@ export default function Shop() {
                         <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
                           <button
                             type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              catalogService.toggleLikedProduct(product.id, user?.uid);
-                              setLikedIds(catalogService.getLikedProductIds());
-                            }}
+                            onClick={(e) => handleLikeClick(e, product.id)}
                             className={`p-1 rounded-full shadow-xs transition-all border ${
                               isLiked
                                 ? 'bg-rose-50 text-rose-500 border-rose-200'
                                 : 'bg-white/80 text-gray-400 border-white hover:text-rose-500'
                             }`}
-                            title={isLiked ? 'Retirer des produits aimés' : 'Ajouter aux produits aimés'}
+                            title={isLiked ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+                            aria-label="Favoris"
                           >
                             <Heart className={`w-3 h-3 ${isLiked ? 'fill-rose-500 text-rose-500' : ''}`} />
                           </button>
@@ -1114,13 +1128,13 @@ export default function Shop() {
                         </div>
                       </div>
 
-                      {/* Streamlined Pricing & Action column */}
-                      <div className="w-full lg:w-56 flex-shrink-0 border-t lg:border-t-0 lg:border-l border-gray-100 pt-3 lg:pt-0 lg:pl-5 flex flex-row lg:flex-col items-center lg:items-stretch justify-between gap-3">
-                        <div className="space-y-0.5 lg:mb-2 min-w-0 pr-2">
+                      {/* Streamlined Pricing & Action column - vertically stacked and aligned right on desktop */}
+                      <div className="w-full lg:w-56 flex-shrink-0 border-t lg:border-t-0 lg:border-l border-gray-100 pt-3 lg:pt-0 lg:pl-5 flex flex-row lg:flex-col items-center lg:items-end justify-between lg:justify-center gap-2.5 self-center">
+                        <div className="space-y-0.5 min-w-0 text-left lg:text-right">
                           <span className="hidden lg:block text-[9px] font-semibold text-gray-400 uppercase tracking-widest">
                             {translateText('PRIX COMPTOIR PROFESSIONNEL')}
                           </span>
-                          <div className="flex items-baseline gap-1">
+                          <div className="flex items-baseline lg:justify-end gap-1">
                             <span className="text-base sm:text-lg font-mono font-bold text-[#003366]">
                               {displayBasePrice > 0 ? displayBasePrice.toLocaleString('fr-FR') : 'Sur devis'}
                             </span>
@@ -1137,13 +1151,13 @@ export default function Shop() {
                           )}
                         </div>
 
-                        {/* Enlarged Action Buttons: side by side or solo, aligned right */}
-                        <div className="flex items-center justify-end gap-2 shrink-0 ml-auto w-auto">
+                        {/* Action Buttons: stacked vertically under price on desktop */}
+                        <div className="flex items-center justify-end shrink-0">
                           {displayBasePrice > 0 ? (
                             <button 
                               type="button"
                               onClick={() => handleAddToCart(rawProduct)}
-                              className="bg-[#003366] hover:bg-[#002244] text-white py-2 px-3.5 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap cursor-pointer active:scale-95"
+                              className="bg-[#003366] hover:bg-[#002244] text-white py-2 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap cursor-pointer active:scale-95"
                             >
                               <ShoppingCart className="w-3.5 h-3.5" />
                               <span>{t('add_to_cart_btn')}</span>
@@ -1152,7 +1166,7 @@ export default function Shop() {
                             <button 
                               type="button"
                               onClick={() => openQuoteModal(rawProduct)}
-                              className="bg-[#FF6600] hover:bg-[#e65c00] text-white py-2 px-3.5 sm:px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap cursor-pointer"
+                              className="bg-[#FF6600] hover:bg-[#e65c00] text-white py-2 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap cursor-pointer"
                             >
                               <FileText className="w-3.5 h-3.5" />
                               <span>{t('quote_pro_btn')}</span>

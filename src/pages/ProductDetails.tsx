@@ -4,7 +4,8 @@ import {
   ChevronRight, ShoppingCart, Truck, ShieldCheck, 
   ArrowLeft, FileText, Share2, Heart, CheckCircle2,
   Building, Phone, Globe, X, Info, AlertCircle, Tag,
-  ZoomIn, ZoomOut, ExternalLink, Download, ChevronLeft, ChevronDown
+  ZoomIn, ZoomOut, ExternalLink, Download, ChevronLeft, ChevronDown,
+  MessageCircle, Copy, Mail
 } from 'lucide-react';
 import { useCart } from '../CartContext';
 import { useAuth } from '../AuthContext';
@@ -193,9 +194,11 @@ export default function ProductDetails() {
     ? (selectedFreight === 'air' ? airFreightCost : selectedFreight === 'sea' ? seaFreightCost : 0)
     : 0;
 
-  const isVatActive = product?.applyVat !== undefined
-    ? Boolean(product.applyVat)
-    : Boolean(siteSettings.applyVatByDefault);
+  const isVatActive = (siteSettings.enableVat !== false) && (
+    product?.applyVat !== undefined
+      ? Boolean(product.applyVat)
+      : Boolean(siteSettings.applyVatByDefault)
+  );
   const vatRate = isVatActive ? (product?.vatRate ?? siteSettings.defaultVatRate ?? 0.18) : 0;
 
   const unitTotalHT = currentUnitPrice + freightCost;
@@ -317,10 +320,43 @@ export default function ProductDetails() {
     }, 6000);
   };
 
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showShippingInfo, setShowShippingInfo] = useState(false);
+
   const handleShare = () => {
+    setShowShareModal(true);
+  };
+
+  const handleNativeShare = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: product?.name || 'Équipement Professionnel',
+          text: `${product?.name} - ${siteSettings.companyName || 'ZONE ÉQUIPEMENTS'}`,
+          url: window.location.href
+        });
+        return;
+      } catch (e) {
+        // Fallback to modal if cancelled or unsupported
+      }
+    }
+    setShowShareModal(true);
+  };
+
+  const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const handleLikeToggle = () => {
+    if (!user) {
+      alert("Veuillez vous connecter à votre compte client pour ajouter ce matériel à vos favoris.");
+      navigate('/login');
+      return;
+    }
+    const nextLiked = catalogService.toggleLikedProduct(product?.id || parsedId || id || '', user.uid);
+    setFavorite(nextLiked);
   };
 
   const handleQuoteSubmit = (e: FormEvent) => {
@@ -542,22 +578,20 @@ export default function ProductDetails() {
                         </button>
                         <button 
                           type="button"
-                          onClick={handleShare}
+                          onClick={handleNativeShare}
                           className="p-2 rounded-full bg-white/90 shadow-sm border border-gray-200 hover:text-[#003366] transition-all text-gray-400 cursor-pointer"
-                          title="Partager le lien"
+                          title="Partager le lien (WhatsApp, Email...)"
                         >
                           {copiedLink ? <span className="text-[10px] font-bold text-green-600 font-mono">Copié !</span> : <Share2 className="w-4 h-4" />}
                         </button>
                         <button 
                           type="button"
-                          onClick={() => {
-                            const nextLiked = catalogService.toggleLikedProduct(product.id, user?.uid);
-                            setFavorite(nextLiked);
-                          }}
+                          onClick={handleLikeToggle}
                           className={`p-2 rounded-full bg-white/90 shadow-sm border transition-all cursor-pointer ${
                             favorite ? 'border-red-300 text-red-500 bg-red-50/90' : 'border-gray-200 text-gray-400 hover:text-red-600'
                           }`}
-                          title={favorite ? "Retirer de mes produits aimés" : "Ajouter à mes produits aimés"}
+                          title={favorite ? "Retirer de mes favoris" : "Ajouter à mes favoris"}
+                          aria-label="Favoris"
                         >
                           <Heart className={`w-4 h-4 ${favorite ? 'text-red-500 fill-red-500' : ''}`} />
                         </button>
@@ -770,7 +804,7 @@ export default function ProductDetails() {
                       {currentUnitPrice.toLocaleString('fr-FR')} FCFA
                     </span>
                     <span className="text-xs text-gray-500 font-medium">
-                      / {t('unit_price_ex_tax')}
+                      / {isVatActive ? t('unit_price_ex_tax') : translateText('Prix unitaire net')}
                     </span>
                   </div>
 
@@ -895,7 +929,7 @@ export default function ProductDetails() {
                               </span>
                             </div>
                             <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'sea' ? 'text-blue-100' : 'text-gray-400'}`}>
-                              {warehouseFreight.seaDuration} • {warehouseFreight.seaRatePerKg.toLocaleString('fr-FR')} F/kg
+                              {warehouseFreight.seaDuration}
                             </span>
                           </button>
                         )}
@@ -918,7 +952,7 @@ export default function ProductDetails() {
                               </span>
                             </div>
                             <span className={`text-[10px] block mt-0.5 ${selectedFreight === 'air' ? 'text-blue-100' : 'text-gray-400'}`}>
-                              {warehouseFreight.airDuration} • {warehouseFreight.airRatePerKg.toLocaleString('fr-FR')} F/kg
+                              {warehouseFreight.airDuration}
                             </span>
                           </button>
                         )}
@@ -938,39 +972,54 @@ export default function ProductDetails() {
                     </div>
                   )}
 
-                  {/* Supported Delivery Countries & Client Default Country Indicator */}
-                  <div className="mt-3 pt-2.5 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                    <div className="flex flex-wrap items-center gap-1.5 text-gray-600">
-                      <Globe className="w-3.5 h-3.5 text-[#003366] shrink-0" />
-                      <span className="font-bold text-[#003366]">{translateText('Pays livrés')} :</span>
-                      <span className="font-semibold text-gray-800">
-                        {warehouseFreight.supportedDeliveryCountries.join(', ')}
-                      </span>
-                    </div>
+                  {/* Discrete Reassuring Delivery Indicator directly under freight choice */}
+                  <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex flex-wrap items-center justify-between gap-2 text-[11px]">
                     {isDeliveryCountrySupported(clientDefaultCountry, warehouseFreight.supportedDeliveryCountries) ? (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
-                        ✓ Livraison disponible vers votre pays ({clientDefaultCountry})
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5 text-xs">
+                        ✓ {translateText('Livraison disponible vers votre pays')} ({clientDefaultCountry})
                       </span>
                     ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
-                        ⚠️ Votre pays par défaut ({clientDefaultCountry}) n'est pas desservi par cet entrepôt
+                      <span className="text-amber-800 font-bold text-xs">
+                        ⚠️ {translateText('Votre pays par défaut')} ({clientDefaultCountry}) {translateText('n\'est pas desservi par cet entrepôt')}
                       </span>
                     )}
+                    
+                    {/* Collapsible details toggle to keep the page super clean */}
+                    <button
+                      type="button"
+                      onClick={() => setShowShippingInfo(prev => !prev)}
+                      className="text-[10px] font-semibold text-[#003366] hover:text-[#FF6600] flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Info className="w-3 h-3 text-[#FF6600]" />
+                      <span>{showShippingInfo ? translateText('Masquer les détails logistiques') : translateText('Détails des pays & formalités')}</span>
+                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${showShippingInfo ? 'rotate-180' : ''}`} />
+                    </button>
                   </div>
 
-                  {/* Freight carrier dependency & autonomous customs note */}
-                  <div className="mt-2.5 pt-2 border-t border-slate-200/60 text-[10px] text-gray-500 flex items-start gap-1.5">
-                    <span className="text-[#FF6600] font-bold">ℹ</span>
-                    <span>
-                      {translateText('Les tarifs de fret dépendent des barèmes réels de nos compagnies logistiques partenaires maritimes et aériennes. Le dédouanement maritime est généralement géré par les services logistiques de l\'ensemble de nos agents transitaires. Pour le fret aérien, les expéditions peuvent parfois faire l\'objet d\'un blocage ou contrôle temporaire en douane pour régularisation des formalités de dédouanement.')}
-                    </span>
-                  </div>
+                  {/* Folded Shipping & Customs Information (Collapsed by default) */}
+                  {showShippingInfo && (
+                    <div className="mt-2.5 p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2 animate-in fade-in duration-200 text-[10px] text-gray-600">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Globe className="w-3.5 h-3.5 text-[#003366] shrink-0" />
+                        <span className="font-bold text-[#003366]">{translateText('Pays livrés')} :</span>
+                        <span className="font-semibold text-gray-800">
+                          {warehouseFreight.supportedDeliveryCountries.join(', ')}
+                        </span>
+                      </div>
+                      <div className="pt-1.5 border-t border-slate-200/60 text-gray-500 leading-relaxed">
+                        <span className="text-[#FF6600] font-bold mr-1">ℹ</span>
+                        {translateText('Les tarifs de fret dépendent des barèmes réels de nos compagnies logistiques partenaires maritimes et aériennes. Le dédouanement maritime est généralement géré par les services logistiques de l\'ensemble de nos agents transitaires. Pour le fret aérien, les expéditions peuvent parfois faire l\'objet d\'un blocage ou contrôle temporaire en douane pour régularisation des formalités de dédouanement.')}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Dynamic Pricing Breakdown (Organized, spacious & mobile-friendly) */}
                   <div className="mt-4 pt-3 border-t border-slate-200/90">
-                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 sm:gap-2 text-xs">
+                    <div className={`grid grid-cols-1 ${isVatActive ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-2.5 sm:gap-2 text-xs`}>
                       <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
-                        <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">{t('price_equipment_ht')}</span>
+                        <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">
+                          {isVatActive ? t('price_equipment_ht') : translateText('Prix équipement')}
+                        </span>
                         <span className="font-mono font-bold text-gray-900 text-xs sm:text-xs">{currentUnitPrice.toLocaleString('fr-FR')} FCFA</span>
                       </div>
                       <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
@@ -983,16 +1032,20 @@ export default function ProductDetails() {
                             : 'Inclus (0 FCFA)'}
                         </span>
                       </div>
-                      <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
-                        <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">
-                          TVA ({Math.round((product?.vatRate ?? siteSettings.defaultVatRate ?? 0.18) * 100)}%)
-                        </span>
-                        <span className="font-mono font-bold text-gray-700 text-xs">
-                          {isVatActive && vatRate > 0 ? `+${unitVat.toLocaleString('fr-FR')} FCFA` : '0 FCFA'}
-                        </span>
-                      </div>
+                      {isVatActive && (
+                        <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-start bg-white sm:bg-transparent p-2.5 sm:p-0 rounded-lg border sm:border-0 border-slate-100">
+                          <span className="text-[11px] sm:text-[10px] text-gray-500 font-semibold">
+                            TVA ({Math.round((product?.vatRate ?? siteSettings.defaultVatRate ?? 0.18) * 100)}%)
+                          </span>
+                          <span className="font-mono font-bold text-gray-700 text-xs">
+                            {vatRate > 0 ? `+${unitVat.toLocaleString('fr-FR')} FCFA` : '0 FCFA'}
+                          </span>
+                        </div>
+                      )}
                       <div className="flex sm:flex-col justify-between sm:justify-center items-center sm:items-end bg-gradient-to-br from-blue-50 to-indigo-50/50 p-2.5 rounded-xl border border-blue-200/80 shadow-2xs">
-                        <span className="text-[10px] sm:text-[9px] text-[#003366] font-extrabold uppercase tracking-wider">{t('total_ttc_calc')}</span>
+                        <span className="text-[10px] sm:text-[9px] text-[#003366] font-extrabold uppercase tracking-wider">
+                          {isVatActive ? t('total_ttc_calc') : translateText('Total estimé :')}
+                        </span>
                         <span className="text-sm font-black font-mono text-[#003366]">{unitTotalTTC.toLocaleString('fr-FR')} FCFA</span>
                       </div>
                     </div>
@@ -1084,22 +1137,30 @@ export default function ProductDetails() {
                     </button>
                   )}
 
-                  {/* Like / Favorite Product Button */}
+                  {/* Like / Favorite Product Button (Icon only) */}
                   <button
                     type="button"
-                    onClick={() => {
-                      const nextLiked = catalogService.toggleLikedProduct(product.id, user?.uid);
-                      setFavorite(nextLiked);
-                    }}
-                    className={`h-10 px-3.5 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border ${
+                    onClick={handleLikeToggle}
+                    className={`h-10 w-10 rounded-xl font-semibold text-xs transition-all flex items-center justify-center cursor-pointer shadow-xs border ${
                       favorite
                         ? 'bg-rose-50 text-rose-600 border-rose-300'
                         : 'bg-white hover:bg-rose-50/60 text-gray-600 hover:text-rose-600 border-gray-300'
                     }`}
-                    title={favorite ? 'Retirer de mes produits aimés' : 'Ajouter à mes produits aimés'}
+                    title={favorite ? 'Retirer de mes favoris' : 'Ajouter à mes favoris'}
+                    aria-label="Favoris"
                   >
-                    <Heart className={`w-3.5 h-3.5 ${favorite ? 'fill-rose-500 text-rose-500' : ''}`} />
-                    <span>{favorite ? translateText('Aimé') : translateText('Aimer')}</span>
+                    <Heart className={`w-4 h-4 ${favorite ? 'fill-rose-500 text-rose-500' : ''}`} />
+                  </button>
+
+                  {/* Share Product Button */}
+                  <button
+                    type="button"
+                    onClick={handleNativeShare}
+                    className="h-10 px-3 rounded-xl font-semibold text-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs border bg-white hover:bg-blue-50 text-[#003366] border-gray-300"
+                    title="Partager cette fiche produit (WhatsApp, Email...)"
+                  >
+                    <Share2 className="w-3.5 h-3.5 text-[#FF6600]" />
+                    <span>{translateText('Partager')}</span>
                   </button>
 
                   {/* Multiple Catalogue(s) PDF Constructeur (Téléchargement direct en binaire sans conversion HTML) */}
@@ -1515,7 +1576,9 @@ export default function ProductDetails() {
 
                   <div className="pt-3 border-t border-gray-100 flex items-center justify-between">
                     <div>
-                      <span className="block text-[9px] text-gray-400 font-bold uppercase">Montant estimé HT</span>
+                      <span className="block text-[9px] text-gray-400 font-bold uppercase">
+                        {isVatActive ? 'Montant estimé HT' : 'Montant estimé'}
+                      </span>
                       <span className="text-sm font-mono font-black text-gray-900">
                         {(currentUnitPrice * quantity).toLocaleString('fr-FR')} FCFA
                       </span>
@@ -1549,6 +1612,105 @@ export default function ProductDetails() {
               </div>
             )}
 
+          </div>
+        </div>
+      )}
+
+      {/* Rich Multi-Option Share Modal (WhatsApp, Email, Copy Link, WebShare) */}
+      {showShareModal && (
+        <div 
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 animate-in fade-in duration-200"
+          onClick={() => setShowShareModal(false)}
+        >
+          <div 
+            className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-gray-200 overflow-hidden relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-[#003366] text-white p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Share2 className="w-5 h-5 text-[#FF6600]" />
+                <h3 className="font-extrabold text-sm uppercase tracking-wider">{translateText('Partager ce matériel')}</h3>
+              </div>
+              <button 
+                onClick={() => setShowShareModal(false)} 
+                className="text-white/80 hover:text-white p-1 rounded-full hover:bg-white/10"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="flex items-center gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                <img
+                  src={getProductImageUrl(product.image)}
+                  alt=""
+                  className="w-12 h-12 object-contain bg-white rounded-lg border border-slate-200 p-1 shrink-0"
+                  onError={handleImageError}
+                />
+                <div className="min-w-0 flex-1">
+                  <span className="text-[9px] font-black text-[#FF6600] uppercase tracking-wider block">{cleanBrand(product.brand, product.name)}</span>
+                  <h4 className="text-xs font-bold text-gray-900 truncate leading-snug">{product.name}</h4>
+                  <span className="text-[11px] font-mono font-black text-[#003366]">{currentUnitPrice.toLocaleString('fr-FR')} FCFA HT</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {/* WhatsApp Share */}
+                <a
+                  href={`https://api.whatsapp.com/send?text=${encodeURIComponent(`Découvrez cet équipement : ${product.name}\n${window.location.href}`)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold transition-all shadow-2xs"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                    <MessageCircle className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div>WhatsApp</div>
+                    <span className="text-[10px] text-emerald-600 font-normal">Message direct</span>
+                  </div>
+                </a>
+
+                {/* Email Share */}
+                <a
+                  href={`mailto:?subject=${encodeURIComponent(`Fiche Équipement : ${product.name} - ${siteSettings.companyName || 'Zone Équipements'}`)}&body=${encodeURIComponent(`Bonjour,\n\nVoici la fiche technique de l'équipement :\n\n${product.name}\nMarque : ${product.brand}\nPrix : ${currentUnitPrice.toLocaleString('fr-FR')} FCFA HT\n\nLien d'accès direct :\n${window.location.href}\n\nCordialement.`)}`}
+                  className="flex items-center gap-2.5 p-3 rounded-xl bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[#003366] text-xs font-bold transition-all shadow-2xs"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-[#003366] text-white flex items-center justify-center shrink-0">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <div className="text-left">
+                    <div>Email</div>
+                    <span className="text-[10px] text-blue-600 font-normal">Envoyer la fiche</span>
+                  </div>
+                </a>
+              </div>
+
+              {/* Copy Link Row */}
+              <div className="pt-2 border-t border-gray-100">
+                <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Lien de la fiche produit</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={window.location.href}
+                    className="flex-1 bg-gray-50 border border-gray-200 rounded-lg py-2 px-3 text-xs font-mono text-gray-600 select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className={`py-2 px-3.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ${
+                      copiedLink
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-[#FF6600] hover:bg-orange-600 text-white'
+                    }`}
+                  >
+                    {copiedLink ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedLink ? 'Copié !' : 'Copier'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

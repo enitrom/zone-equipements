@@ -20,9 +20,7 @@ export const DEFAULT_HOME_SECTIONS_ORDER = [
   'sectors',
   'categories',
   'brands',
-  'testimonials',
-  'articles',
-  'faq'
+  'testimonials'
 ];
 
 export const SECTION_METADATA: Record<string, { label: string; icon: string }> = {
@@ -571,7 +569,7 @@ export default function Home() {
   // 7. TESTIMONIALS
   const renderTestimonialsSection = () => (
     <section key="testimonials" className="ze-testimonials alignwide pt-8 pb-8 bg-white">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-2xl mx-auto px-4 sm:px-6">
         <div className="ze-section-title text-center mb-6">
           {renderSectionAdminControl('testimonials', 'testimonialsTitle', 'testimonialsSubtitle')}
           <div className="flex items-center justify-center gap-3 flex-wrap">

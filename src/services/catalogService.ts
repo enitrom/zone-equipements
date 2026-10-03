@@ -1673,6 +1673,7 @@ export interface AgentWarehouse {
   offersAirFreight?: boolean; // Propose le Fret Aérien (défaut: true)
   offersSeaFreight?: boolean; // Propose le Fret Maritime (défaut: true)
   airFreightPerKgXOF?: number; // Tarif Fret Aérien en FCFA / kg propre à cet entrepôt
+  airFreightPerCbmXOF?: number; // Tarif Fret Aérien au m³ CBM en FCFA (optionnel)
   airFreightMinXOF?: number; // Minimum forfaitaire Aérien en FCFA
   airFreightDurationDays?: string; // Délai Fret Aérien (ex: "7 à 12 jours")
   seaFreightPerKgXOF?: number; // Tarif Fret Maritime en FCFA / kg propre à cet entrepôt
@@ -1683,6 +1684,145 @@ export interface AgentWarehouse {
   supportedDeliveryCountries?: string[]; // Pays de destination livrés par cet entrepôt (ex: ["Sénégal", "Mali", "Côte d'Ivoire"])
   createdAt?: string;
   updatedAt?: string;
+}
+
+/**
+ * Calcule le volume en m³ (CBM) à partir d'une chaîne de dimensions (ex: "45 x 30 x 20 cm")
+ * ou utilise une estimation basée sur la densité standard du fret.
+ */
+export function parseDimensionsToCbm(dimensions?: string, fallbackWeightKg?: number): number {
+  if (dimensions && typeof dimensions === 'string' && dimensions.trim()) {
+    const dimMatches = dimensions.match(/(\d+(?:[.,]\d+)?)\s*[*xX×]\s*(\d+(?:[.,]\d+)?)\s*[*xX×]\s*(\d+(?:[.,]\d+)?)/);
+    if (dimMatches) {
+      const d1 = parseFloat(dimMatches[1].replace(',', '.'));
+      const d2 = parseFloat(dimMatches[2].replace(',', '.'));
+      const d3 = parseFloat(dimMatches[3].replace(',', '.'));
+      if (d1 > 0 && d2 > 0 && d3 > 0) {
+        const isMm = /\bmm\b/i.test(dimensions);
+        const isIn = /\b(?:in|inch|po)\b|"/i.test(dimensions);
+        const factor = isMm ? 0.1 : isIn ? 2.54 : 1;
+        const cbm = Number((((d1 * factor) * (d2 * factor) * (d3 * factor)) / 1000000).toFixed(4));
+        if (cbm > 0) return cbm;
+      }
+    }
+  }
+
+  // Si aucune dimension n'est exploitable, on ne force pas de volume arbitraire (0 par défaut)
+  return 0;
+}
+
+/**
+ * Système de livraison dédié UNIQUEMENT aux produits disponibles immédiatement (Stock Local Dakar / Sénégal) :
+ * Calcule les frais de transport par poids (kg) + volume (m³) ET selon la zone / distance depuis Dakar.
+ */
+export interface LocalDeliveryResult {
+  fee: number;
+  zoneId: 'pickup' | 'dakar_center' | 'dakar_suburbs' | 'thies_mbour' | 'senegal_regions' | 'west_africa';
+  zoneName: string;
+  duration: string;
+  carrierName: string;
+  freePickupAvailable: boolean;
+}
+
+export function calculateLocalDeliveryFee(params: {
+  weightKg?: number;
+  dimensions?: string;
+  volumeCbm?: number;
+  destinationZoneOrCity?: string;
+  destinationCountry?: string;
+  isPickup?: boolean;
+}): LocalDeliveryResult {
+  if (params.isPickup || /retrait|magasin|d\u00e9p\u00f4t/i.test(params.destinationZoneOrCity || '')) {
+    return {
+      fee: 0,
+      zoneId: 'pickup',
+      zoneName: 'Retrait Gratuit en Magasin / Dépôt Dakar',
+      duration: 'Immédiat (aux horaires d\'ouverture)',
+      carrierName: 'Retrait Magasin Zone Équipements',
+      freePickupAvailable: true
+    };
+  }
+
+  const weight = Math.max(0, params.weightKg || 1.0);
+  const volume = params.volumeCbm && params.volumeCbm > 0
+    ? params.volumeCbm
+    : parseDimensionsToCbm(params.dimensions, weight);
+
+  const loc = (params.destinationZoneOrCity || '').toLowerCase().trim();
+  const country = (params.destinationCountry || 'Sénégal').toLowerCase().trim();
+
+  // Zone 1: Dakar Centre & Almadies / Plateau / Médina / Yoff / Grand Dakar (0 - 20 km)
+  if (!loc || /^(dakar|plateau|m\u00e9dina|almadies|yoff|ouakam|fann|point e|libert\u00e9|sicap|ngor|mermoz)/i.test(loc) || (country === 'sénégal' && !/rufisque|diamniadio|thi\u00e8s|mbour|saint-louis|kaolack|touba|ziguinchor|tamba/i.test(loc))) {
+    const base = 2500;
+    const weightFee = weight * 200; // 200 F/kg
+    const volFee = volume * 25000; // 25 000 F/m3
+    return {
+      fee: Math.round(base + weightFee + volFee),
+      zoneId: 'dakar_center',
+      zoneName: 'Dakar & Agglomération (Zone 1)',
+      duration: '24h à 48h chrono',
+      carrierName: 'Service Livraison Express Zone Équipements Dakar',
+      freePickupAvailable: true
+    };
+  }
+
+  // Zone 2: Banlieue de Dakar & Rufisque / Diamniadio / Bargny (20 - 45 km)
+  if (/^(rufisque|diamniadio|bargny|keur massar|pikine|gu\u00e9diawaye|sangalkam|s\u00e9bikotane)/i.test(loc)) {
+    const base = 4000;
+    const weightFee = weight * 300;
+    const volFee = volume * 35000;
+    return {
+      fee: Math.round(base + weightFee + volFee),
+      zoneId: 'dakar_suburbs',
+      zoneName: 'Banlieue de Dakar & Rufisque / Diamniadio (Zone 2)',
+      duration: '24h à 48h',
+      carrierName: 'Navette Quotidienne Périurbaine',
+      freePickupAvailable: true
+    };
+  }
+
+  // Zone 3: Thiès, Mbour, Saly, Tivaouane (45 - 100 km)
+  if (/^(thi\u00e8s|mbour|saly|tivaouane|somone|popenguine|joal|khombole)/i.test(loc)) {
+    const base = 6000;
+    const weightFee = weight * 450;
+    const volFee = volume * 45000;
+    return {
+      fee: Math.round(base + weightFee + volFee),
+      zoneId: 'thies_mbour',
+      zoneName: 'Thiès, Mbour & Petite Côte (Zone 3)',
+      duration: '48h à 72h',
+      carrierName: 'Transport Régional Express',
+      freePickupAvailable: true
+    };
+  }
+
+  // Zone 4: Régions du Sénégal (Saint-Louis, Kaolack, Touba, Diourbel, Louga, Ziguinchor, Tambacounda, etc.)
+  if (country === 'sénégal' || country === 'senegal' || /saint-louis|kaolack|touba|diourbel|fatick|louga|matam|ziguinchor|kolda|tamba|k\u00e9dougou/i.test(loc)) {
+    const base = 8500;
+    const weightFee = weight * 600;
+    const volFee = volume * 60000;
+    return {
+      fee: Math.round(base + weightFee + volFee),
+      zoneId: 'senegal_regions',
+      zoneName: 'Grandes Régions du Sénégal (Zone 4)',
+      duration: '2 à 4 jours ouvrés',
+      carrierName: 'Réseau Messagerie & Fret Régional Sénégal',
+      freePickupAvailable: true
+    };
+  }
+
+  // Zone 5: Sous-région terrestre Afrique de l'Ouest (Mali, Gambie, Mauritanie, Guinée, etc.)
+  const base = 16000;
+  const weightFee = weight * 1200;
+  const volFee = volume * 95000;
+  return {
+    fee: Math.round(base + weightFee + volFee),
+    zoneId: 'west_africa',
+    zoneName: 'Sous-Région Ouest-Africaine (Corridor Terrestre)',
+    duration: '4 à 8 jours ouvrés',
+    carrierName: 'Corridor Fret & Logistique Sous-Régionale',
+    freePickupAvailable: false
+  };
 }
 
 export interface Supplier {
@@ -3200,21 +3340,34 @@ class CatalogService {
     const vatAmount = hasPositiveSupplierPrice ? Math.round(priceEquipmentHT * vatRate) : 0;
     const priceEquipmentTTC = priceEquipmentHT + vatAmount;
 
-    // 2. Calcul du Fret Aérien & Express :
-    // RÈGLE STRICTE : Tant qu'un entrepôt est assigné, les paramètres système sont TOUJOURS ignorés.
-    // Si aucun entrepôt n'est assigné, les vrais paramètres de fret par défaut du système (siteSettings) sont utilisés.
+    // 2. Calcul du Fret Aérien (Poids kg + Volume CBM combinés) :
     const validWeight = Math.max(params.weightKg || 1, 0.1);
+    let parsedDimCbm = 0;
+    if (params.dimensions && params.dimensions.trim()) {
+      parsedDimCbm = parseDimensionsToCbm(params.dimensions, validWeight);
+    }
+    const computedVolumeCbm = params.volumeCbm && params.volumeCbm > 0 
+      ? params.volumeCbm 
+      : parsedDimCbm;
+
     const isAirEligible = hasAssignedWh
       ? (matchedWh!.offersAirFreight !== false)
       : sysFreightEnabled;
     const airRateKg = hasAssignedWh
       ? (matchedWh!.airFreightPerKgXOF ?? settings?.airFreightPerKg ?? FREIGHT_RATES.AIR_PER_KG_XOF)
       : (sysFreightEnabled ? (settings?.airFreightPerKg ?? FREIGHT_RATES.AIR_PER_KG_XOF) : 0);
+    const airRateCbm = hasAssignedWh
+      ? (matchedWh!.airFreightPerCbmXOF ?? 0)
+      : 0;
     const airMinCharge = hasAssignedWh
       ? (matchedWh!.airFreightMinXOF ?? airRateKg)
       : (sysFreightEnabled ? (settings?.airFreightMin ?? airRateKg) : 0);
+
+    const airWeightPart = (validWeight > 0 && airRateKg > 0) ? Math.round(validWeight * airRateKg) : 0;
+    const airVolumePart = (computedVolumeCbm > 0 && airRateCbm > 0) ? Math.round(computedVolumeCbm * airRateCbm) : 0;
+    const airSum = airWeightPart + airVolumePart;
     const computedAirFreightCostXOF = (hasAssignedWh || sysFreightEnabled)
-      ? Math.max(Math.round(validWeight * airRateKg), airMinCharge)
+      ? Math.max(airSum, airMinCharge)
       : 0;
     const airFreightCostXOF = (params.customAirFreightCost !== undefined && params.customAirFreightCost !== null && !isNaN(Number(params.customAirFreightCost)) && Number(params.customAirFreightCost) >= 0)
       ? Math.round(Number(params.customAirFreightCost))
@@ -3224,8 +3377,7 @@ class CatalogService {
     const expressMinCharge = sysFreightEnabled ? (settings?.expressFreightMin ?? 22500) : 0;
     const expressFreightCostXOF = sysFreightEnabled ? Math.max(Math.round(validWeight * expressRateKg), expressMinCharge) : 0;
 
-    // 3. Calcul Transparent du Fret Maritime (Poids kg vs Volume CBM) :
-    // Priorité absolue et exclusive à l'entrepôt assigné ; sinon barème système réel (siteSettings)
+    // 3. Calcul du Fret Maritime (Poids kg + Volume CBM combinés et additionnés) :
     const seaRateKg = params.seaRatePerKgXOF ?? (hasAssignedWh
       ? (matchedWh!.seaFreightPerKgXOF ?? settings?.seaFreightPerKg ?? FREIGHT_RATES.SEA_PER_KG_XOF)
       : (sysFreightEnabled ? (settings?.seaFreightPerKg ?? FREIGHT_RATES.SEA_PER_KG_XOF) : 0));
@@ -3236,47 +3388,28 @@ class CatalogService {
       ? (matchedWh!.seaFreightPerCbmXOF ?? Math.round((settings?.seaFreightPerCbmUSD || 220) * usdRate))
       : (sysFreightEnabled ? Math.round((settings?.seaFreightPerCbmUSD || 220) * usdRate) : 0));
 
-    let parsedDimCbm = 0;
-    if (params.dimensions && params.dimensions.trim()) {
-      const dimMatches = params.dimensions.match(/(\d+(?:[.,]\d+)?)\s*[*xX×]\s*(\d+(?:[.,]\d+)?)\s*[*xX×]\s*(\d+(?:[.,]\d+)?)/);
-      if (dimMatches) {
-        const d1 = parseFloat(dimMatches[1].replace(',', '.'));
-        const d2 = parseFloat(dimMatches[2].replace(',', '.'));
-        const d3 = parseFloat(dimMatches[3].replace(',', '.'));
-        if (d1 > 0 && d2 > 0 && d3 > 0) {
-          const isMm = /\bmm\b/i.test(params.dimensions);
-          const isIn = /\b(?:in|inch|po)\b|"/i.test(params.dimensions);
-          const factor = isMm ? 0.1 : isIn ? 2.54 : 1;
-          parsedDimCbm = Number((((d1 * factor) * (d2 * factor) * (d3 * factor)) / 1000000).toFixed(3));
-        }
-      }
-    }
-
-    const computedVolumeCbm = params.volumeCbm && params.volumeCbm > 0 
-      ? params.volumeCbm 
-      : (parsedDimCbm > 0 ? parsedDimCbm : Number((validWeight / 250).toFixed(3)));
-
-    const seaCostByWeightXOF = (!hasAssignedWh && !sysFreightEnabled) || params.ignoreSeaWeight ? 0 : Math.round(validWeight * seaRateKg);
-    const seaCostByVolumeXOF = (!hasAssignedWh && !sysFreightEnabled) || params.ignoreSeaVolume ? 0 : Math.round(computedVolumeCbm * seaRateCbm);
+    const seaCostByWeightXOF = (!hasAssignedWh && !sysFreightEnabled) || params.ignoreSeaWeight || seaRateKg <= 0 ? 0 : Math.round(validWeight * seaRateKg);
+    const seaCostByVolumeXOF = (!hasAssignedWh && !sysFreightEnabled) || params.ignoreSeaVolume || seaRateCbm <= 0 ? 0 : Math.round(computedVolumeCbm * seaRateCbm);
+    const seaSum = seaCostByWeightXOF + seaCostByVolumeXOF;
 
     let seaFreightCostXOF = seaMinCharge;
-    let seaCalculationBasis = 'Poids & Volume (Max)';
+    let seaCalculationBasis = 'Poids + Volume (Cumulés)';
 
     if (params.customSeaFreightCost !== undefined && params.customSeaFreightCost !== null && !isNaN(Number(params.customSeaFreightCost)) && Number(params.customSeaFreightCost) >= 0) {
       seaFreightCostXOF = Math.round(Number(params.customSeaFreightCost));
       seaCalculationBasis = 'Tarif personnalisé (Forfait Admin)';
-    } else if (params.ignoreSeaWeight && !params.ignoreSeaVolume) {
-      seaFreightCostXOF = Math.max(seaCostByVolumeXOF, seaMinCharge);
-      seaCalculationBasis = 'Volume seul (CBM)';
-    } else if (!params.ignoreSeaWeight && params.ignoreSeaVolume) {
-      seaFreightCostXOF = Math.max(seaCostByWeightXOF, seaMinCharge);
-      seaCalculationBasis = 'Poids seul (kg)';
-    } else if (params.ignoreSeaWeight && params.ignoreSeaVolume) {
-      seaFreightCostXOF = seaMinCharge;
-      seaCalculationBasis = 'Minimum forfaitaire';
+    } else if (seaSum > 0) {
+      seaFreightCostXOF = Math.max(seaSum, seaMinCharge);
+      if (seaCostByWeightXOF > 0 && seaCostByVolumeXOF > 0) {
+        seaCalculationBasis = 'Poids + Volume additionnés';
+      } else if (seaCostByWeightXOF > 0) {
+        seaCalculationBasis = 'Poids seul (kg)';
+      } else {
+        seaCalculationBasis = 'Volume seul (CBM)';
+      }
     } else {
-      seaFreightCostXOF = Math.max(seaCostByWeightXOF, seaCostByVolumeXOF, seaMinCharge);
-      seaCalculationBasis = seaCostByVolumeXOF > seaCostByWeightXOF ? 'Volume retenu (CBM)' : 'Poids retenu (kg)';
+      seaFreightCostXOF = (hasAssignedWh || sysFreightEnabled) ? seaMinCharge : 0;
+      seaCalculationBasis = 'Minimum forfaitaire';
     }
 
     let shippingMethod: 'none' | 'neutral' | 'air' | 'sea' = 'none';
@@ -3721,6 +3854,24 @@ class CatalogService {
       'commande'
     );
     this.notifyOrdersChange();
+
+    // Envoi asynchrone de la notification email à l'administrateur
+    try {
+      fetch('/api/admin/notify-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: oData.isQuote ? 'quote' : 'order',
+          title: oData.isQuote ? `Nouveau Devis Pro : ${orderNumber}` : `Nouvelle Commande Client : ${orderNumber}`,
+          message: `${newOrder.customerName || 'Un client'} a soumis ${oData.isQuote ? 'une demande de devis' : 'une commande'} d'un montant de ${newOrder.totalTTC.toLocaleString('fr-FR')} FCFA sur ZONE ÉQUIPEMENTS.`,
+          orderNumber,
+          clientName: newOrder.customerName,
+          amount: newOrder.totalTTC,
+          details: `Client : ${newOrder.customerName || 'Anonyme'}\nTéléphone : ${newOrder.customerPhone || 'Non renseigné'}\nEmail : ${newOrder.customerEmail || 'Non renseigné'}\nVille/Adresse : ${newOrder.customerCity || 'Dakar'} - ${newOrder.customerAddress || ''}\nMode de paiement : ${newOrder.paymentMethod || 'Paiement direct'}\nArticles :\n${(newOrder.items || []).map(it => `• ${it.quantity}x ${it.name} - ${it.price.toLocaleString('fr-FR')} FCFA`).join('\n')}`
+        })
+      }).catch(() => {});
+    } catch {}
+
     return newOrder;
   }
 

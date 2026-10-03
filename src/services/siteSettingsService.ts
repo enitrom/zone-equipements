@@ -124,6 +124,24 @@ export interface PaydunyaSettings {
   };
 }
 
+export interface AdminPermissions {
+  pos: boolean;       // Magasin Physique & Caisse POS
+  catalog: boolean;   // Catalogue & Matériels
+  orders: boolean;    // Commandes, Devis & Facturation
+  suppliers: boolean; // Fournisseurs & Transit
+  finance: boolean;   // Finance & Marges & Pilotage
+  security: boolean;  // Paramètres & Sécurité & Utilisateurs
+}
+
+export const DEFAULT_ADMIN_PERMISSIONS: AdminPermissions = {
+  pos: true,
+  catalog: true,
+  orders: true,
+  suppliers: true,
+  finance: true,
+  security: true
+};
+
 export interface SiteSettings {
   heroTitle: string;
   heroSubtitle: string;
@@ -167,6 +185,7 @@ export interface SiteSettings {
   ninea: string;
   adminEmails: string[];
   deletedAdminEmails?: string[];
+  adminPermissionsMap?: Record<string, AdminPermissions>;
   enableGlobalDiscount?: boolean;
   globalDiscountPercent?: number;
   globalDiscountLabel?: string;
@@ -1048,6 +1067,33 @@ class SiteSettingsService {
     }
 
     return updated;
+  }
+
+  getAdminPermissions(email?: string): AdminPermissions {
+    const cleanEmail = String(email || auth?.currentUser?.email || '').toLowerCase().trim();
+    if (!cleanEmail) return DEFAULT_ADMIN_PERMISSIONS;
+    // Primary owner always has full access
+    if (cleanEmail === 'enitrom@gmail.com') {
+      return { pos: true, catalog: true, orders: true, suppliers: true, finance: true, security: true };
+    }
+    const settings = this.getSettings();
+    const map = settings.adminPermissionsMap || {};
+    if (map[cleanEmail]) {
+      return { ...DEFAULT_ADMIN_PERMISSIONS, ...map[cleanEmail] };
+    }
+    return DEFAULT_ADMIN_PERMISSIONS;
+  }
+
+  async updateAdminPermissions(email: string, permissions: Partial<AdminPermissions>): Promise<SiteSettings> {
+    const cleanEmail = String(email || '').toLowerCase().trim();
+    if (!cleanEmail) return this.getSettings();
+    const current = this.getSettings();
+    const map = { ...(current.adminPermissionsMap || {}) };
+    map[cleanEmail] = {
+      ...(map[cleanEmail] || DEFAULT_ADMIN_PERMISSIONS),
+      ...permissions
+    };
+    return this.updateSettings({ adminPermissionsMap: map });
   }
 
   // Helper pour identifier de manière unique le compte client courant

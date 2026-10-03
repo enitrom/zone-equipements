@@ -62,18 +62,25 @@ html, body {
 }
 
 .ze-cat-mega-menu {
-  position: absolute !important;
-  top: 100% !important;
-  left: 0 !important;
-  width: min(940px, 92vw) !important;
+  position: fixed !important;
+  top: 76px !important;
+  left: 16px !important;
+  right: 16px !important;
+  width: auto !important;
+  max-width: 960px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  transform: none !important;
   background-color: #ffffff !important;
   border: 1px solid #e2e8f0 !important;
   border-radius: 14px !important;
-  box-shadow: 0 20px 45px rgba(0, 20, 45, 0.16) !important;
+  box-shadow: 0 20px 45px rgba(0, 20, 45, 0.2) !important;
   padding: 24px 28px !important;
-  margin-top: 6px !important;
   display: none !important;
   z-index: 99999 !important;
+  max-height: calc(88vh - 80px) !important;
+  overflow-y: auto !important;
+  box-sizing: border-box !important;
 }
 
 /* Pont invisible anti-fermeture entre le bouton Catalogue et le menu déroulant */
@@ -377,3 +384,26 @@ html, body {
   color: #FF6600 !important;
   margin-top: auto !important;
 }
+
+/* --- Google Translate Clean Display Rules --- */
+.goog-te-banner-frame,
+.goog-te-banner-frame.skiptranslate,
+#goog-gt-tt,
+.goog-te-balloon-frame {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+body {
+  top: 0 !important;
+  position: static !important;
+}
+
+.skiptranslate {
+  display: inline !important;
+}
+
+#google_translate_element {
+  display: none !important;
+}
+

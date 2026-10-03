@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Bell, ShoppingCart, Truck, FileText, AlertTriangle,
-  Mail, Check, X, ExternalLink, Volume2, VolumeX, ArrowRight
+  Mail, Check, X, ExternalLink, Volume2, VolumeX, ArrowRight,
+  ShieldAlert, Package, RefreshCw
 } from 'lucide-react';
 import { catalogService, Order, Supplier } from '../../services/catalogService';
+import { securityService } from '../../services/securityService';
 
 export interface AdminNotification {
   id: string;
-  type: 'order' | 'supplier_po' | 'quote' | 'stock' | 'contact';
+  type: 'order' | 'supplier_po' | 'quote' | 'stock' | 'contact' | 'security';
   title: string;
   description: string;
   timestamp: string;
@@ -27,29 +29,56 @@ export default function AdminNotificationsBell({ onNavigateTab, onOpenOrder }: A
   const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const prevUnreadCountRef = useRef<number>(0);
+
+  // Play a soft notification audio chime using browser Web Audio API
+  const playChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5
+
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch {
+      // AudioContext may be restricted by browser policy before first user gesture
+    }
+  };
 
   const buildNotifications = () => {
     const orders = catalogService.getOrders();
-    const suppliers = catalogService.getSuppliers();
+    const products = catalogService.getProducts();
     const auditLogs = catalogService.getAuditLogs();
+    const securityLogs = securityService.getLogs();
 
     const notifs: AdminNotification[] = [];
 
-    // 1. Pending & Recent Orders
-    orders.forEach(ord => {
-      if (ord.status === 'En attente' || ord.status === 'Reçue' || ord.paymentStatus === 'Acompte versé') {
-        notifs.push({
-          id: `notif-ord-${ord.id}`,
-          type: 'order',
-          title: `Nouvelle Commande : ${ord.orderNumber}`,
-          description: `${ord.customerName} (${ord.customerCity || 'Dakar'}) • ${(ord.totalTTC || 0).toLocaleString('fr-FR')} FCFA (${ord.paymentMethod})`,
-          timestamp: ord.createdAt,
-          isRead: false,
-          actionTab: 'orders',
-          targetId: ord.id,
-          amount: ord.totalTTC
-        });
-      }
+    // 1. Orders (Show latest 25 orders with status & details)
+    orders.slice(0, 25).forEach(ord => {
+      const isPending = ord.status === 'En attente' || ord.status === 'Reçue';
+      notifs.push({
+        id: `notif-ord-${ord.id}`,
+        type: 'order',
+        title: isPending ? `Nouvelle Commande : ${ord.orderNumber}` : `Commande ${ord.orderNumber} (${ord.status})`,
+        description: `${ord.customerName} (${ord.customerCity || 'Dakar'}) • ${(ord.totalTTC || 0).toLocaleString('fr-FR')} FCFA (${ord.paymentMethod || 'Paiement direct'})`,
+        timestamp: ord.updatedAt || ord.createdAt,
+        isRead: false,
+        actionTab: 'orders',
+        targetId: ord.id,
+        amount: ord.totalTTC
+      });
 
       // Supplier payment link received
       if (ord.supplierPaymentLink && ord.supplierPoStatus === 'Lien paiement reçu') {
@@ -66,13 +95,47 @@ export default function AdminNotificationsBell({ onNavigateTab, onOpenOrder }: A
       }
     });
 
-    // 2. Recent Audit Logs & Contact submissions
-    auditLogs.slice(0, 10).forEach((log, idx) => {
-      if (log.action.toLowerCase().includes('contact') || log.action.toLowerCase().includes('message')) {
+    // 2. Low Stock Alerts for in-stock products
+    products.forEach(p => {
+      const isStockItem = (p as any).availabilityMode === 'stock' || (p as any).isImmediateStock || p.inStock;
+      const qty = (p as any).stockQuantity ?? ((p as any).stockCount ?? (isStockItem ? 3 : 0));
+      if (isStockItem && qty <= 3) {
         notifs.push({
-          id: `notif-contact-${idx}`,
-          type: 'contact',
-          title: `Message Contact Client : ${log.author || 'Visiteur'}`,
+          id: `notif-stock-${p.id}`,
+          type: 'stock',
+          title: `Alerte Stock : ${p.name.substring(0, 32)}...`,
+          description: `Reste ${qty} unité(s) en stock magasin. Réapprovisionnement conseillé.`,
+          timestamp: (p as any).updatedAt || new Date().toISOString(),
+          isRead: false,
+          actionTab: 'catalog',
+          targetId: String(p.id)
+        });
+      }
+    });
+
+    // 3. Security Threats & Suspicious Activity Alerts
+    securityLogs.slice(0, 15).forEach(sec => {
+      if (sec.threatLevel === 'HIGH' || sec.threatLevel === 'CRITICAL' || sec.actionTaken === 'BLOCKED') {
+        notifs.push({
+          id: `notif-sec-${sec.id}`,
+          type: 'security',
+          title: `Alerte Sécurité (${sec.threatLevel}) : IP ${sec.ip}`,
+          description: `${sec.reason} — Requête interceptée sur ${sec.path}`,
+          timestamp: sec.timestamp,
+          isRead: false,
+          actionTab: 'security',
+          targetId: sec.ip
+        });
+      }
+    });
+
+    // 4. Contact messages & inquiries
+    auditLogs.slice(0, 15).forEach((log, idx) => {
+      if (log.action.toLowerCase().includes('contact') || log.action.toLowerCase().includes('devis') || log.action.toLowerCase().includes('message')) {
+        notifs.push({
+          id: `notif-contact-${idx}-${log.timestamp}`,
+          type: log.action.toLowerCase().includes('devis') ? 'quote' : 'contact',
+          title: `${log.action} : ${log.author || 'Client'}`,
           description: log.details,
           timestamp: log.timestamp,
           isRead: false,
@@ -86,25 +149,39 @@ export default function AdminNotificationsBell({ onNavigateTab, onOpenOrder }: A
 
     // Merge read status from localStorage
     const readIds = new Set(JSON.parse(localStorage.getItem('ze_admin_read_notifs') || '[]'));
-    const finalized = notifs.map(n => ({
+    const finalized = notifs.slice(0, 50).map(n => ({
       ...n,
       isRead: readIds.has(n.id)
     }));
+
+    const currentUnread = finalized.filter(n => !n.isRead).length;
+    if (soundEnabled && currentUnread > prevUnreadCountRef.current && prevUnreadCountRef.current > 0) {
+      playChime();
+    }
+    prevUnreadCountRef.current = currentUnread;
 
     setNotifications(finalized);
   };
 
   useEffect(() => {
     buildNotifications();
-    const interval = setInterval(buildNotifications, 10000);
-    const unsub = catalogService.subscribe(buildNotifications);
+    const interval = setInterval(buildNotifications, 6000);
+    const unsubCatalog = catalogService.subscribe(buildNotifications);
+    const unsubSecurity = securityService.subscribe(buildNotifications);
+
     window.addEventListener('ze_orders_updated', buildNotifications);
+    window.addEventListener('ze_catalog_updated', buildNotifications);
+    window.addEventListener('storage', buildNotifications);
+
     return () => {
       clearInterval(interval);
-      unsub();
+      unsubCatalog();
+      unsubSecurity();
       window.removeEventListener('ze_orders_updated', buildNotifications);
+      window.removeEventListener('ze_catalog_updated', buildNotifications);
+      window.removeEventListener('storage', buildNotifications);
     };
-  }, []);
+  }, [soundEnabled]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -218,6 +295,12 @@ export default function AdminNotificationsBell({ onNavigateTab, onOpenOrder }: A
                         <ShoppingCart className="w-4 h-4 text-[#FF6600]" />
                       ) : notif.type === 'supplier_po' ? (
                         <Truck className="w-4 h-4 text-emerald-400" />
+                      ) : notif.type === 'stock' ? (
+                        <Package className="w-4 h-4 text-amber-400" />
+                      ) : notif.type === 'security' ? (
+                        <ShieldAlert className="w-4 h-4 text-rose-400" />
+                      ) : notif.type === 'quote' ? (
+                        <FileText className="w-4 h-4 text-orange-400" />
                       ) : (
                         <Mail className="w-4 h-4 text-blue-400" />
                       )}

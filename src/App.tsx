@@ -4,7 +4,7 @@ import * as Icons from 'lucide-react';
 import {
   Menu, X, Globe, ShoppingCart, MessageCircle, Phone, User,
   MapPin, Shield, ChevronUp, ChevronDown, ChevronRight, Search,
-  Package, FileText, BookOpen, Mail, LogIn, ExternalLink, Plus, Pencil
+  Package, FileText, BookOpen, Mail, LogIn, ExternalLink, Plus, Pencil, HelpCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -25,6 +25,7 @@ import Cart from './pages/Cart';
 import ProductDetails from './pages/ProductDetails';
 import Admin from './pages/Admin';
 import SupplierPortal from './pages/SupplierPortal';
+import FaqPage from './pages/FaqPage';
 import { NewsletterBanner } from './components/NewsletterBanner';
 
 // Services
@@ -171,18 +172,18 @@ function Header() {
     <>
       <header className="bg-[#003366] text-white sticky top-0 z-40 shadow-md w-full max-w-full font-sans">
         <div className="max-w-7xl mx-auto px-3 sm:px-5 lg:px-6 w-full">
-          <div className="flex items-center justify-between md:justify-center h-20 w-full gap-2.5 lg:gap-4 xl:gap-6">
+          <div className="flex items-center justify-between h-20 w-full gap-2 sm:gap-3 lg:gap-4 xl:gap-6">
             {/* Logo & Nom d'entreprise dynamique */}
-            <div className="shrink-0 flex items-center justify-center">
-              <Link to="/" className="flex items-center gap-2.5 group">
+            <div className="shrink-0 flex items-center">
+              <Link to="/" className="flex items-center gap-2 lg:gap-2.5 group">
                 {displayCompanyLogo ? (
                   <img
                     src={displayCompanyLogo}
                     alt={displayCompanyName}
-                    className="w-10 h-10 rounded-xl object-contain bg-white p-1 shadow-md border border-white/20 group-hover:scale-105 transition-transform duration-300"
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl object-contain bg-white p-1 shadow-md border border-white/20 group-hover:scale-105 transition-transform duration-300 shrink-0"
                   />
                 ) : (
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#FF6600] to-amber-600 flex items-center justify-center text-white shadow-md shadow-orange-950/20 border border-orange-400/30 group-hover:scale-105 transition-transform duration-300">
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-[#FF6600] to-amber-600 flex items-center justify-center text-white shadow-md shadow-orange-950/20 border border-orange-400/30 group-hover:scale-105 transition-transform duration-300 shrink-0">
                     <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 2L2 7l10 5 10-5-10-5z" />
                       <path d="M2 17l10 5 10-5" />
@@ -190,23 +191,23 @@ function Header() {
                     </svg>
                   </div>
                 )}
-                <div className="flex flex-col leading-none">
+                <div className="flex flex-col leading-none min-w-0">
                   <div className="flex items-center gap-1.5 whitespace-nowrap">
-                    <span className="text-white font-black tracking-tight text-base lg:text-lg xl:text-xl font-roboto">{displayCompanyName}</span>
+                    <span className="text-white font-black tracking-tight text-sm sm:text-base lg:text-lg xl:text-xl font-roboto truncate max-w-[160px] sm:max-w-[220px] lg:max-w-none">{displayCompanyName}</span>
                     {displayCompanyBadge && (
-                      <span className="bg-[#FF6600] text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded tracking-widest hidden sm:inline-block">{displayCompanyBadge}</span>
+                      <span className="bg-[#FF6600] text-white text-[9px] font-black uppercase px-1.5 py-0.5 rounded tracking-widest hidden sm:inline-block shrink-0">{displayCompanyBadge}</span>
                     )}
                   </div>
                   {displayCompanySubtitle && (
-                    <span className="text-[#FF6600] text-[9px] lg:text-[10px] font-extrabold tracking-[0.14em] uppercase mt-1 whitespace-nowrap">{displayCompanySubtitle}</span>
+                    <span className="text-[#FF6600] text-[8px] sm:text-[9px] lg:text-[10px] font-extrabold tracking-[0.14em] uppercase mt-1 whitespace-nowrap hidden lg:block truncate">{displayCompanySubtitle}</span>
                   )}
                 </div>
               </Link>
             </div>
 
             {/* Desktop Navigation */}
-            <nav className="hidden md:flex items-center justify-center gap-2.5 lg:gap-4 xl:gap-5 min-w-0">
-              <div className="flex items-center justify-center gap-2.5 lg:gap-3.5 xl:gap-4 shrink-0">
+            <nav className="hidden md:flex items-center justify-end lg:justify-center gap-2 lg:gap-3 xl:gap-4 flex-1 min-w-0 ml-2">
+              <div className="flex items-center justify-center gap-2 lg:gap-2.5 xl:gap-3 shrink-0">
                 <div
                   className="ze-cat-dropdown-wrapper shrink-0"
                   onMouseEnter={handleCatMouseEnter}
@@ -218,9 +219,9 @@ function Header() {
                       e.stopPropagation();
                       setCatOpen(!catOpen);
                     }}
-                    className="ze-cat-dropdown-btn whitespace-nowrap"
+                    className="ze-cat-dropdown-btn whitespace-nowrap text-[11px] lg:text-xs py-1.5 px-3"
                   >
-                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2.5" fill="none" style={{ marginRight: '6px', verticalAlign: 'middle', display: 'inline-block' }}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" strokeWidth="2.5" fill="none" style={{ marginRight: '5px', verticalAlign: 'middle', display: 'inline-block' }}>
                       <line x1="3" y1="12" x2="21" y2="12"></line>
                       <line x1="3" y1="6" x2="21" y2="6"></line>
                       <line x1="3" y1="18" x2="21" y2="18"></line>
@@ -269,46 +270,46 @@ function Header() {
                     </div>
                   </div>
                 </div>
-                <Link to="/services" className="hover:text-[#FF6600] transition-colors font-bold text-[11px] lg:text-xs uppercase tracking-wider whitespace-nowrap">
+                <Link to="/services" className="hover:text-[#FF6600] transition-colors font-bold text-[10px] lg:text-[11px] uppercase tracking-wider whitespace-nowrap hidden xl:inline-block">
                   {t('nav_services_short')}
                 </Link>
-                <Link to="/blog" className="hover:text-[#FF6600] transition-colors font-bold text-[11px] lg:text-xs uppercase tracking-wider whitespace-nowrap">
+                <Link to="/blog" className="hover:text-[#FF6600] transition-colors font-bold text-[10px] lg:text-[11px] uppercase tracking-wider whitespace-nowrap hidden xl:inline-block">
                   {t('nav_blog_guides')}
                 </Link>
-                <Link to="/contact" className="hover:text-[#FF6600] transition-colors font-bold text-[11px] lg:text-xs uppercase tracking-wider whitespace-nowrap">
+                <Link to="/contact" className="hover:text-[#FF6600] transition-colors font-bold text-[10px] lg:text-[11px] uppercase tracking-wider whitespace-nowrap hidden xl:inline-block">
                   {t('nav_contact')}
                 </Link>
               </div>
 
               {/* Search Bar */}
-              <div className="w-40 lg:w-56 xl:w-72 shrink min-w-[130px]">
+              <div className="w-28 sm:w-36 lg:w-44 xl:w-56 shrink min-w-[90px]">
                 <form onSubmit={handleSearch} className="relative">
                   <input 
                     type="text" 
                     placeholder={t('search_placeholder')} 
-                    className="w-full bg-white/15 border border-white/25 rounded-full py-2 px-4 pl-9 text-xs focus:bg-white focus:text-gray-900 focus:outline-none transition-all placeholder:text-white/70"
+                    className="w-full bg-white/15 border border-white/25 rounded-full py-1.5 px-3 pl-8 text-xs focus:bg-white focus:text-gray-900 focus:outline-none transition-all placeholder:text-white/70"
                     value={searchQuery}
                     onChange={(e) => handleSearchInputChange(e.target.value)}
                   />
-                  <button type="submit" className="absolute left-3 top-1/2 -translate-y-1/2">
+                  <button type="submit" className="absolute left-2.5 top-1/2 -translate-y-1/2">
                     <Icons.Search className="w-3.5 h-3.5 text-white/70" />
                   </button>
                 </form>
               </div>
               
-              <div className="flex items-center justify-center gap-2.5 lg:gap-3.5 border-l border-white/20 pl-3 lg:pl-4 shrink-0">
-                <Link to="/cart" className="relative hover:text-[#FF6600] transition-colors" title={t('nav_cart')}>
-                  <ShoppingCart className="w-5 h-5 lg:w-6 lg:h-6" />
+              <div className="flex items-center justify-end gap-1.5 sm:gap-2 lg:gap-2.5 border-l border-white/20 pl-2 lg:pl-3 shrink-0">
+                <Link to="/cart" className="relative hover:text-[#FF6600] transition-colors p-1" title={t('nav_cart')}>
+                  <ShoppingCart className="w-4 sm:w-5 h-4 sm:h-5" />
                   {items.length > 0 && (
-                    <span className="absolute -top-2 -right-2 bg-[#FF6600] text-white text-[10px] font-bold w-4 h-4 lg:w-5 lg:h-5 rounded-full flex items-center justify-center shadow-sm">
+                    <span className="absolute -top-1 -right-1 bg-[#FF6600] text-white text-[8px] sm:text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow-sm">
                       {items.reduce((acc, item) => acc + item.quantity, 0)}
                     </span>
                   )}
                 </Link>
                 
-                <Link to={user ? "/account" : "/login"} className="flex items-center gap-1.5 hover:text-[#FF6600] transition-colors whitespace-nowrap">
-                  <User className="w-5 h-5 lg:w-6 lg:h-6 shrink-0" />
-                  <span className="text-[11px] lg:text-xs font-extrabold uppercase tracking-wider hidden lg:inline max-w-[110px] truncate">
+                <Link to={user ? "/account" : "/login"} className="flex items-center gap-1 hover:text-[#FF6600] transition-colors whitespace-nowrap p-1">
+                  <User className="w-4 sm:w-5 h-4 sm:h-5 shrink-0" />
+                  <span className="text-[10px] lg:text-[11px] font-extrabold uppercase tracking-wider hidden lg:inline max-w-[85px] truncate">
                     {user ? (profile?.displayName || t('nav_account')) : t('nav_login')}
                   </span>
                 </Link>
@@ -316,20 +317,21 @@ function Header() {
                 {isAdmin && (
                   <Link 
                     to="/admin" 
-                    className="hidden md:flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-orange-600/20 text-[#FF6600] border border-orange-500/40 hover:bg-[#FF6600] hover:text-white transition-all text-[11px] font-bold uppercase tracking-wider whitespace-nowrap"
+                    className="hidden md:flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-lg bg-orange-600/20 text-[#FF6600] border border-orange-500/40 hover:bg-[#FF6600] hover:text-white transition-all text-[9px] sm:text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
                     title="Accéder au Back-Office Administrateur"
                   >
-                    <Shield className="w-3.5 h-3.5 shrink-0" />
-                    <span>{t('nav_admin')}</span>
+                    <Shield className="w-3 h-3 shrink-0" />
+                    <span className="hidden lg:inline">{t('nav_admin')}</span>
                   </Link>
                 )}
 
-                <div className="flex items-center gap-1 shrink-0 bg-white/10 border border-white/15 rounded-lg px-2 py-1">
-                  <Globe className="w-3.5 h-3.5 text-[#FF6600] shrink-0" />
+                {/* Multilingual Selector - Always visible on desktop & tablet */}
+                <div className="flex items-center gap-1 shrink-0 bg-white/10 border border-white/15 rounded-lg px-1.5 py-0.5">
+                  <Globe className="w-3 h-3 text-[#FF6600] shrink-0" />
                   <select 
                     value={language}
                     onChange={(e) => setLanguage(e.target.value as any)}
-                    className="bg-transparent text-[11px] font-bold focus:outline-none cursor-pointer text-white"
+                    className="bg-transparent text-[10px] font-bold focus:outline-none cursor-pointer text-white"
                     title="Langue / Language"
                   >
                     <option value="fr" className="text-gray-900">FR</option>
@@ -342,11 +344,27 @@ function Header() {
             </nav>
 
             {/* Mobile Header Actions */}
-            <div className="md:hidden flex items-center gap-3">
+            <div className="md:hidden flex items-center gap-2">
+              {/* Mobile Multilingual Selector - Never disappears */}
+              <div className="flex items-center gap-1 shrink-0 bg-white/10 border border-white/15 rounded-lg px-2 py-1">
+                <Globe className="w-3.5 h-3.5 text-[#FF6600] shrink-0" />
+                <select 
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value as any)}
+                  className="bg-transparent text-[11px] font-bold focus:outline-none cursor-pointer text-white"
+                  title="Langue / Language"
+                >
+                  <option value="fr" className="text-gray-900">FR</option>
+                  <option value="en" className="text-gray-900">EN</option>
+                  <option value="es" className="text-gray-900">ES</option>
+                  <option value="zh" className="text-gray-900">ZH</option>
+                </select>
+              </div>
+
               <Link to="/cart" className="relative p-2 text-white hover:text-[#FF6600]">
-                <ShoppingCart className="w-6 h-6" />
+                <ShoppingCart className="w-5 h-5" />
                 {items.length > 0 && (
-                  <span className="absolute -top-1 -right-1 bg-[#FF6600] text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+                  <span className="absolute -top-0.5 -right-0.5 bg-[#FF6600] text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
                     {items.length}
                   </span>
                 )}
@@ -359,7 +377,7 @@ function Header() {
                 className="p-2 text-white hover:text-[#FF6600] focus:outline-none rounded-xl bg-white/10 border border-white/15 cursor-pointer"
                 aria-label="Ouvrir le menu de navigation mobile"
               >
-                <Menu className="h-6 w-6" />
+                <Menu className="h-5 w-5" />
               </button>
             </div>
           </div>
@@ -402,14 +420,14 @@ function Header() {
           className="fixed inset-0 bg-slate-950/60 cursor-pointer"
         />
 
-        {/* Slide-out Sidebar Drawer in White with Dark Text */}
+        {/* Slide-out Sidebar Drawer with Smooth Vertical Scrolling */}
         <div
-          className={`relative w-4/5 max-w-sm bg-white text-gray-900 h-full shadow-2xl flex flex-col z-50 overflow-hidden border-r border-gray-200 will-change-transform transition-transform duration-150 ease-out ${
+          className={`fixed top-0 bottom-0 left-0 w-4/5 max-w-sm bg-white text-gray-900 h-full max-h-[100dvh] shadow-2xl flex flex-col z-50 overflow-hidden border-r border-gray-200 will-change-transform transition-transform duration-150 ease-out ${
             isDrawerOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >
           {/* Drawer Header */}
-          <div className="p-4 bg-white border-b border-gray-100 flex items-center justify-between">
+          <div className="p-4 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
             <Link to="/" onClick={() => setIsDrawerOpen(false)} className="flex items-center gap-2.5">
               {displayCompanyLogo ? (
                 <img
@@ -442,8 +460,8 @@ function Header() {
             </button>
           </div>
 
-          {/* Drawer Nav Links (Uniform Professional Light Color & Dark Typography) */}
-          <div className="flex-1 overflow-y-auto p-3.5 space-y-2 text-xs">
+          {/* Drawer Nav Links - Smooth Vertical Scroll (touch-pan-y & overscroll-contain) */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain p-3.5 space-y-2 text-xs touch-pan-y" style={{ WebkitOverflowScrolling: 'touch' }}>
             {/* Catalog & Categories Accordion */}
             <div className="rounded-xl overflow-hidden bg-gray-50 border border-gray-200">
               <div className="flex items-center justify-between p-3 hover:bg-gray-100 transition-colors">
@@ -501,6 +519,15 @@ function Header() {
             >
               <BookOpen className="w-4 h-4 text-gray-600 shrink-0" />
               <span>{t('nav_blog_guides')}</span>
+            </Link>
+
+            <Link
+              to="/faq"
+              onClick={() => setIsDrawerOpen(false)}
+              className="flex items-center gap-2.5 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 font-semibold transition-colors"
+            >
+              <HelpCircle className="w-4 h-4 text-gray-600 shrink-0" />
+              <span>Questions Fréquentes & Support</span>
             </Link>
 
             <Link
@@ -1006,8 +1033,8 @@ function AppLayout() {
     { id: '1', label: t('nav_catalog'), url: '/shop' },
     { id: '2', label: t('nav_services'), url: '/services' },
     { id: '3', label: t('nav_blog_guides'), url: '/blog' },
-    { id: '4', label: t('nav_quote'), url: '/contact' },
-    { id: '5', label: t('footer_custom_sourcing'), url: '/services' }
+    { id: '4', label: 'Questions Fréquentes & Support Client', url: '/faq' },
+    { id: '5', label: t('nav_contact'), url: '/contact' }
   ];
   const footerPaymentsTitle = siteSettings.footerPaymentsTitle || t('footer_payments_title');
   const footerPaymentsDesc = siteSettings.footerPaymentsDesc || t('footer_payments_desc');
@@ -1019,7 +1046,8 @@ function AppLayout() {
   const footerCopyright = siteSettings.footerCopyrightText || `${companyName}. ${t('footer_rights')}`;
   const footerBottomLinks = siteSettings.footerBottomLinks && siteSettings.footerBottomLinks.length > 0 ? siteSettings.footerBottomLinks : [
     { id: '1', label: t('footer_terms'), url: '/services' },
-    { id: '2', label: t('footer_privacy'), url: '/contact' }
+    { id: '2', label: 'Questions Fréquentes (FAQ)', url: '/faq' },
+    { id: '3', label: t('footer_privacy'), url: '/contact' }
   ];
 
   return (
@@ -1039,6 +1067,8 @@ function AppLayout() {
           <Route path="/services" element={<Services />} />
           <Route path="/blog" element={<Blog />} />
           <Route path="/blog/:slug" element={<Blog />} />
+          <Route path="/faq" element={<FaqPage />} />
+          <Route path="/questions-frequentes" element={<FaqPage />} />
           <Route path="/contact" element={<Contact />} />
           <Route path="/login" element={<Login />} />
           <Route path="/account" element={<Account />} />

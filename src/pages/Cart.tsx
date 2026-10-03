@@ -377,8 +377,7 @@ export default function Cart() {
       return;
     }
     if (!customerPhone.trim()) {
-      setUseSavedAddress(false);
-      setCheckoutError("Veuillez renseigner un numéro de téléphone joignable (Wave / Orange Money).");
+      setCheckoutError("Veuillez renseigner votre numéro de téléphone joignable (requis pour le suivi de commande et la livraison).");
       return;
     }
 
@@ -650,11 +649,11 @@ export default function Cart() {
                 rel="noopener noreferrer"
                 className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs text-center flex items-center justify-center gap-2 shadow-md transition-all"
               >
-                <span>Envoyer justificatif via WhatsApp</span>
+                <span>Envoyer justificatif via WhatsApp (Optionnel)</span>
               </a>
             </div>
-            <div className="text-[11px] text-slate-400 border-t border-slate-800 pt-2.5">
-              ✅ Dès réception de votre ordre de virement ou bordereau, votre commande passe immédiatement au statut validé et la préparation logistique est enclenchée.
+            <div className="text-[11px] text-slate-300 bg-slate-950/80 p-3 rounded-xl border border-slate-800 leading-relaxed">
+              ℹ️ <strong>Information de prise en compte :</strong> La transmission d'une preuve ou d'un reçu bancaire est <strong>optionnelle</strong>. La validation définitive de votre commande et la préparation logistique seront formellement enclenchées <strong>dès confirmation de la bonne réception des fonds par notre établissement bancaire</strong>.
             </div>
           </div>
         )}
@@ -798,77 +797,6 @@ export default function Cart() {
                 )}
               </div>
             </div>
-
-            {/* Bandeau unique d'entrepôt de regroupement + option unique pour afficher les pays pris en charge */}
-            {sourcingItemsCount > 0 && (
-              <div className="mb-4 p-3 bg-slate-50 border border-slate-200/90 rounded-xl text-xs space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-gray-700">
-                    <Truck className="w-4 h-4 text-[#003366] shrink-0" />
-                    <span>
-                      Expédition regroupée via :{' '}
-                      <strong className="text-[#003366]">
-                        {unifiedCartWarehouse.hasAssignedWarehouse
-                          ? `${unifiedCartWarehouse.warehouse.name}${unifiedCartWarehouse.warehouse.country ? ` (${unifiedCartWarehouse.warehouse.country})` : ''}`
-                          : 'Transit International Standard'}
-                      </strong>
-                      <span className="text-gray-400 ml-1.5 text-[11px]">
-                        (calcul de fret individuel par article)
-                      </span>
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {isDeliveryCountrySupported(effectiveDeliveryCountry, unifiedCartWarehouse.supportedDeliveryCountries) ? (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
-                        ✓ Livré vers {effectiveDeliveryCountry}
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-800 border border-red-300 text-[10px] font-bold">
-                        ✕ Non livré vers {effectiveDeliveryCountry}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setShowSupportedCountries(prev => !prev)}
-                      className="text-[10px] font-bold text-[#003366] hover:text-[#FF6600] bg-white border border-slate-200 px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
-                    >
-                      <Globe className="w-3 h-3 text-[#FF6600]" />
-                      <span>
-                        {showSupportedCountries
-                          ? 'Masquer les pays pris en charge ▲'
-                          : `Pays pris en charge (${unifiedCartWarehouse.supportedDeliveryCountries.length}) ▼`}
-                      </span>
-                    </button>
-                  </div>
-                </div>
-
-                {showSupportedCountries && (
-                  <div className="pt-2 border-t border-slate-200/80 flex flex-wrap items-center gap-1.5 text-[10px]">
-                    <span className="font-bold text-gray-500 mr-1">Pays desservis :</span>
-                    {unifiedCartWarehouse.supportedDeliveryCountries.map(country => (
-                      <span
-                        key={country}
-                        className={`px-2 py-0.5 rounded-md font-semibold border ${
-                          country.toLowerCase() === effectiveDeliveryCountry.toLowerCase()
-                            ? 'bg-[#003366] text-white border-[#003366]'
-                            : 'bg-white text-gray-700 border-gray-200'
-                        }`}
-                      >
-                        {country}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-2.5 pt-2 border-t border-slate-200/60 text-[10px] text-gray-500 flex items-start gap-1.5">
-                  <span className="text-[#FF6600] font-bold">ℹ</span>
-                  <span>
-                    Les tarifs de fret dépendent des barèmes réels de nos compagnies logistiques partenaires maritimes et aériennes. Le dédouanement maritime est généralement pris en charge et géré par les services logistiques de tous nos agents transitaires. Pour le fret aérien, les expéditions peuvent parfois faire l'objet d'un contrôle ou blocage temporaire en douane pour régularisation des formalités de dédouanement.
-                  </span>
-                </div>
-              </div>
-            )}
 
             <div className="divide-y divide-gray-100">
               {items.map((item) => {
@@ -1040,21 +968,10 @@ export default function Cart() {
 
           {/* Formulaire Coordonnées Client (strictly B2B/Client side, never shared with supplier) */}
           <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">
-                  Coordonnées de Facturation & Livraison ({effectiveDeliveryCountry})
-                </h3>
-                <p className="text-[11px] text-gray-500 mt-0.5">
-                  Votre pays par défaut (<strong>{defaultClientCountry}</strong>) est appliqué automatiquement si vous n'en renseignez pas un nouveau.
-                </p>
-              </div>
-              {user && (
-                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-50 text-[#003366] border border-blue-200 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-blue-600" />
-                  Compte connecté : {user.email}
-                </span>
-              )}
+            <div className="flex items-center justify-between gap-2 pb-1 border-b border-gray-100">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-gray-800">
+                Coordonnées de Facturation & Livraison
+              </h3>
             </div>
 
             {hasUndeliverableCountryItems && (
@@ -1139,6 +1056,21 @@ export default function Cart() {
                       <p className="text-[10px] text-gray-500 pl-5">
                         {customerName || user.displayName || user.email} • Pays : {defaultClientCountry} {customerPhone ? `• ${customerPhone}` : ''} {customerAddress ? `• ${customerAddress}` : ''}
                       </p>
+                      {!customerPhone && (
+                        <div className="mt-2.5 pt-2 border-t border-blue-200/60 pl-5" onClick={(e) => e.stopPropagation()}>
+                          <label className="block text-[10px] font-bold text-orange-600 uppercase mb-1">
+                            ⚠️ Numéro de téléphone requis pour la livraison *
+                          </label>
+                          <input
+                            type="tel"
+                            required
+                            value={customerPhone}
+                            onChange={(e) => setCustomerPhone(e.target.value)}
+                            placeholder="Ex: +221 77 123 45 67"
+                            className="w-full bg-white border border-orange-300 rounded-lg px-2.5 py-1.5 text-xs text-gray-900 font-bold focus:outline-none focus:ring-1 focus:ring-[#003366]"
+                          />
+                        </div>
+                      )}
                     </button>
 
                     <button

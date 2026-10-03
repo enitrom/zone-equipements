@@ -62,6 +62,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
   const [offersAirFreight, setOffersAirFreight] = useState(true);
   const [offersSeaFreight, setOffersSeaFreight] = useState(true);
   const [airFreightPerKgXOF, setAirFreightPerKgXOF] = useState<number>(7000);
+  const [airFreightPerCbmXOF, setAirFreightPerCbmXOF] = useState<number>(0);
   const [airFreightDurationDays, setAirFreightDurationDays] = useState('7 à 12 jours');
   const [seaFreightPerKgXOF, setSeaFreightPerKgXOF] = useState<number>(1800);
   const [seaFreightPerCbmXOF, setSeaFreightPerCbmXOF] = useState<number>(240000);
@@ -106,6 +107,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
     setOffersAirFreight(true);
     setOffersSeaFreight(true);
     setAirFreightPerKgXOF(7000);
+    setAirFreightPerCbmXOF(0);
     setAirFreightDurationDays('7 à 12 jours');
     setSeaFreightPerKgXOF(1800);
     setSeaFreightPerCbmXOF(240000);
@@ -138,6 +140,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
     setOffersAirFreight(wh.offersAirFreight !== false);
     setOffersSeaFreight(wh.offersSeaFreight !== false);
     setAirFreightPerKgXOF(wh.airFreightPerKgXOF || 7000);
+    setAirFreightPerCbmXOF(wh.airFreightPerCbmXOF || 0);
     setAirFreightDurationDays(wh.airFreightDurationDays || '7 à 12 jours');
     setSeaFreightPerKgXOF(wh.seaFreightPerKgXOF || 1800);
     setSeaFreightPerCbmXOF(wh.seaFreightPerCbmXOF || 240000);
@@ -181,6 +184,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
       offersAirFreight,
       offersSeaFreight: !offersAirFreight && !offersSeaFreight ? true : offersSeaFreight,
       airFreightPerKgXOF: Number(airFreightPerKgXOF) || 7000,
+      airFreightPerCbmXOF: Number(airFreightPerCbmXOF) || 0,
       airFreightDurationDays: airFreightDurationDays.trim() || '7 à 12 jours',
       seaFreightPerKgXOF: Number(seaFreightPerKgXOF) || 1800,
       seaFreightPerCbmXOF: Number(seaFreightPerCbmXOF) || 240000,
@@ -583,16 +587,28 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                   />
                 </label>
                 {offersAirFreight && (
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Tarif Aérien (FCFA / kg)</label>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Tarif / kg (FCFA)</label>
                       <input
                         type="number"
                         min="0"
                         step="100"
                         value={airFreightPerKgXOF}
                         onChange={e => setAirFreightPerKgXOF(Number(e.target.value))}
-                        className="w-full px-2.5 py-1.5 text-xs text-black placeholder:text-slate-400 font-bold border border-slate-300 rounded-lg bg-white"
+                        className="w-full px-2 py-1.5 text-xs text-black placeholder:text-slate-400 font-bold border border-slate-300 rounded-lg bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Tarif / m³ (FCFA)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="5000"
+                        value={airFreightPerCbmXOF}
+                        onChange={e => setAirFreightPerCbmXOF(Number(e.target.value))}
+                        placeholder="Optionnel"
+                        className="w-full px-2 py-1.5 text-xs text-black placeholder:text-slate-400 font-bold border border-slate-300 rounded-lg bg-white"
                       />
                     </div>
                     <div>
@@ -602,7 +618,7 @@ export const AgentWarehouseManagerModal: React.FC<AgentWarehouseManagerModalProp
                         value={airFreightDurationDays}
                         onChange={e => setAirFreightDurationDays(e.target.value)}
                         placeholder="7 à 12 jours"
-                        className="w-full px-2.5 py-1.5 text-xs text-black placeholder:text-slate-400 border border-slate-300 rounded-lg bg-white"
+                        className="w-full px-2 py-1.5 text-xs text-black placeholder:text-slate-400 border border-slate-300 rounded-lg bg-white"
                       />
                     </div>
                   </div>

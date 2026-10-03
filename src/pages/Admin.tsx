@@ -7,7 +7,7 @@ import {
   TrendingUp, Truck, Layers, FileText, CheckCircle2, Eye, Globe, Settings,
   Image as ImageIcon, MessageSquare, Send, Mail, Phone, ExternalLink, HelpCircle,
   ShieldCheck, LogIn, AlertCircle, LogOut, FileSpreadsheet, Warehouse, Star, MapPin,
-  Activity, Store
+  Activity, Store, Receipt, ArrowRight
 } from 'lucide-react';
 import { 
   catalogService, ExtendedProduct, ProductVariantItem, PdfDocumentItem, Order, Supplier, AgentWarehouse, AuditLog, EXCHANGE_RATES, cleanBrand,
@@ -38,6 +38,7 @@ import AdminNotificationsBell from '../components/admin/AdminNotificationsBell';
 import { EmailMarketingManager } from '../components/admin/EmailMarketingManager';
 import { DirectInvoiceModal } from '../components/admin/DirectInvoiceModal';
 import { PhysicalStorePOS } from '../components/admin/PhysicalStorePOS';
+import { TvaFiscaliteManager } from '../components/admin/TvaFiscaliteManager';
 import { WORLD_COUNTRIES, resolveCanonicalCountryName } from '../utils/countries';
 
 export default function Admin() {
@@ -45,7 +46,34 @@ export default function Admin() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const [activeTab, setActiveTab] = useState<'pos' | 'finance' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'campaigns' | 'security' | 'firewall'>('pos');
+  const currentUserEmail = (user?.email || '').toLowerCase().trim();
+  const isPrimaryOwner = currentUserEmail === 'enitrom@gmail.com';
+  const adminPerms = siteSettingsService.getAdminPermissions(currentUserEmail);
+
+  const isTabAllowed = (tab: string): boolean => {
+    if (isPrimaryOwner) return true;
+    if (tab === 'pos') return Boolean(adminPerms.pos);
+    if (tab === 'catalog') return Boolean(adminPerms.catalog);
+    if (tab === 'orders') return Boolean(adminPerms.orders);
+    if (tab === 'suppliers' || tab === 'warehouses') return Boolean(adminPerms.suppliers);
+    if (tab === 'finance' || tab === 'analytics' || tab === 'campaigns' || tab === 'tva') return Boolean(adminPerms.finance);
+    if (tab === 'security' || tab === 'firewall' || tab === 'audit') return Boolean(adminPerms.security);
+    return true;
+  };
+
+  const getFirstAllowedTab = (): 'pos' | 'finance' | 'tva' | 'catalog' | 'orders' | 'suppliers' | 'security' => {
+    if (isTabAllowed('pos')) return 'pos';
+    if (isTabAllowed('catalog')) return 'catalog';
+    if (isTabAllowed('orders')) return 'orders';
+    if (isTabAllowed('suppliers')) return 'suppliers';
+    if (isTabAllowed('finance')) return 'finance';
+    if (isTabAllowed('security')) return 'security';
+    return 'pos';
+  };
+
+  const [activeTab, setActiveTab] = useState<'pos' | 'finance' | 'tva' | 'catalog' | 'orders' | 'suppliers' | 'warehouses' | 'audit' | 'analytics' | 'campaigns' | 'security' | 'firewall'>(() => {
+    return getFirstAllowedTab();
+  });
   const [catalogSubTab, setCatalogSubTab] = useState<'products' | 'structure'>('products');
   const [showDirectInvoiceModal, setShowDirectInvoiceModal] = useState(false);
   
@@ -281,13 +309,23 @@ export default function Admin() {
 
   useEffect(() => {
     const tabParam = searchParams.get('tab');
-    if (tabParam === 'catalog-structure') {
+    if (tabParam === 'catalog-structure' && isTabAllowed('catalog')) {
       setActiveTab('catalog');
       setCatalogSubTab('structure');
-    } else if (tabParam === 'orders' || tabParam === 'suppliers' || tabParam === 'security' || tabParam === 'catalog' || tabParam === 'finance') {
-      setActiveTab(tabParam);
+    } else if (tabParam && ['pos', 'orders', 'suppliers', 'security', 'catalog', 'finance', 'analytics', 'campaigns', 'firewall', 'warehouses', 'audit'].includes(tabParam)) {
+      if (isTabAllowed(tabParam)) {
+        setActiveTab(tabParam as any);
+      } else {
+        setActiveTab(getFirstAllowedTab());
+      }
     }
-  }, [searchParams]);
+  }, [searchParams, currentUserEmail, adminPerms]);
+
+  useEffect(() => {
+    if (!isTabAllowed(activeTab)) {
+      setActiveTab(getFirstAllowedTab());
+    }
+  }, [activeTab, currentUserEmail, adminPerms]);
 
   useEffect(() => {
     refreshData();
@@ -818,13 +856,14 @@ export default function Admin() {
     catalogService.updateProduct(prod.id, {
       inStock: !nextIsSourcing,
       availabilityMode: nextIsSourcing ? 'sourcing' : 'stock',
-      shippingMethod: nextIsSourcing ? (prod.shippingMethod === 'none' ? 'air' : (prod.shippingMethod || 'air')) : 'none'
+      defaultShippingMethod: 'sea',
+      shippingMethod: 'sea'
     });
     refreshData();
     triggerToast(
       nextIsSourcing
-        ? `"${prod.name}" configuré en Article à Sourcer (Sur commande).`
-        : `"${prod.name}" configuré en Disponible Immédiatement (Stock Local Dakar).`
+        ? `"${prod.name}" configuré en Article à Sourcer (Sur commande). Fret par défaut : Maritime.`
+        : `"${prod.name}" configuré en Disponible Immédiatement (Stock Local Dakar). Fret par défaut : Maritime.`
     );
   };
 
@@ -1277,8 +1316,8 @@ export default function Admin() {
       specs: translatedFinalSpecs,
       options: normalizedImportOpts,
       variants: normalizedImportOpts,
-      img: allImgs[0] || DEFAULT_PRODUCT_IMAGE,
-      image: allImgs[0] || DEFAULT_PRODUCT_IMAGE,
+      img: allImgs[0] || '',
+      image: allImgs[0] || '',
       images: allImgs,
       isOnline: true,
       inStock: !isSourcingImport,
@@ -1487,10 +1526,12 @@ export default function Admin() {
             <span>Boutique</span>
           </a>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-[11px] sm:text-xs font-semibold max-w-[140px] sm:max-w-none truncate">
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-[11px] sm:text-xs font-semibold max-w-[220px] truncate">
             <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-            <span className="hidden md:inline truncate">{user?.email}</span>
-            <span className="md:hidden">Admin</span>
+            <span className="hidden sm:inline truncate">{user?.email}</span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold shrink-0">
+              {isPrimaryOwner ? 'Super Admin' : 'Admin Délégué'}
+            </span>
           </div>
 
           <button
@@ -1507,90 +1548,196 @@ export default function Admin() {
         </div>
       </header>
 
-      {/* Navigation Tabs — Architecture Ergonomique 6 Piliers (Zéro débordement horizontal, 100% accessible) */}
+      {/* Navigation Tabs — Architecture Ergonomique 6 Piliers filtrée selon les rôles & autorisations */}
       <nav aria-label="Navigation principale administration" className="max-w-7xl mx-auto px-4 sm:px-8 mt-6">
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-2 p-2 bg-slate-950/90 rounded-2xl border border-slate-800/90 shadow-xl">
-          <button
-            type="button"
-            onClick={() => setActiveTab('pos')}
-            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-black text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
-              activeTab === 'pos'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20'
-            }`}
-          >
-            <Store className="w-4 h-4 shrink-0" />
-            <span className="truncate">Magasin Physique</span>
-          </button>
+        {/* Version Mobile / Tablette : Grille empilée et réorganisée */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:hidden gap-2 p-2 bg-slate-950/90 rounded-2xl border border-slate-800/90 shadow-xl">
+          {isTabAllowed('pos') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('pos')}
+              className={`flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'pos'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20'
+              }`}
+            >
+              <Store className="w-4 h-4 shrink-0" />
+              <span className="truncate">Magasin POS</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('catalog')}
-            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
-              activeTab === 'catalog'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
-            }`}
-          >
-            <Package className="w-4 h-4 shrink-0" />
-            <span className="truncate">Catalogue ({products.length})</span>
-          </button>
+          {isTabAllowed('catalog') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('catalog')}
+              className={`flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'catalog'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="truncate">Catalogue ({products.length})</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('orders')}
-            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
-              activeTab === 'orders'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
-            }`}
-          >
-            <ShoppingCart className="w-4 h-4 shrink-0" />
-            <span className="truncate">Commandes ({orders.length})</span>
-          </button>
+          {isTabAllowed('orders') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('orders')}
+              className={`flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'orders'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <ShoppingCart className="w-4 h-4 shrink-0" />
+              <span className="truncate">Commandes ({orders.length})</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab(activeTab === 'warehouses' ? 'warehouses' : 'suppliers')}
-            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
-              activeTab === 'suppliers' || activeTab === 'warehouses'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
-            }`}
-          >
-            <Users className="w-4 h-4 shrink-0" />
-            <span className="truncate">Sourcing & Transit ({suppliers.length})</span>
-          </button>
+          {isTabAllowed('suppliers') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab(activeTab === 'warehouses' ? 'warehouses' : 'suppliers')}
+              className={`flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'suppliers' || activeTab === 'warehouses'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              <span className="truncate">Sourcing ({suppliers.length})</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab(activeTab === 'analytics' || activeTab === 'campaigns' ? activeTab : 'finance')}
-            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
-              activeTab === 'finance' || activeTab === 'analytics' || activeTab === 'campaigns'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4 shrink-0" />
-            <span className="truncate">Finance & Pilotage</span>
-          </button>
+          {isTabAllowed('finance') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab(activeTab === 'analytics' || activeTab === 'campaigns' || activeTab === 'tva' ? activeTab : 'finance')}
+              className={`flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'finance' || activeTab === 'analytics' || activeTab === 'campaigns' || activeTab === 'tva'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4 shrink-0" />
+              <span className="truncate">Finance</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setActiveTab(activeTab === 'firewall' || activeTab === 'audit' ? activeTab : 'security')}
-            className={`flex items-center justify-center sm:justify-start gap-2.5 px-3.5 py-3 rounded-xl font-bold text-[11px] sm:text-xs uppercase tracking-wider transition-all cursor-pointer ${
-              activeTab === 'security' || activeTab === 'audit' || activeTab === 'firewall'
-                ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
-                : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
-            }`}
-          >
-            <Settings className="w-4 h-4 shrink-0" />
-            <span className="truncate">Paramètres & Sécurité</span>
-          </button>
+          {isTabAllowed('security') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab(activeTab === 'firewall' || activeTab === 'audit' ? activeTab : 'security')}
+              className={`flex items-center justify-center sm:justify-start gap-2.5 px-3 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'security' || activeTab === 'audit' || activeTab === 'firewall'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <Settings className="w-4 h-4 shrink-0" />
+              <span className="truncate">Sécurité</span>
+            </button>
+          )}
+        </div>
+
+        {/* Version Desktop : Défilement horizontal fluide sans tronquer les textes */}
+        <div className="hidden lg:flex items-center gap-2 p-2 bg-slate-950/90 rounded-2xl border border-slate-800/90 shadow-xl overflow-x-auto no-scrollbar scroll-smooth">
+          {isTabAllowed('pos') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('pos')}
+              className={`shrink-0 whitespace-nowrap flex items-center gap-2.5 px-4 py-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'pos'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20'
+              }`}
+            >
+              <Store className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">Magasin Physique & POS</span>
+            </button>
+          )}
+
+          {isTabAllowed('catalog') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('catalog')}
+              className={`shrink-0 whitespace-nowrap flex items-center gap-2.5 px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'catalog'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <Package className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">Catalogue & Matériels ({products.length})</span>
+            </button>
+          )}
+
+          {isTabAllowed('orders') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('orders')}
+              className={`shrink-0 whitespace-nowrap flex items-center gap-2.5 px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'orders'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <ShoppingCart className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">Commandes, Devis & Factures ({orders.length})</span>
+            </button>
+          )}
+
+          {isTabAllowed('suppliers') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab(activeTab === 'warehouses' ? 'warehouses' : 'suppliers')}
+              className={`shrink-0 whitespace-nowrap flex items-center gap-2.5 px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'suppliers' || activeTab === 'warehouses'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">Fournisseurs & Transit ({suppliers.length})</span>
+            </button>
+          )}
+
+          {isTabAllowed('finance') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab(activeTab === 'analytics' || activeTab === 'campaigns' || activeTab === 'tva' ? activeTab : 'finance')}
+              className={`shrink-0 whitespace-nowrap flex items-center gap-2.5 px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'finance' || activeTab === 'analytics' || activeTab === 'campaigns' || activeTab === 'tva'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">Finance, Pilotage & Trafic</span>
+            </button>
+          )}
+
+          {isTabAllowed('security') && (
+            <button
+              type="button"
+              onClick={() => setActiveTab(activeTab === 'firewall' || activeTab === 'audit' ? activeTab : 'security')}
+              className={`shrink-0 whitespace-nowrap flex items-center gap-2.5 px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-all cursor-pointer ${
+                activeTab === 'security' || activeTab === 'audit' || activeTab === 'firewall'
+                  ? 'bg-[#FF6600] text-white shadow-lg shadow-orange-600/30'
+                  : 'text-slate-300 hover:text-white hover:bg-slate-900 border border-transparent'
+              }`}
+            >
+              <Settings className="w-4 h-4 shrink-0" />
+              <span className="whitespace-nowrap">Paramètres & Sécurité</span>
+            </button>
+          )}
         </div>
 
         {/* Sub-Navigation Contextuelle pour les pôles regroupés (Ergonomie 1-clic sans redondance) */}
-        {(activeTab === 'finance' || activeTab === 'analytics' || activeTab === 'campaigns') && (
+        {(activeTab === 'finance' || activeTab === 'analytics' || activeTab === 'campaigns' || activeTab === 'tva') && (
           <div className="flex flex-wrap items-center gap-2 mt-3 p-1.5 bg-slate-950/70 border border-slate-800/80 rounded-xl">
             <button
               type="button"
@@ -1601,6 +1748,16 @@ export default function Admin() {
             >
               <BarChart3 className="w-3.5 h-3.5" />
               <span>Chiffre d'Affaires & Marges</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('tva')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'tva' ? 'bg-slate-800 text-orange-400 border border-orange-500/40 shadow' : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Suivi TVA & Fiscalité DGID</span>
             </button>
             <button
               type="button"
@@ -1704,8 +1861,40 @@ export default function Admin() {
         {activeTab === 'analytics' && (
           <AnalyticsTrafficManager />
         )}
+
+        {/* ================= TAB: TVA & FISCALITÉ DGID / SYSCOHADA ================= */}
+        {activeTab === 'tva' && (
+          <TvaFiscaliteManager orders={orders} onNotify={(msg) => triggerToast(msg)} />
+        )}
+
         {activeTab === 'finance' && (
           <div className="space-y-6 animate-fadeIn">
+            {/* Bannière d'accès direct au Suivi TVA DGID */}
+            <div className="p-4 bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 rounded-2xl border border-orange-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-orange-500/20 text-orange-400 flex items-center justify-center shrink-0">
+                  <Receipt className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                    <span>Suivi & Déclaration TVA (DGID Sénégal & SYSCOHADA)</span>
+                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">Module Fiscal Conforme</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Journal de collecte TVA 18%, exportations exonérées (Art. 358 bis CGI) et exports comptables SYSCOHADA (Comptes 701, 706, 4431, 4111).
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('tva')}
+                className="px-4 py-2 bg-[#FF6600] hover:bg-orange-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-md cursor-pointer"
+              >
+                <span>Ouvrir le Tableau Fiscal TVA</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
             {/* Top 4 KPI Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 shadow-xl relative overflow-hidden">
@@ -2814,9 +3003,14 @@ export default function Admin() {
           <div className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-3xl max-h-[92vh] overflow-y-auto shadow-2xl p-6 sm:p-8">
             <div className="flex justify-between items-center pb-4 border-b border-slate-800">
               <div>
-                <h3 className="text-lg font-bold text-white">
-                  {editingProduct ? 'Éditer la Fiche Produit' : 'Ajout Manuel de Matériel'}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-bold text-white">
+                    {editingProduct ? 'Éditer la Fiche Produit' : 'Ajout Manuel de Matériel'}
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9px] font-bold inline-flex items-center gap-1">
+                    ✨ Assisté par IA
+                  </span>
+                </div>
                 <p className="text-xs text-slate-400 mt-0.5">Calculateur automatique de prix de vente, fret et gestion multi-images</p>
               </div>
               <button 
@@ -2832,8 +3026,9 @@ export default function Admin() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider">
-                      Désignation du Produit / Matériel *
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>Désignation du Produit / Matériel *</span>
+                      <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9px] font-bold">✨ IA Traduction FR</span>
                     </label>
                     <button
                       type="button"
@@ -2858,8 +3053,9 @@ export default function Admin() {
 
                 {/* Description Technique Traduite & Reformulée */}
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5">
-                    Description Technique (Traduite & Reformulée en Français)
+                  <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                    <span>Description Technique (Traduite & Reformulée en Français)</span>
+                    <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9px] font-bold">✨ Synthèse IA</span>
                   </label>
                   <textarea
                     rows={2}
@@ -4455,7 +4651,7 @@ export default function Admin() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     type="button"
-                    onClick={() => setFormProduct({ ...formProduct, inStock: true, availabilityMode: 'stock' })}
+                    onClick={() => setFormProduct({ ...formProduct, inStock: true, availabilityMode: 'stock', defaultShippingMethod: 'sea', shippingMethod: 'sea' })}
                     className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
                       formProduct.availabilityMode === 'stock' || (formProduct.availabilityMode !== 'sourcing' && formProduct.inStock !== false)
                         ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-md'
@@ -4469,13 +4665,13 @@ export default function Admin() {
                       )}
                     </div>
                     <p className="text-[11px] text-slate-300">
-                      En Stock Local à Dakar • Livraison 24h-48h • Aucun fret international ajouté au panier.
+                      En Stock Local à Dakar • Livraison 24h-48h • Fret maritime par défaut conservé si basculé sur commande.
                     </p>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => setFormProduct({ ...formProduct, inStock: false, availabilityMode: 'sourcing' })}
+                    onClick={() => setFormProduct({ ...formProduct, inStock: false, availabilityMode: 'sourcing', defaultShippingMethod: 'sea', shippingMethod: 'sea' })}
                     className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
                       formProduct.availabilityMode === 'sourcing' || formProduct.inStock === false
                         ? 'bg-orange-950/60 border-orange-500 text-white shadow-md'
@@ -4489,10 +4685,74 @@ export default function Admin() {
                       )}
                     </div>
                     <p className="text-[11px] text-slate-300">
-                      Importation sur commande • Active le choix Fret Aérien / Maritime sur la fiche et au panier.
+                      Importation sur commande • Fret par défaut maritime (Maritime) toujours conservé.
                     </p>
                   </button>
                 </div>
+
+                {/* Bloc spécifique obligatoire : Prix d'achat & TVA pour produit Disponible Immédiatement */}
+                {(formProduct.availabilityMode === 'stock' || (formProduct.availabilityMode !== 'sourcing' && formProduct.inStock !== false)) && (
+                  <div className="p-3.5 bg-emerald-950/40 rounded-xl border border-emerald-500/40 space-y-3 mt-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Gestion Obligatoire TVA & Prix d'Achat (Dispo Immédiate Dakar)
+                      </span>
+                      <span className="text-[10px] text-emerald-300 font-semibold bg-emerald-900/60 px-2 py-0.5 rounded">
+                        DGID & SYSCOHADA Conforme
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                          Prix d'Achat Fournisseur / Coût Revient HT (FCFA) *
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={formProduct.costPrice ?? ''}
+                          onChange={(e) => setFormProduct({ ...formProduct, costPrice: parseFloat(e.target.value) || 0 })}
+                          placeholder="Ex: 45 000 FCFA HT"
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                        />
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Compte SYSCOHADA 601 (Achats de marchandises). Utilisé pour le suivi des marges réelles.
+                        </span>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                          Régime de TVA Applicable *
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setFormProduct({ ...formProduct, applyVat: true, vatRate: 0.18 })}
+                            className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                              formProduct.applyVat !== false
+                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                                : 'bg-slate-900 text-slate-400 border-slate-700'
+                            }`}
+                          >
+                            ✓ TVA 18% (Régime Réel)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setFormProduct({ ...formProduct, applyVat: false, vatRate: 0 })}
+                            className={`flex-1 py-2 px-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                              formProduct.applyVat === false
+                                ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                                : 'bg-slate-900 text-slate-400 border-slate-700'
+                            }`}
+                          >
+                            0% (Exonéré / CGU)
+                          </button>
+                        </div>
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Compte SYSCOHADA 4431 (TVA Collectée 18% ou Article 358 bis / 283 du CGI).
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
@@ -4586,8 +4846,9 @@ export default function Admin() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="sm:col-span-2">
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
-                        <label className="block text-[11px] font-bold text-slate-300">
-                          Titre / Désignation en Français (Traduit & Reformulé) :
+                        <label className="block text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                          <span>Titre / Désignation en Français :</span>
+                          <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9px] font-bold">✨ IA Traduit & Reformulé</span>
                         </label>
                         <button
                           type="button"
@@ -4609,8 +4870,9 @@ export default function Admin() {
                     </div>
 
                     <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                        Description Technique (Traduite & Reformulée en FR) :
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1 flex items-center gap-1.5">
+                        <span>Description Technique (FR) :</span>
+                        <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9px] font-bold">✨ Synthèse IA</span>
                       </label>
                       <textarea
                         rows={2}
@@ -4622,8 +4884,9 @@ export default function Admin() {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-300 mb-1">
-                        Marque Constructeur Réelle :
+                      <label className="block text-[11px] font-bold text-slate-300 mb-1 flex items-center gap-1.5">
+                        <span>Marque Constructeur Réelle :</span>
+                        <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9px] font-bold">✦ Détection IA</span>
                       </label>
                       <input
                         type="text"
@@ -4637,8 +4900,9 @@ export default function Admin() {
 
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[11px] font-bold text-slate-300">
-                          Catégorie Assignée :
+                        <label className="block text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                          <span>Catégorie Assignée :</span>
+                          <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[9px] font-bold">✦ IA Classification</span>
                         </label>
                         <button
                           type="button"
@@ -5746,8 +6010,9 @@ export default function Admin() {
 
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[11px] font-semibold text-slate-400">
-                          Poids (kg, g, lb, oz, t) *
+                        <label className="block text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                          <span>Poids (kg, g, lb...) *</span>
+                          <span className="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[8px] font-bold">🤖 IA</span>
                         </label>
                         <span className="text-[10px] font-mono text-emerald-400 font-bold">
                           = {importForm.weightInput ? (parseWeightToKg(importForm.weightInput) || importForm.weight || 0) : (importForm.weight || 0)} kg
@@ -5771,9 +6036,12 @@ export default function Admin() {
                     </div>
 
                     <div>
-                      <label className="block text-[11px] font-semibold text-slate-400 mb-1">
-                        Dimensions L x l x H
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] font-semibold text-slate-400 flex items-center gap-1">
+                          <span>Dimensions L x l x H</span>
+                          <span className="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 text-[8px] font-bold">🤖 IA</span>
+                        </label>
+                      </div>
                       <input
                         type="text"
                         value={importForm.dimensions}

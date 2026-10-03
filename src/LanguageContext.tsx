@@ -1472,6 +1472,26 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setLanguageState(lang);
     if (typeof window !== 'undefined') {
       localStorage.setItem('ze_app_language', lang);
+
+      // Trigger Google Translate engine seamlessly
+      try {
+        const targetCode = lang === 'zh' ? 'zh-CN' : lang;
+        if (lang === 'fr') {
+          document.cookie = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+          document.cookie = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; domain=' + window.location.hostname + ';';
+        } else {
+          document.cookie = `googtrans=/fr/${targetCode}; path=/;`;
+          document.cookie = `googtrans=/fr/${targetCode}; path=/; domain=${window.location.hostname};`;
+        }
+
+        const selectEl = document.querySelector('.goog-te-combo') as HTMLSelectElement | null;
+        if (selectEl) {
+          selectEl.value = targetCode;
+          selectEl.dispatchEvent(new Event('change'));
+        }
+      } catch {
+        // ignore
+      }
     }
   };
 
