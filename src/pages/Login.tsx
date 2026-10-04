@@ -13,7 +13,7 @@ import { doc, setDoc, collection, getDocs } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import {
   Mail, Lock, LogIn, AlertCircle, Copy, Check,
-  KeyRound, RefreshCw, ArrowLeft, ShieldCheck, User, Info, Globe
+  KeyRound, RefreshCw, ArrowLeft, ShieldCheck, User, Info, Globe, Building2
 } from 'lucide-react';
 import { isUserAdmin } from '../AuthContext';
 import { siteSettingsService } from '../services/siteSettingsService';
@@ -23,6 +23,10 @@ export default function Login() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [clientType, setClientType] = useState<'b2c' | 'b2b'>('b2c');
+  const [companyName, setCompanyName] = useState('');
+  const [ninea, setNinea] = useState('');
+  const [rccm, setRccm] = useState('');
   const [defaultCountry, setDefaultCountry] = useState<string>(
     () => siteSettingsService.getSettings()?.defaultClientCountry || 'Sénégal'
   );
@@ -301,6 +305,10 @@ export default function Login() {
           email: cleanEmail,
           emailLower: cleanEmail,
           displayName: displayName.trim() || cred.user.displayName || cleanEmail.split('@')[0],
+          clientType: clientType || 'b2c',
+          company: clientType === 'b2b' ? companyName.trim() : '',
+          ninea: clientType === 'b2b' ? ninea.trim() : '',
+          rccm: clientType === 'b2b' ? rccm.trim() : '',
           country: resolvedCountry,
           city: resolvedCountry === 'Sénégal' ? 'Dakar' : '',
           likedProductIds: localLikedIds,
@@ -414,19 +422,95 @@ export default function Login() {
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
             {!isLogin && (
               <>
+                {/* Type de Client : Particulier ou Entreprise */}
                 <div>
-                  <label className="block font-bold text-gray-700 uppercase mb-1">Nom Complet ou Société</label>
+                  <label className="block font-bold text-gray-700 uppercase mb-1.5">Vous êtes : *</label>
+                  <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setClientType('b2c')}
+                      className={`py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        clientType === 'b2c'
+                          ? 'bg-[#003366] text-white shadow-xs'
+                          : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      <User className="w-3.5 h-3.5" />
+                      <span>Particulier</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setClientType('b2b')}
+                      className={`py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                        clientType === 'b2b'
+                          ? 'bg-[#003366] text-white shadow-xs'
+                          : 'text-gray-600 hover:text-gray-900'
+                      }`}
+                    >
+                      <Building2 className="w-3.5 h-3.5" />
+                      <span>Entreprise (B2B)</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-gray-700 uppercase mb-1">
+                    {clientType === 'b2b' ? 'Nom du Représentant / Acheteur *' : 'Nom & Prénom *'}
+                  </label>
                   <div className="relative">
                     <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                     <input
                       type="text"
+                      required
                       value={displayName}
                       onChange={(e) => setDisplayName(e.target.value)}
                       className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-[#FF6600] focus:border-transparent outline-none text-xs"
-                      placeholder="Ex: Babacar Sarr / Sahel BTP"
+                      placeholder={clientType === 'b2b' ? 'Ex: Babacar Sarr (Responsable Achats)' : 'Ex: Babacar Sarr'}
                     />
                   </div>
                 </div>
+
+                {clientType === 'b2b' && (
+                  <div className="space-y-3 p-3 bg-blue-50/70 border border-blue-200 rounded-xl animate-fadeIn">
+                    <div>
+                      <label className="block font-bold text-[#003366] uppercase mb-1">Raison Sociale / Société *</label>
+                      <div className="relative">
+                        <Building2 className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                        <input
+                          type="text"
+                          required
+                          value={companyName}
+                          onChange={(e) => setCompanyName(e.target.value)}
+                          className="w-full pl-10 pr-4 py-2 border border-gray-300 bg-white rounded-lg focus:ring-2 focus:ring-[#003366] outline-none text-xs text-gray-900 font-semibold"
+                          placeholder="Ex: Sahel BTP Industries SA"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block font-bold text-gray-700 text-[10px] uppercase mb-1">NINEA (Fiscal)</label>
+                        <input
+                          type="text"
+                          value={ninea}
+                          onChange={(e) => setNinea(e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 bg-white rounded-lg font-mono text-xs text-gray-900 focus:outline-none focus:border-[#003366]"
+                          placeholder="008921822"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-gray-700 text-[10px] uppercase mb-1">RCCM (Commerce)</label>
+                        <input
+                          type="text"
+                          value={rccm}
+                          onChange={(e) => setRccm(e.target.value)}
+                          className="w-full px-2.5 py-1.5 border border-gray-300 bg-white rounded-lg font-mono text-xs text-gray-900 focus:outline-none focus:border-[#003366]"
+                          placeholder="SN-DKR-2024-B-14892"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block font-bold text-gray-700 uppercase mb-1">Pays par défaut (Livraison) *</label>

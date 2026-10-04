@@ -441,6 +441,59 @@ export function downloadOrderPdf(
       y += rowH;
     });
 
+    // Rendu des prestations de services associées (Main d'œuvre, montage, formation, douane)
+    const services = order.services || [];
+    if (services.length > 0) {
+      services.forEach((srv, sIdx) => {
+        const lineTotal = Number(srv.totalHT || (srv.unitPriceHT * srv.quantity));
+        const designation = `[PRESTATION] ${srv.name}${srv.description ? ` - ${srv.description}` : ''}`;
+        const descLines = doc.splitTextToSize(sanitizePdfText(designation), colWidths[1] - 3);
+        const rowH = Math.max(7.5, descLines.length * 4.2 + 3);
+
+        if (y + rowH > pageHeight - 50) {
+          doc.addPage();
+          y = 16;
+        }
+
+        doc.setFillColor(241, 245, 249);
+        doc.rect(margin, y, contentWidth, rowH, 'F');
+        doc.setDrawColor(203, 213, 225);
+        doc.rect(margin, y, contentWidth, rowH, 'S');
+
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(8);
+
+        let cellX = margin;
+        doc.text(String(items.length + sIdx + 1), cellX + 2, y + 4.8);
+        cellX += colWidths[0];
+
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(0, 51, 102);
+        doc.text(descLines, cellX + 1.5, y + 4.5);
+        cellX += colWidths[1];
+
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(71, 85, 105);
+        doc.text('Service / SYSCOHADA 706', cellX + 1.5, y + 4.8);
+        cellX += colWidths[2];
+
+        doc.setFont('helvetica', 'bold');
+        doc.text(`x${srv.quantity}`, cellX + 2, y + 4.8);
+        cellX += colWidths[3];
+
+        doc.setFont('helvetica', 'normal');
+        doc.text(formatAmountPdf(srv.unitPriceHT), cellX + 1.5, y + 4.8);
+        cellX += colWidths[4];
+
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(15, 23, 42);
+        doc.text(formatAmountPdf(lineTotal), cellX + 1.5, y + 4.8);
+
+        y += rowH;
+      });
+    }
+
     y += 6;
 
     // Calcul des totaux

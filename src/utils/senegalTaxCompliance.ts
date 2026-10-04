@@ -3,21 +3,25 @@
  * 
  * Règles appliquées conformément au Code Général des Impôts (CGI) du Sénégal :
  * 1. Taux normal de TVA : 18% (Article 355 et suivants du CGI).
- * 2. Régime Réel & livraison au Sénégal (SN) -> TVA 18% obligatoire (calcul HT / TVA / TTC).
+ * 2. Vente Locale au Sénégal (SN) & Régime Réel -> TVA 18% de plein droit (calcul HT / TVA 18% / TTC).
  * 3. Livraison Hors Sénégal (Exportations sous-région UEMOA / International) :
- *    -> Taux 0% et mention légale obligatoire : "Exonéré de TVA — Art. 358 bis du CGI (Exportation)".
- * 4. Entreprises au Régime de la Contribution Globale Unique (CGU / Franchise en base) :
+ *    -> Taux 0% et mention légale obligatoire : "Exonéré de TVA — Art. 358 bis du CGI (Exportation Directe)".
+ * 4. Entreprises titulaires d'une attestation d'exonération DGID (Projets miniers/pétroliers, Code des Investissements) :
+ *    -> Taux 0% et mention légale obligatoire : "Exonéré de TVA — Attestation DGID N° [NUM] (Art. 358 du CGI)".
+ * 5. Entreprises au Régime de la Contribution Globale Unique (CGU / Franchise en base) :
  *    -> Taux 0% et mention légale obligatoire : "TVA non applicable — Article 283 du CGI".
  * 
  * Plan Comptable Général SYSCOHADA Révisé :
- * - Compte 701 : Ventes de marchandises (Produits MRO & Équipements)
- * - Compte 706 : Services vendus / Prestations de transport & transit international
- * - Compte 4431 : État, TVA facturée sur ventes (TVA Collectée)
- * - Compte 4111 : Clients - Ventes au comptant / Factures clients
- * - Compte 601 / 602 : Achats de marchandises & matières
+ * - Compte 7011 : Ventes de marchandises taxables à 18% (Local Sénégal)
+ * - Compte 7012 : Ventes de marchandises exonérées / Exportations 0%
+ * - Compte 706 : Prestations de transport, transit & fret international HT
+ * - Compte 4431 : État, TVA facturée sur ventes (TVA Collectée 18%)
+ * - Compte 4452 / 4454 : État, TVA déductible sur achats & fret
+ * - Compte 4111 : Clients - Créances et règlements TTC
  */
 
-export type TaxRegime = 'REEL' | 'CGU';
+export type TaxRegime = 'REEL' | 'CGU' | 'EXPORT' | 'EXONERE_DGID';
+export type CustomerType = 'b2b' | 'b2c';
 
 export interface SyscohadaAccountEntry {
   accountCode: string;
@@ -39,18 +43,24 @@ export interface TaxLineItem {
 
 export interface SenegalVatCalculationInput {
   taxRegime?: TaxRegime;
+  customerType?: CustomerType;
   deliveryCountry: string; // ex: 'Sénégal', 'SN', 'Mali', 'France', etc.
+  taxExemptionNumber?: string; // N° Attestation d'exonération fiscale DGID si B2B exonéré
   items: TaxLineItem[];
   freightCostHT?: number;
   discountHT?: number;
   defaultVatRate?: number; // 0.18
+  vatEnabled?: boolean; // Permet de désactiver globalement la TVA (ex: franchise)
 }
 
 export interface SenegalVatCalculationResult {
   taxRegime: TaxRegime;
+  customerType: CustomerType;
   deliveryCountry: string;
   isSenegalDelivery: boolean;
   isExport: boolean;
+  isTaxExempt: boolean;
+  taxExemptionNumber?: string;
   applicableVatRate: number; // 0.18 ou 0
   subtotalGoodsHT: number;
   freightHT: number;
@@ -81,8 +91,11 @@ export interface SyscohadaInvoiceLegalData {
   companyAddress: string;
   companyPhone: string;
   companyEmail: string;
+  clientType: CustomerType;
   clientName: string;
+  clientCompany?: string;
   clientNinea?: string;
+  clientRccm?: string;
   clientAddress?: string;
   clientCountry: string;
   taxCalculation: SenegalVatCalculationResult;
@@ -107,25 +120,40 @@ export function isDestinationSenegal(countryNameOrCode?: string): boolean {
  * Calculateur dynamique de TVA sénégalaise conforme DGID & SYSCOHADA
  */
 export function calculateSenegalVat(input: SenegalVatCalculationInput): SenegalVatCalculationResult {
-  const regime: TaxRegime = input.taxRegime === 'CGU' ? 'CGU' : 'REEL';
   const isSenegal = isDestinationSenegal(input.deliveryCountry);
   const isExport = !isSenegal;
+  const customerType: CustomerType = input.customerType || 'b2c';
+  const hasValidExemption = Boolean(input.taxExemptionNumber && input.taxExemptionNumber.trim().length >= 3);
 
-  // 1. Détermination du taux et des mentions légales obligatoires selon le CGI sénégalais
+  // Détermination du régime fiscal
+  let regime: TaxRegime = 'REEL';
+  if (input.vatEnabled === false || input.taxRegime === 'CGU') {
+    regime = 'CGU';
+  } else if (isExport) {
+    regime = 'EXPORT';
+  } else if (hasValidExemption) {
+    regime = 'EXONERE_DGID';
+  }
+
+  // 1. Détermination du taux effectif et de la mention légale obligatoire DGID
   let applicableVatRate = 0.18;
   let legalMention: string | undefined = undefined;
 
   if (regime === 'CGU') {
     applicableVatRate = 0;
-    legalMention = 'TVA non applicable — Article 283 du CGI (Régime CGU)';
-  } else if (isExport) {
+    legalMention = 'TVA non applicable — Article 283 du CGI (Franchise en base)';
+  } else if (regime === 'EXPORT') {
     applicableVatRate = 0;
-    legalMention = 'Exonéré de TVA — Art. 358 bis du CGI (Exportation)';
+    legalMention = 'Exonéré de TVA — Art. 358 bis du CGI (Exportation Directe)';
+  } else if (regime === 'EXONERE_DGID') {
+    applicableVatRate = 0;
+    legalMention = `Exonéré de TVA — Attestation DGID N° ${input.taxExemptionNumber?.trim()} (Art. 358 du CGI)`;
   } else {
     applicableVatRate = input.defaultVatRate !== undefined ? input.defaultVatRate : 0.18;
+    legalMention = undefined; // Pas de mention d'exonération requise lorsque la TVA est normalement facturée à 18%
   }
 
-  // 2. Calcul du sous-total Marchandises HT
+  // 2. Calcul des lignes et du sous-total Marchandises HT
   let subtotalGoodsHT = 0;
   const lineDetails: SenegalVatCalculationResult['lineDetails'] = [];
 
@@ -146,7 +174,7 @@ export function calculateSenegalVat(input: SenegalVatCalculationInput): SenegalV
       vatRate: itemVatRate,
       vatAmount: itemVat,
       lineTotalTTC: itemTTC,
-      syscohadaAccount: item.isServiceOrFreight ? '706' : '701'
+      syscohadaAccount: item.isServiceOrFreight ? '706' : (isExport ? '7012' : '7011')
     });
   }
 
@@ -154,24 +182,26 @@ export function calculateSenegalVat(input: SenegalVatCalculationInput): SenegalV
   const discountHT = Math.max(0, Math.round(input.discountHT || 0));
   const totalHT = Math.max(0, subtotalGoodsHT + freightHT - discountHT);
 
-  // Le fret international pour livraison au Sénégal est soumis à la TVA si régime réel
+  // Le fret international pour livraison locale au Sénégal est assujetti à la TVA 18%
   const freightVat = Math.round(freightHT * applicableVatRate);
   const goodsVat = lineDetails.reduce((sum, l) => sum + l.vatAmount, 0);
   const discountVat = Math.round(discountHT * applicableVatRate);
   const totalVatAmount = Math.max(0, goodsVat + freightVat - discountVat);
   const totalTTC = totalHT + totalVatAmount;
 
-  // 3. Génération des écritures comptables SYSCOHADA Révisé
+  // 3. Génération automatique du journal des écritures comptables SYSCOHADA Révisé
   const syscohadaEntries: SyscohadaAccountEntry[] = [
     {
       accountCode: '4111',
-      accountLabel: 'Clients - Créances clients / Ventes TTC',
+      accountLabel: 'Clients - Ventes & Créances clients TTC',
       debit: totalTTC,
       credit: 0
     },
     {
-      accountCode: '701',
-      accountLabel: 'Ventes de marchandises (Équipements industriels HT)',
+      accountCode: isExport ? '7012' : '7011',
+      accountLabel: isExport 
+        ? 'Ventes de marchandises à l\'exportation (0% CGI 358 bis)' 
+        : 'Ventes de marchandises industrielles HT (Sénégal 18%)',
       debit: 0,
       credit: Math.max(0, subtotalGoodsHT - discountHT)
     }
@@ -180,7 +210,7 @@ export function calculateSenegalVat(input: SenegalVatCalculationInput): SenegalV
   if (freightHT > 0) {
     syscohadaEntries.push({
       accountCode: '706',
-      accountLabel: 'Prestations de services / Fret & Transit international HT',
+      accountLabel: 'Prestations de transport & fret international HT',
       debit: 0,
       credit: freightHT
     });
@@ -189,7 +219,7 @@ export function calculateSenegalVat(input: SenegalVatCalculationInput): SenegalV
   if (totalVatAmount > 0) {
     syscohadaEntries.push({
       accountCode: '4431',
-      accountLabel: 'État, TVA facturée sur ventes (18%)',
+      accountLabel: 'État, TVA facturée sur ventes (18% DGID)',
       debit: 0,
       credit: totalVatAmount
     });
@@ -197,9 +227,12 @@ export function calculateSenegalVat(input: SenegalVatCalculationInput): SenegalV
 
   return {
     taxRegime: regime,
+    customerType,
     deliveryCountry: input.deliveryCountry || 'Sénégal',
     isSenegalDelivery: isSenegal,
     isExport,
+    isTaxExempt: applicableVatRate === 0,
+    taxExemptionNumber: input.taxExemptionNumber,
     applicableVatRate,
     subtotalGoodsHT,
     freightHT,
@@ -214,6 +247,13 @@ export function calculateSenegalVat(input: SenegalVatCalculationInput): SenegalV
 }
 
 /**
+ * Alias de compatibilité pour calcul rapide
+ */
+export function calculateSenegalTaxes(input: SenegalVatCalculationInput): SenegalVatCalculationResult {
+  return calculateSenegalVat(input);
+}
+
+/**
  * Génère le modèle de données JSON complet pour facture certifiée DGID/SYSCOHADA
  */
 export function buildSyscohadaInvoicePayload(params: {
@@ -222,8 +262,10 @@ export function buildSyscohadaInvoicePayload(params: {
   client: {
     name: string;
     company?: string;
+    clientType?: CustomerType;
     ninea?: string;
     rccm?: string;
+    taxExemptionNumber?: string;
     address?: string;
     country?: string;
     phone?: string;
@@ -238,13 +280,20 @@ export function buildSyscohadaInvoicePayload(params: {
     email?: string;
   };
   taxRegime?: TaxRegime;
+  vatEnabled?: boolean;
   items: TaxLineItem[];
   freightCostHT?: number;
   discountHT?: number;
 }): SyscohadaInvoiceLegalData {
+  const isB2B = Boolean(params.client.company || params.client.ninea || params.client.clientType === 'b2b');
+  const resolvedClientType: CustomerType = isB2B ? 'b2b' : 'b2c';
+
   const taxCalc = calculateSenegalVat({
     taxRegime: params.taxRegime || 'REEL',
+    customerType: resolvedClientType,
     deliveryCountry: params.client.country || 'Sénégal',
+    taxExemptionNumber: params.client.taxExemptionNumber,
+    vatEnabled: params.vatEnabled,
     items: params.items,
     freightCostHT: params.freightCostHT,
     discountHT: params.discountHT
@@ -259,8 +308,11 @@ export function buildSyscohadaInvoicePayload(params: {
     companyAddress: params.seller.address || 'Km 4, Boulevard du Centenaire, Dakar, Sénégal',
     companyPhone: params.seller.phone || '+221 76 653 83 84',
     companyEmail: params.seller.email || 'contact@zone-equipements.sn',
-    clientName: params.client.company ? `${params.client.company} (${params.client.name})` : params.client.name,
+    clientType: resolvedClientType,
+    clientName: params.client.name,
+    clientCompany: params.client.company,
     clientNinea: params.client.ninea,
+    clientRccm: params.client.rccm,
     clientAddress: params.client.address,
     clientCountry: params.client.country || 'Sénégal',
     taxCalculation: taxCalc

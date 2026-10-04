@@ -1962,10 +1962,23 @@ export interface SupplierPortalToken {
   response?: SupplierPortalResponse;
 }
 
+export interface OrderServiceItem {
+  id: string;
+  name: string; // Ex: "Installation et mise en service", "Main d'œuvre technique", "Formation opérateurs", "Transit et Douane"
+  description?: string;
+  unitPriceHT: number;
+  quantity: number;
+  totalHT: number;
+  vatRate?: number; // 0.18 ou 0
+  vatAmount?: number;
+  syscohadaAccount?: string; // '706' Prestations de services / transport
+}
+
 export interface Order {
   id: string;
   orderNumber: string;
   userId?: string;
+  clientType?: 'b2b' | 'b2c';
   customerName: string;
   customerCompany: string;
   customerEmail: string;
@@ -1974,8 +1987,14 @@ export interface Order {
   customerCity: string;
   customerCountry: string;
   ninea?: string;
+  rccm?: string;
+  taxExemptionNumber?: string;
+  taxRegime?: 'REEL' | 'CGU' | 'EXPORT' | 'EXONERE_DGID' | string;
+  legalMention?: string;
   items: OrderItem[];
+  services?: OrderServiceItem[]; // Prestations de services associées (Main d'œuvre, montage, formation, douane)
   subtotalHT: number;
+  servicesTotalHT?: number;
   freightTotalHT?: number;
   vatAmount: number; // 18% ou 0 si exonéré
   shippingTotal?: number;
@@ -2012,6 +2031,13 @@ export interface Order {
   agentCode?: string; // Code agent assigné sur chaque commande (ex: AGENT-DAKAR-01)
   agentWarehouseId?: string; // Entrepôt d'agent utilisé pour cette commande
   clientWarehouseId?: string; // Identifiant client anonyme pour réception entrepôt (ex: CLI-4829)
+  // Suivi Dédouanement & GAINDE Sénégal
+  customsDeclarationNumber?: string; // N° Déclaration GAINDE Sénégal
+  customsDpiNumber?: string; // N° DPI (Déclaration Préalable d'Importation)
+  customsBlNumber?: string; // N° Connaissement (B/L) ou LTA
+  customsOffice?: string; // Bureau de Douane (Port Autonome de Dakar, AIBD)
+  customsDutyAmount?: number; // Droits de Douane (DD)
+  customsStatus?: 'Non déclaré' | 'DPI Déposée' | 'En cours de dédouanement GAINDE' | 'Bon à Enlever (BAE)' | 'Dédouané' | string;
   createdAt: string;
   updatedAt: string;
 }
@@ -3959,6 +3985,112 @@ class CatalogService {
     this.saveOrders();
     setDoc(doc(db, 'orders', String(this.orders[index].id)), cleanUndefined(this.orders[index])).catch(() => {});
     this.logAction('PayDunya API', 'Confirmation Paiement PayDunya', `Commande ${this.orders[index].orderNumber} confirmée via PayDunya (${this.orders[index].paymentStatus})`, 'finance');
+    this.notifyOrdersChange();
+    return this.orders[index];
+  }
+
+  public addServiceToOrder(orderId: string, service: Omit<OrderServiceItem, 'id' | 'totalHT'>, author = 'Admin'): Order | null {
+    this.getOrders();
+    const index = this.orders.findIndex(o => o.id === orderId || o.orderNumber === orderId);
+    if (index === -1) return null;
+
+    const order = this.orders[index];
+    const qty = Math.max(1, service.quantity || 1);
+    const unitPriceHT = Math.max(0, service.unitPriceHT || 0);
+    const lineTotalHT = Math.round(unitPriceHT * qty);
+    
+    // Détermination de la TVA selon le pays et le régime
+    const isExport = (order.customerCountry || 'Sénégal').toLowerCase() !== 'sénégal' && (order.customerCountry || 'Sénégal').toLowerCase() !== 'senegal';
+    const isVatSystemActive = siteSettingsService.getSettings()?.vatEnabled !== false;
+    const vatRate = (isExport || !isVatSystemActive || order.taxRegime === 'EXONERE_DGID') ? 0 : (service.vatRate ?? 0.18);
+    const vatAmount = Math.round(lineTotalHT * vatRate);
+
+    const newService: OrderServiceItem = {
+      id: `srv-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      name: service.name,
+      description: service.description,
+      unitPriceHT,
+      quantity: qty,
+      totalHT: lineTotalHT,
+      vatRate,
+      vatAmount,
+      syscohadaAccount: service.syscohadaAccount || '706'
+    };
+
+    const currentServices = order.services || [];
+    const updatedServices = [...currentServices, newService];
+    
+    // Recalcul des totaux de la commande
+    const servicesTotalHT = updatedServices.reduce((sum, s) => sum + s.totalHT, 0);
+    const goodsTotalHT = (order.items || []).reduce((sum, it) => sum + ((it.unitPriceHT ?? it.price) * it.quantity), 0);
+    const freightHT = order.freightTotalHT ?? order.shippingTotal ?? 0;
+    const discountHT = order.discountAmount ?? 0;
+    const subtotalHT = goodsTotalHT + servicesTotalHT;
+    
+    // TVA totale
+    const goodsVat = (order.items || []).reduce((sum, it) => {
+      if (isExport || !isVatSystemActive || order.taxRegime === 'EXONERE_DGID') return 0;
+      return sum + Math.round(((it.unitPriceHT ?? it.price) * it.quantity + (it.freightCost || 0) * it.quantity) * 0.18);
+    }, 0);
+    const servicesVat = updatedServices.reduce((sum, s) => sum + (s.vatAmount || 0), 0);
+    const totalVat = goodsVat + servicesVat;
+    const totalTTC = Math.max(0, subtotalHT + freightHT - discountHT + totalVat);
+
+    this.orders[index] = {
+      ...order,
+      services: updatedServices,
+      servicesTotalHT,
+      subtotalHT,
+      vatAmount: totalVat,
+      totalTTC,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.saveOrders();
+    setDoc(doc(db, 'orders', String(order.id)), cleanUndefined(this.orders[index])).catch(() => {});
+    this.logAction(author, 'Ajout Prestation de Service', `Prestation "${service.name}" (${lineTotalHT.toLocaleString('fr-FR')} FCFA) ajoutée à la commande ${order.orderNumber}`, 'commande');
+    this.notifyOrdersChange();
+    return this.orders[index];
+  }
+
+  public removeServiceFromOrder(orderId: string, serviceId: string, author = 'Admin'): Order | null {
+    this.getOrders();
+    const index = this.orders.findIndex(o => o.id === orderId || o.orderNumber === orderId);
+    if (index === -1) return null;
+
+    const order = this.orders[index];
+    const updatedServices = (order.services || []).filter(s => s.id !== serviceId);
+    
+    const isExport = (order.customerCountry || 'Sénégal').toLowerCase() !== 'sénégal' && (order.customerCountry || 'Sénégal').toLowerCase() !== 'senegal';
+    const isVatSystemActive = siteSettingsService.getSettings()?.vatEnabled !== false;
+
+    const servicesTotalHT = updatedServices.reduce((sum, s) => sum + s.totalHT, 0);
+    const goodsTotalHT = (order.items || []).reduce((sum, it) => sum + ((it.unitPriceHT ?? it.price) * it.quantity), 0);
+    const freightHT = order.freightTotalHT ?? order.shippingTotal ?? 0;
+    const discountHT = order.discountAmount ?? 0;
+    const subtotalHT = goodsTotalHT + servicesTotalHT;
+    
+    const goodsVat = (order.items || []).reduce((sum, it) => {
+      if (isExport || !isVatSystemActive || order.taxRegime === 'EXONERE_DGID') return 0;
+      return sum + Math.round(((it.unitPriceHT ?? it.price) * it.quantity + (it.freightCost || 0) * it.quantity) * 0.18);
+    }, 0);
+    const servicesVat = updatedServices.reduce((sum, s) => sum + (s.vatAmount || 0), 0);
+    const totalVat = goodsVat + servicesVat;
+    const totalTTC = Math.max(0, subtotalHT + freightHT - discountHT + totalVat);
+
+    this.orders[index] = {
+      ...order,
+      services: updatedServices,
+      servicesTotalHT,
+      subtotalHT,
+      vatAmount: totalVat,
+      totalTTC,
+      updatedAt: new Date().toISOString()
+    };
+
+    this.saveOrders();
+    setDoc(doc(db, 'orders', String(order.id)), cleanUndefined(this.orders[index])).catch(() => {});
+    this.logAction(author, 'Suppression Prestation', `Prestation retirée de la commande ${order.orderNumber}`, 'commande');
     this.notifyOrdersChange();
     return this.orders[index];
   }

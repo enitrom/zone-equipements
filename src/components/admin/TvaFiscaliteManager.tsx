@@ -3,16 +3,10 @@ import {
   Receipt, 
   Download, 
   FileSpreadsheet, 
-  CheckCircle2, 
-  AlertCircle, 
-  ShieldCheck, 
   Building2, 
   Globe, 
-  TrendingUp, 
-  DollarSign, 
   Calendar, 
   Filter, 
-  Printer, 
   Info,
   Scale,
   FileText,
@@ -21,7 +15,6 @@ import {
 } from 'lucide-react';
 import { catalogService, Order } from '../../services/catalogService';
 import { siteSettingsService } from '../../services/siteSettingsService';
-import { calculateSenegalTaxes, DGIDTaxResult } from '../../utils/senegalTaxCompliance';
 
 interface TvaFiscaliteManagerProps {
   orders: Order[];
@@ -32,14 +25,14 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
   const [periodFilter, setPeriodFilter] = useState<'all' | 'month' | 'quarter' | 'year'>('month');
   const [regimeFilter, setRegimeFilter] = useState<'all' | 'taxable' | 'export_exempt' | 'franchise'>('all');
   const siteSettings = siteSettingsService.getSettings();
-  const isVatGloballyActive = siteSettings.enableVat !== false;
+  const isVatGloballyActive = siteSettings.vatEnabled !== false;
 
-  // Filtrer uniquement les commandes finalisées / validées
+  // Filtrer uniquement les commandes finalisées / validées pour la comptabilité
   const finalizedOrders = useMemo(() => {
     return orders.filter(o => catalogService.isOrderFinalizedForFinance(o));
   }, [orders]);
 
-  // Filtrage par période temporelle
+  // Filtrage par période temporelle et régime
   const filteredOrders = useMemo(() => {
     const now = new Date();
     const currentMonth = now.getMonth();
@@ -65,8 +58,9 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
       }
 
       // Filtrage par régime fiscal
-      const isExport = order.deliveryCountry && order.deliveryCountry.toLowerCase() !== 'sénégal' && order.deliveryCountry.toLowerCase() !== 'senegal';
-      const isVatCharged = Boolean(order.tva && order.tva > 0);
+      const country = order.customerCountry || 'Sénégal';
+      const isExport = country.toLowerCase() !== 'sénégal' && country.toLowerCase() !== 'senegal';
+      const isVatCharged = Boolean(order.vatAmount && order.vatAmount > 0);
 
       if (regimeFilter === 'taxable' && (!isVatCharged || isExport)) return false;
       if (regimeFilter === 'export_exempt' && !isExport) return false;
@@ -89,16 +83,17 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
     let b2cTva = 0;
 
     filteredOrders.forEach(o => {
-      const totalOrderTTC = o.total || 0;
-      const isExport = o.deliveryCountry && o.deliveryCountry.toLowerCase() !== 'sénégal' && o.deliveryCountry.toLowerCase() !== 'senegal';
-      const isB2B = Boolean(o.companyName || o.taxId || o.ninea || o.rccm || (o.customer && (o.customer as any).ninea));
+      const totalOrderTTC = o.totalTTC || 0;
+      const country = o.customerCountry || 'Sénégal';
+      const isExport = country.toLowerCase() !== 'sénégal' && country.toLowerCase() !== 'senegal';
+      const isB2B = Boolean(o.customerCompany || o.ninea);
       
       if (isExport) {
         baseExportExoneree += totalOrderTTC;
         totalTTC += totalOrderTTC;
-      } else if (o.tva && o.tva > 0) {
-        const orderHT = o.subtotal || Math.round(totalOrderTTC / 1.18);
-        const orderTVA = o.tva || (totalOrderTTC - orderHT);
+      } else if (o.vatAmount && o.vatAmount > 0) {
+        const orderHT = o.subtotalHT || Math.round(totalOrderTTC / 1.18);
+        const orderTVA = o.vatAmount || (totalOrderTTC - orderHT);
         baseTaxableHT += orderHT;
         tvaCollectee18 += orderTVA;
         totalTTC += totalOrderTTC;
@@ -119,7 +114,7 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
     });
 
     // Estimation forfaitaire de TVA déductible sur approvisionnements & fret (comptes 4452 / 4454)
-    const estimatedDeductibleVat = Math.round(baseTaxableHT * 0.10); // Estimation des charges déductibles locales
+    const estimatedDeductibleVat = Math.round(baseTaxableHT * 0.10);
     const netVatPayable = Math.max(0, tvaCollectee18 - estimatedDeductibleVat);
 
     return {
@@ -157,11 +152,12 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
     ];
 
     const rows = filteredOrders.map((o, idx) => {
-      const isExport = o.deliveryCountry && o.deliveryCountry.toLowerCase() !== 'sénégal' && o.deliveryCountry.toLowerCase() !== 'senegal';
-      const isB2B = Boolean(o.companyName || o.taxId || o.ninea || o.rccm);
-      const isVatCharged = Boolean(o.tva && o.tva > 0);
-      const ht = isExport ? o.total : (o.subtotal || Math.round(o.total / 1.18));
-      const tva = isExport ? 0 : (o.tva || (o.total - ht));
+      const country = o.customerCountry || 'Sénégal';
+      const isExport = country.toLowerCase() !== 'sénégal' && country.toLowerCase() !== 'senegal';
+      const isB2B = Boolean(o.customerCompany || o.ninea);
+      const isVatCharged = Boolean(o.vatAmount && o.vatAmount > 0);
+      const ht = isExport ? o.totalTTC : (o.subtotalHT || Math.round(o.totalTTC / 1.18));
+      const tva = isExport ? 0 : (o.vatAmount || (o.totalTTC - ht));
       const legalMention = isExport 
         ? 'Exonération TVA 0% Exportation (Art. 358 bis du CGI)'
         : (!isVatCharged ? 'Exonération TVA 0% Franchise en base (Art. 283 du CGI)' : 'TVA 18% de plein droit (Régime Réel)');
@@ -169,16 +165,16 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
       return [
         idx + 1,
         new Date(o.createdAt).toLocaleDateString('fr-FR'),
-        `"${o.id}"`,
-        `"${o.shippingAddress?.fullName || o.customer?.name || 'Client'}"`,
-        `"${o.taxId || o.ninea || o.rccm || 'N/A'}"`,
+        `"${o.orderNumber || o.id}"`,
+        `"${o.customerName || 'Client'}"`,
+        `"${o.ninea || 'N/A'}"`,
         isB2B ? 'B2B (Entreprise)' : 'B2C (Particulier)',
-        `"${o.deliveryCountry || 'Sénégal'}"`,
+        `"${country}"`,
         isExport ? 'Exportation 0%' : (isVatCharged ? 'Vente Locale 18%' : 'Franchise 0%'),
         ht,
         isExport ? '0%' : (isVatCharged ? '18%' : '0%'),
         tva,
-        o.total,
+        o.totalTTC,
         `"${legalMention}"`
       ].join(';');
     });
@@ -211,50 +207,51 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
     const entries: string[] = [];
 
     filteredOrders.forEach(o => {
-      const isExport = o.deliveryCountry && o.deliveryCountry.toLowerCase() !== 'sénégal' && o.deliveryCountry.toLowerCase() !== 'senegal';
+      const country = o.customerCountry || 'Sénégal';
+      const isExport = country.toLowerCase() !== 'sénégal' && country.toLowerCase() !== 'senegal';
       const dateStr = new Date(o.createdAt).toLocaleDateString('fr-FR');
-      const ht = isExport ? o.total : (o.subtotal || Math.round(o.total / 1.18));
-      const tva = isExport ? 0 : (o.tva || (o.total - ht));
-      const clientName = o.shippingAddress?.fullName || o.customer?.name || 'Client';
+      const ht = isExport ? o.totalTTC : (o.subtotalHT || Math.round(o.totalTTC / 1.18));
+      const tva = isExport ? 0 : (o.vatAmount || (o.totalTTC - ht));
+      const clientName = o.customerName || 'Client';
 
       // 1. Débit Compte 4111 (Créance Client) pour le Total TTC
       entries.push([
         dateStr,
-        `"${o.id}"`,
+        `"${o.orderNumber || o.id}"`,
         '4111',
         '"Clients Locaux et Régionaux"',
         '',
         '',
-        o.total,
+        o.totalTTC,
         '',
-        `"Facturation Vente ${o.id} - ${clientName}"`
+        `"Facturation Vente ${o.orderNumber || o.id} - ${clientName}"`
       ].join(';'));
 
       // 2. Crédit Compte 701 / 706 (Ventes Marchandises / Services HT)
       entries.push([
         dateStr,
-        `"${o.id}"`,
+        `"${o.orderNumber || o.id}"`,
         '',
         '',
         isExport ? '7012' : '7011',
         isExport ? '"Ventes Marchandises Exportation 0%"' : '"Ventes Marchandises Régime Réel HT"',
         '',
         ht,
-        `"CA Marchandises HT - ${o.id}"`
+        `"CA Marchandises HT - ${o.orderNumber || o.id}"`
       ].join(';'));
 
       // 3. Crédit Compte 4431 (TVA Collectée 18%) si applicable
       if (tva > 0) {
         entries.push([
           dateStr,
-          `"${o.id}"`,
+          `"${o.orderNumber || o.id}"`,
           '',
           '',
           '4431',
           '"État - TVA Facturée sur Ventes 18%"',
           '',
           tva,
-          `"TVA 18% DGID Sénégal sur facture ${o.id}"`
+          `"TVA 18% DGID Sénégal sur facture ${o.orderNumber || o.id}"`
         ].join(';'));
       }
     });
@@ -268,6 +265,62 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
     link.click();
     URL.revokeObjectURL(url);
     onNotify('Grand livre des écritures SYSCOHADA (Comptes 701, 706, 4431, 4111) exporté.');
+  };
+
+  // Export Déclarations Droits de Douane & DGD Sénégal (Système GAINDE)
+  const handleExportCustomsReport = () => {
+    const headers = [
+      'N° Dossier',
+      'Date Commande',
+      'Client',
+      'NINEA Client',
+      'Pays Destination',
+      'Statut Douane',
+      'N° Déclaration GAINDE',
+      'N° DPI / Titre Import',
+      'N° Connaissement / LTA',
+      'Bureau de Douane',
+      'Valeur Caf Marchandises HT',
+      'Fret International HT',
+      'Total Base Dédouanement',
+      'Droits & Taxes Estimés (DD+RS+PCS)'
+    ];
+
+    const rows = filteredOrders.map(o => {
+      const country = o.customerCountry || 'Sénégal';
+      const isExport = country.toLowerCase() !== 'sénégal' && country.toLowerCase() !== 'senegal';
+      const goodsHT = (o.items || []).reduce((s, it) => s + ((it.unitPriceHT ?? it.price) * it.quantity), 0);
+      const freightHT = o.freightTotalHT ?? o.shippingTotal ?? 0;
+      const baseCustoms = goodsHT + freightHT;
+      const estimatedDuties = isExport ? 0 : Math.round(baseCustoms * 0.22); // ~20% DD + 1% RS + 1% PCS
+
+      return [
+        `"${o.orderNumber || o.id}"`,
+        new Date(o.createdAt).toLocaleDateString('fr-FR'),
+        `"${o.customerCompany || o.customerName || 'Client'}"`,
+        `"${o.ninea || 'N/A'}"`,
+        `"${country}"`,
+        `"${o.customsStatus || (isExport ? 'Exportation Exonérée' : 'Dédouané Standard')}"`,
+        `"${o.customsDeclarationNumber || 'En cours GAINDE'}"`,
+        `"${o.customsDpiNumber || 'DPI Automatique'}"`,
+        `"${o.customsBlNumber || (o.trackingNumber || 'DAP Dakar')}"`,
+        `"${o.customsOffice || 'Port Autonome de Dakar (PAD)'}"`,
+        goodsHT,
+        freightHT,
+        baseCustoms,
+        estimatedDuties
+      ].join(';');
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(';'), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Registre_Douanes_GAINDE_Senegal_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    onNotify('Registre des déclarations de Douane (GAINDE) exporté.');
   };
 
   return (
@@ -298,7 +351,7 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
           <button
             type="button"
             onClick={handleExportDGIDReport}
-            className="px-3.5 py-2 bg-[#003366] hover:bg-[#002244] text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-md cursor-pointer"
+            className="px-3 py-2 bg-[#003366] hover:bg-[#002244] text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md cursor-pointer"
             title="Télécharger le fichier de déclaration mensuelle pour la DGID Sénégal"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
@@ -307,8 +360,18 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
 
           <button
             type="button"
+            onClick={handleExportCustomsReport}
+            className="px-3 py-2 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 border border-emerald-700/60 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md cursor-pointer"
+            title="Exporter le registre des déclarations douanières GAINDE / DGD Sénégal"
+          >
+            <Scale className="w-4 h-4 text-emerald-400" />
+            <span>Douane & GAINDE</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleExportSyscohadaLedger}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 border border-slate-700 shadow-md cursor-pointer"
+            className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 border border-slate-700 shadow-md cursor-pointer"
             title="Exporter les écritures pour le logiciel comptable (SYSCOHADA révisé)"
           >
             <Download className="w-4 h-4 text-orange-400" />
@@ -547,12 +610,13 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
             </thead>
             <tbody className="divide-y divide-slate-800/60">
               {filteredOrders.map(order => {
-                const isExport = order.deliveryCountry && order.deliveryCountry.toLowerCase() !== 'sénégal' && order.deliveryCountry.toLowerCase() !== 'senegal';
-                const isVatCharged = Boolean(order.tva && order.tva > 0);
-                const ht = isExport ? order.total : (order.subtotal || Math.round(order.total / 1.18));
-                const tva = isExport ? 0 : (order.tva || (order.total - ht));
-                const clientName = order.shippingAddress?.fullName || order.customer?.name || 'Client';
-                const ninea = order.taxId || order.ninea || order.rccm || 'N/A';
+                const country = order.customerCountry || 'Sénégal';
+                const isExport = country.toLowerCase() !== 'sénégal' && country.toLowerCase() !== 'senegal';
+                const isVatCharged = Boolean(order.vatAmount && order.vatAmount > 0);
+                const ht = isExport ? order.totalTTC : (order.subtotalHT || Math.round(order.totalTTC / 1.18));
+                const tva = isExport ? 0 : (order.vatAmount || (order.totalTTC - ht));
+                const clientName = order.customerName || 'Client';
+                const ninea = order.ninea || 'N/A';
 
                 return (
                   <tr key={order.id} className="hover:bg-slate-900/50 transition-colors">
@@ -560,7 +624,7 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
                       {new Date(order.createdAt).toLocaleDateString('fr-FR')}
                     </td>
                     <td className="py-2.5 px-3 font-mono font-bold text-white">
-                      {order.id}
+                      {order.orderNumber || order.id}
                     </td>
                     <td className="py-2.5 px-3">
                       <div className="font-semibold text-slate-200">{clientName}</div>
@@ -576,7 +640,7 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
                               ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' 
                               : 'bg-amber-500/20 text-amber-300 border border-amber-500/30')
                       }`}>
-                        {isExport ? `✈️ Export (${order.deliveryCountry || 'Int.'})` : (isVatCharged ? '🇸🇳 Sénégal 18%' : '🇸🇳 Franchise 0%')}
+                        {isExport ? `✈️ Export (${country})` : (isVatCharged ? '🇸🇳 Sénégal 18%' : '🇸🇳 Franchise 0%')}
                       </span>
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-300">
@@ -586,7 +650,7 @@ export const TvaFiscaliteManager: React.FC<TvaFiscaliteManagerProps> = ({ orders
                       {tva > 0 ? `${tva.toLocaleString('fr-FR')} F` : '0 F'}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono font-black text-white">
-                      {order.total.toLocaleString('fr-FR')} F
+                      {order.totalTTC.toLocaleString('fr-FR')} F
                     </td>
                     <td className="py-2.5 px-3">
                       {isExport ? (

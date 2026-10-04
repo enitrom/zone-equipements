@@ -11,6 +11,7 @@ import { siteSettingsService, PromoCode } from '../services/siteSettingsService'
 import { getProductImageUrl, handleImageError } from '../constants';
 import { downloadOrderPdf } from '../utils/printDocument';
 import { useLanguage } from '../LanguageContext';
+import { isDestinationSenegal } from '../utils/senegalTaxCompliance';
 import {
   WORLD_COUNTRIES,
   DEFAULT_SUPPORTED_DELIVERY_COUNTRIES,
@@ -73,12 +74,23 @@ export default function Cart() {
     return catalogService.getEffectiveClientCountry(profile);
   }, [profile, savedLocalProfile]);
 
+  const [customerType, setCustomerType] = useState<'b2c' | 'b2b'>(() => {
+    return ((profile as any)?.company || savedLocalProfile.company || (profile as any)?.ninea) ? 'b2b' : 'b2c';
+  });
   const [customerName, setCustomerName] = useState(
     profile?.displayName || user?.displayName || savedLocalProfile.displayName || ''
   );
   const [customerCompany, setCustomerCompany] = useState(
     (profile as any)?.company || savedLocalProfile.company || ''
   );
+  const [customerNinea, setCustomerNinea] = useState(
+    (profile as any)?.ninea || savedLocalProfile.ninea || ''
+  );
+  const [customerRccm, setCustomerRccm] = useState(
+    (profile as any)?.rccm || savedLocalProfile.rccm || ''
+  );
+  const [isTaxExemptDgId, setIsTaxExemptDgId] = useState(false);
+  const [taxExemptionNumber, setTaxExemptionNumber] = useState('');
   const [customerPhone, setCustomerPhone] = useState(
     (profile as any)?.phone || savedLocalProfile.phone || ''
   );
@@ -305,8 +317,16 @@ export default function Cart() {
 
   const discountedSubtotalHT = Math.max(0, subtotalHT - promoDiscountAmount);
 
-  // Itemized VAT respecting product setting & global site setting
+  const isSenegalDelivery = isDestinationSenegal(effectiveDeliveryCountry);
+  const isExport = !isSenegalDelivery;
+  const isVatSystemActive = siteSettings.vatEnabled !== false;
+  const hasTaxExemptionVisa = customerType === 'b2b' && isTaxExemptDgId && taxExemptionNumber.trim().length >= 3;
+
+  // Itemized VAT respecting product setting, destination country, and tax exemption
   const vatAmount = items.reduce((sum, item) => {
+    if (!isVatSystemActive || isExport || hasTaxExemptionVisa) {
+      return 0;
+    }
     const prod = allProducts.find(p => String(p.id) === String(item.productId));
     const isVatActive = prod?.applyVat !== undefined 
       ? Boolean(prod.applyVat) 
@@ -452,9 +472,27 @@ export default function Cart() {
 
     const orderExpiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 
+    const resolvedTaxRegime = !isVatSystemActive 
+      ? 'CGU' 
+      : (isExport 
+          ? 'EXPORT' 
+          : (hasTaxExemptionVisa ? 'EXONERE_DGID' : 'REEL'));
+
+    const resolvedLegalMention = isExport
+      ? 'Exonéré de TVA — Art. 358 bis du CGI (Exportation Directe)'
+      : (hasTaxExemptionVisa
+          ? `Exonéré de TVA — Attestation DGID N° ${taxExemptionNumber.trim()} (Art. 358 du CGI)`
+          : (!isVatSystemActive ? 'TVA non applicable — Article 283 du CGI (Franchise en base)' : undefined));
+
     const newOrder = catalogService.createOrder({
+      clientType: customerType,
       customerName: customerName || profile?.displayName || user?.displayName || 'Client Zone Équipements',
       customerCompany: customerCompany || (profile as any)?.company || undefined,
+      ninea: customerNinea.trim() || (profile as any)?.ninea || undefined,
+      rccm: customerRccm.trim() || (profile as any)?.rccm || undefined,
+      taxExemptionNumber: hasTaxExemptionVisa ? taxExemptionNumber.trim() : undefined,
+      taxRegime: resolvedTaxRegime,
+      legalMention: resolvedLegalMention,
       customerEmail: user?.email || 'contact@client.sn',
       customerPhone: customerPhone || (profile as any)?.phone || '',
       customerAddress: customerAddress || (profile as any)?.address || 'Dakar Plateau / Zone Industrielle',
@@ -475,7 +513,9 @@ export default function Cart() {
         appliedPromo ? `Code Promo appliqué: ${appliedPromo.code} (-${promoDiscountAmount.toLocaleString('fr-FR')} FCFA).` : '',
         (hasDepositProduct && paymentChoice === 'deposit') 
           ? `Acompte versé à la commande : ${depositAmountTTC.toLocaleString('fr-FR')} FCFA (${depositPct}%). Solde exigible à la livraison à Dakar : ${balanceAmountTTC.toLocaleString('fr-FR')} FCFA.`
-          : ''
+          : '',
+        hasTaxExemptionVisa ? `Exonération TVA DGID N° ${taxExemptionNumber.trim()}` : '',
+        isExport ? `Exportation directe vers ${effectiveDeliveryCountry} (Taux 0% Art. 358 bis CGI)` : ''
       ].filter(Boolean).join(' ') || undefined
     });
 
@@ -1097,82 +1137,170 @@ export default function Cart() {
 
                 {/* Form fields: strictly folded when default address is selected, unfolded when custom address is selected */}
                 {!useSavedAddress && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2 animate-fadeIn">
-                    <div>
-                      <label className="block font-semibold text-gray-700 mb-1">Nom du Contact *</label>
-                      <input
-                        type="text"
-                        required
-                        value={customerName}
-                        onChange={(e) => setCustomerName(e.target.value)}
-                        placeholder="Ex: Ibrahima Diallo"
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-semibold text-gray-700 mb-1">Entreprise / Société (Optionnel)</label>
-                      <input
-                        type="text"
-                        value={customerCompany}
-                        onChange={(e) => setCustomerCompany(e.target.value)}
-                        placeholder="Ex: Sahel Industries"
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-semibold text-gray-700 mb-1">Téléphone Joignable (Wave / OM) *</label>
-                      <input
-                        type="tel"
-                        required
-                        value={customerPhone}
-                        onChange={(e) => setCustomerPhone(e.target.value)}
-                        placeholder="Ex: +221 77 123 45 67"
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block font-semibold text-gray-700 mb-1">Pays de Livraison (Par défaut : {defaultClientCountry})</label>
-                      <select
-                        value={customerCountry || defaultClientCountry}
-                        onChange={(e) => setCustomerCountry(e.target.value)}
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs font-bold text-[#003366] focus:outline-none focus:border-orange-500"
+                  <div className="space-y-3.5 pt-2 animate-fadeIn">
+                    {/* B2C vs B2B Selector */}
+                    <div className="flex items-center gap-2 p-1 bg-gray-100 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setCustomerType('b2c')}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          customerType === 'b2c'
+                            ? 'bg-[#003366] text-white shadow-xs'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
                       >
-                        <optgroup label="Pays pris en charge par la livraison">
-                          {(siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).map(c => (
-                            <option key={`sup-${c}`} value={c}>{c} (Livraison prise en charge)</option>
-                          ))}
-                        </optgroup>
-                        <optgroup label="Tous les pays">
-                          {WORLD_COUNTRIES.map(c => (
-                            <option key={c} value={c}>{c}</option>
-                          ))}
-                        </optgroup>
-                      </select>
+                        Particulier (B2C)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCustomerType('b2b')}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                          customerType === 'b2b'
+                            ? 'bg-[#003366] text-white shadow-xs'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        Entreprise / Société (B2B)
+                      </button>
                     </div>
 
-                    <div>
-                      <label className="block font-semibold text-gray-700 mb-1">Ville de Livraison ({effectiveDeliveryCountry})</label>
-                      <input
-                        type="text"
-                        value={customerCity}
-                        onChange={(e) => setCustomerCity(e.target.value)}
-                        placeholder="Ex: Dakar, Abidjan, Bamako..."
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <label className="block font-semibold text-gray-700 mb-1">
+                          {customerType === 'b2b' ? 'Nom du Représentant / Acheteur *' : 'Nom & Prénom *'}
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={customerName}
+                          onChange={(e) => setCustomerName(e.target.value)}
+                          placeholder="Ex: Ibrahima Diallo"
+                          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
 
-                    <div className="sm:col-span-2">
-                      <label className="block font-semibold text-gray-700 mb-1">Adresse ou Emplacement Chantier</label>
-                      <input
-                        type="text"
-                        value={customerAddress}
-                        onChange={(e) => setCustomerAddress(e.target.value)}
-                        placeholder="Ex: Km 12 Route de Rufisque, Entrepôt B3"
-                        className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
-                      />
+                      {customerType === 'b2b' && (
+                        <div>
+                          <label className="block font-semibold text-gray-700 mb-1">Raison Sociale / Entreprise *</label>
+                          <input
+                            type="text"
+                            required
+                            value={customerCompany}
+                            onChange={(e) => setCustomerCompany(e.target.value)}
+                            placeholder="Ex: Sahel Industries SA"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                          />
+                        </div>
+                      )}
+
+                      {customerType === 'b2b' && (
+                        <div>
+                          <label className="block font-semibold text-gray-700 mb-1">NINEA (Numéro Fiscal Sénégalais)</label>
+                          <input
+                            type="text"
+                            value={customerNinea}
+                            onChange={(e) => setCustomerNinea(e.target.value)}
+                            placeholder="Ex: 008921822"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 font-mono focus:outline-none focus:border-orange-500"
+                          />
+                        </div>
+                      )}
+
+                      {customerType === 'b2b' && (
+                        <div>
+                          <label className="block font-semibold text-gray-700 mb-1">RCCM (Registre du Commerce)</label>
+                          <input
+                            type="text"
+                            value={customerRccm}
+                            onChange={(e) => setCustomerRccm(e.target.value)}
+                            placeholder="Ex: SN-DKR-2024-B-14892"
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 font-mono focus:outline-none focus:border-orange-500"
+                          />
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block font-semibold text-gray-700 mb-1">Téléphone Joignable (Wave / OM) *</label>
+                        <input
+                          type="tel"
+                          required
+                          value={customerPhone}
+                          onChange={(e) => setCustomerPhone(e.target.value)}
+                          placeholder="Ex: +221 77 123 45 67"
+                          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block font-semibold text-gray-700 mb-1">Pays de Livraison (Par défaut : {defaultClientCountry})</label>
+                        <select
+                          value={customerCountry || defaultClientCountry}
+                          onChange={(e) => setCustomerCountry(e.target.value)}
+                          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs font-bold text-[#003366] focus:outline-none focus:border-orange-500"
+                        >
+                          <optgroup label="Pays pris en charge par la livraison">
+                            {(siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).map(c => (
+                              <option key={`sup-${c}`} value={c}>{c} (Livraison prise en charge)</option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Tous les pays">
+                            {WORLD_COUNTRIES.map(c => (
+                              <option key={c} value={c}>{c}</option>
+                            ))}
+                          </optgroup>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block font-semibold text-gray-700 mb-1">Ville de Livraison ({effectiveDeliveryCountry})</label>
+                        <input
+                          type="text"
+                          value={customerCity}
+                          onChange={(e) => setCustomerCity(e.target.value)}
+                          placeholder="Ex: Dakar, Abidjan, Bamako..."
+                          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <label className="block font-semibold text-gray-700 mb-1">Adresse ou Emplacement Chantier</label>
+                        <input
+                          type="text"
+                          value={customerAddress}
+                          onChange={(e) => setCustomerAddress(e.target.value)}
+                          placeholder="Ex: Km 12 Route de Rufisque, Entrepôt B3"
+                          className="w-full bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 text-xs text-gray-900 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+
+                      {/* Exonération Fiscale B2B Optionnelle avec Visa DGID */}
+                      {customerType === 'b2b' && (
+                        <div className="sm:col-span-2 p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2">
+                          <label className="flex items-center gap-2 cursor-pointer font-semibold text-[#003366]">
+                            <input
+                              type="checkbox"
+                              checked={isTaxExemptDgId}
+                              onChange={(e) => setIsTaxExemptDgId(e.target.checked)}
+                              className="rounded text-[#003366] focus:ring-0"
+                            />
+                            <span>Entreprise titulaire d'une attestation d'exonération de TVA (Agrément DGID)</span>
+                          </label>
+                          {isTaxExemptDgId && (
+                            <div className="pt-1.5">
+                              <label className="block text-[11px] font-bold text-gray-700 mb-1">
+                                N° d'Attestation d'Exonération DGID (Art. 358 CGI) * :
+                              </label>
+                              <input
+                                type="text"
+                                value={taxExemptionNumber}
+                                onChange={(e) => setTaxExemptionNumber(e.target.value)}
+                                placeholder="Ex: DGID-EXO-2025-4892"
+                                className="w-full bg-white border border-blue-300 rounded-lg px-3 py-2 text-xs font-mono text-gray-900 focus:outline-none focus:border-[#003366]"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1213,13 +1341,23 @@ export default function Cart() {
               )}
 
               <div className="flex justify-between text-gray-600">
-                <span>TVA ({Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%) :</span>
+                <span>TVA ({isVatSystemActive && !isExport && !hasTaxExemptionVisa ? `${Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%` : '0%'}) :</span>
                 <span className="font-mono font-semibold text-gray-600">
-                  {vatAmount > 0 ? `+${vatAmount.toLocaleString('fr-FR')} FCFA` : '0 FCFA (Exonéré de TVA)'}
+                  {vatAmount > 0 ? (
+                    `+${vatAmount.toLocaleString('fr-FR')} FCFA`
+                  ) : isExport ? (
+                    <span className="text-blue-600 font-bold">0 FCFA (0% Export Art. 358 bis CGI)</span>
+                  ) : hasTaxExemptionVisa ? (
+                    <span className="text-purple-600 font-bold">0 FCFA (Exonéré Visa DGID)</span>
+                  ) : !isVatSystemActive ? (
+                    <span className="text-amber-600 font-bold">0 FCFA (Franchise Art. 283 CGI)</span>
+                  ) : (
+                    '0 FCFA'
+                  )}
                 </span>
               </div>
               <div className="pt-3 border-t border-gray-200 flex justify-between items-baseline">
-                <span className="font-extrabold text-[#003366] text-sm">{t('total_ttc')} :</span>
+                <span className="font-extrabold text-[#003366] text-sm">{vatAmount > 0 ? t('total_ttc') : 'Total Net à Payer'} :</span>
                 <span className="text-2xl font-black text-[#FF6600] font-mono">
                   {grandTotalTTC.toLocaleString('fr-FR')} <span className="text-xs">FCFA</span>
                 </span>

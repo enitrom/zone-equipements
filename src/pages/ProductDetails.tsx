@@ -194,7 +194,7 @@ export default function ProductDetails() {
     ? (selectedFreight === 'air' ? airFreightCost : selectedFreight === 'sea' ? seaFreightCost : 0)
     : 0;
 
-  const isVatActive = (siteSettings.enableVat !== false) && (
+  const isVatActive = (siteSettings.vatEnabled !== false) && (
     product?.applyVat !== undefined
       ? Boolean(product.applyVat)
       : Boolean(siteSettings.applyVatByDefault)

@@ -44,8 +44,12 @@ export default function Account() {
 
   // Profile edit state
   const [displayName, setDisplayName] = useState('');
+  const [clientType, setClientType] = useState<'b2c' | 'b2b'>('b2c');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [companyName, setCompanyName] = useState('');
+  const [ninea, setNinea] = useState('');
+  const [rccm, setRccm] = useState('');
+  const [taxExemptionNumber, setTaxExemptionNumber] = useState('');
   const [defaultCountry, setDefaultCountry] = useState<string>(
     () => catalogService.getEffectiveClientCountry(profile)
   );
@@ -94,8 +98,12 @@ export default function Account() {
   useEffect(() => {
     if (profile) {
       setDisplayName(profile.displayName || user?.displayName || '');
+      setClientType(profile.clientType || (profile.company || profile.ninea ? 'b2b' : 'b2c'));
       setPhoneNumber(profile.phone || '');
       setCompanyName(profile.company || '');
+      setNinea(profile.ninea || '');
+      setRccm(profile.rccm || '');
+      setTaxExemptionNumber(profile.taxExemptionNumber || '');
       setDefaultCountry(resolveCanonicalCountryName(profile.country || siteSettings.defaultClientCountry || 'Sénégal'));
       setCity(profile.city || 'Dakar');
       setAddress(profile.address || '');
@@ -230,8 +238,12 @@ export default function Account() {
       const resolvedCountry = resolveCanonicalCountryName(defaultCountry) || 'Sénégal';
       const updatedFields = {
         displayName: displayName.trim(),
+        clientType: clientType || 'b2c',
         phone: phoneNumber.trim(),
-        company: companyName.trim(),
+        company: clientType === 'b2b' ? companyName.trim() : '',
+        ninea: clientType === 'b2b' ? ninea.trim() : '',
+        rccm: clientType === 'b2b' ? rccm.trim() : '',
+        taxExemptionNumber: clientType === 'b2b' ? taxExemptionNumber.trim() : '',
         country: resolvedCountry,
         city: city.trim(),
         address: address.trim(),
@@ -620,42 +632,108 @@ export default function Account() {
             </div>
           </div>
 
-          {/* Bandeau Pays par défaut du client & Pays pris en charge par la livraison */}
-          <div className="p-4 bg-white rounded-2xl border border-gray-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <Globe className="w-4 h-4 text-[#003366]" />
-                <span className="font-bold text-gray-900">
-                  Votre pays de livraison par défaut :
-                </span>
-                <span className="px-2.5 py-0.5 rounded-full bg-blue-50 text-[#003366] border border-blue-200 font-black">
-                  {defaultCountry || 'Sénégal'}
-                </span>
-                {isDeliveryCountrySupported(
-                  defaultCountry || 'Sénégal',
-                  siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES
-                ) ? (
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
-                    ✓ Pays couvert par la livraison
+          {/* Bandeau Statut Fiscal & Pays par défaut du client */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* 1. Statut Client (Particulier vs Entreprise) */}
+            <div className="p-4 bg-white rounded-2xl border border-gray-200 shadow-xs flex flex-col justify-between gap-3 text-xs">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-gray-500 uppercase tracking-wider text-[10px]">
+                    Profil & Régime de Facturation
                   </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
-                    ⚠️ Hors zone standard — Vérifiez les pays livrés par l'entrepôt du produit
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide border flex items-center gap-1 ${
+                    clientType === 'b2b'
+                      ? 'bg-blue-50 text-[#003366] border-blue-200'
+                      : 'bg-slate-100 text-slate-700 border-slate-200'
+                  }`}>
+                    {clientType === 'b2b' ? <Building2 className="w-3 h-3 text-[#003366]" /> : <User className="w-3 h-3 text-slate-600" />}
+                    <span>{clientType === 'b2b' ? 'Compte Entreprise (B2B)' : 'Compte Particulier (B2C)'}</span>
                   </span>
-                )}
+                </div>
+
+                <div className="pt-1">
+                  <div className="font-extrabold text-sm text-gray-900">
+                    {clientType === 'b2b' && companyName ? companyName : displayName || user.displayName || 'Client'}
+                  </div>
+                  {clientType === 'b2b' && (
+                    <div className="text-[11px] text-gray-500 font-mono mt-0.5 flex flex-wrap gap-2">
+                      {ninea && <span>NINEA : <strong>{ninea}</strong></span>}
+                      {rccm && <span>• RCCM : <strong>{rccm}</strong></span>}
+                    </div>
+                  )}
+                  {taxExemptionNumber && (
+                    <div className="text-[10px] text-purple-700 font-semibold mt-1">
+                      ⭐ Exonération DGID N° {taxExemptionNumber}
+                    </div>
+                  )}
+                </div>
               </div>
-              <p className="text-[11px] text-gray-500">
-                <strong>Pays pris en charge de base pour la livraison :</strong>{' '}
-                {(siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).join(', ')}.
-              </p>
+
+              <div className="pt-2 border-t border-gray-100 flex items-center justify-between">
+                <span className="text-[10px] text-gray-400">
+                  {clientType === 'b2b' ? 'Factures avec NINEA & TVA pro' : 'Facturation simple Particulier'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('profile')}
+                  className="text-xs font-bold text-[#FF6600] hover:underline cursor-pointer"
+                >
+                  Modifier mon statut &rarr;
+                </button>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setActiveTab('profile')}
-              className="px-3.5 py-2 bg-slate-100 hover:bg-[#003366] hover:text-white text-[#003366] rounded-xl font-bold text-xs transition-colors shrink-0 cursor-pointer"
-            >
-              Modifier mon pays par défaut
-            </button>
+
+            {/* 2. Pays de livraison & Fiscalité Applicable */}
+            <div className="p-4 bg-white rounded-2xl border border-gray-200 shadow-xs flex flex-col justify-between gap-3 text-xs">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-gray-500 uppercase tracking-wider text-[10px]">
+                    Pays de Livraison & Traitement TVA
+                  </span>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide border ${
+                    (defaultCountry || 'Sénégal').toLowerCase() === 'sénégal' || (defaultCountry || 'Sénégal').toLowerCase() === 'senegal'
+                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                      : 'bg-blue-50 text-blue-800 border-blue-200'
+                  }`}>
+                    {(defaultCountry || 'Sénégal').toLowerCase() === 'sénégal' || (defaultCountry || 'Sénégal').toLowerCase() === 'senegal'
+                      ? 'TVA 18% (Vente Locale)'
+                      : '0% TVA (Export Art. 358 bis CGI)'}
+                  </span>
+                </div>
+
+                <div className="pt-1 flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-[#003366] shrink-0" />
+                  <span className="font-extrabold text-sm text-[#003366]">
+                    {defaultCountry || 'Sénégal'}
+                  </span>
+                  {isDeliveryCountrySupported(
+                    defaultCountry || 'Sénégal',
+                    siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES
+                  ) ? (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                      ✓ Livraison Directe Prise en Charge
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
+                      ⚠️ Sur devis spécifique
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-gray-100 flex items-center justify-between">
+                <span className="text-[10px] text-gray-400 truncate">
+                  {(siteSettings.supportedDeliveryCountries || DEFAULT_SUPPORTED_DELIVERY_COUNTRIES).slice(0, 4).join(', ')}...
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('profile')}
+                  className="text-xs font-bold text-[#003366] hover:underline cursor-pointer"
+                >
+                  Changer de pays &rarr;
+                </button>
+              </div>
+            </div>
           </div>
 
           {/* Quick Actions & Recent Orders */}
@@ -1140,33 +1218,133 @@ export default function Account() {
           )}
 
           <form onSubmit={handleInitiateProfileSave} className="space-y-4 text-xs">
+            {/* Statut Client : Particulier ou Entreprise */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <label className="block font-bold text-gray-800 uppercase tracking-wider text-[11px]">
+                Statut Client & Régime Fiscal :
+              </label>
+              <div className="grid grid-cols-2 gap-2 p-1 bg-white border border-slate-200 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setClientType('b2c')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                    clientType === 'b2c'
+                      ? 'bg-[#003366] text-white shadow-xs'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span>Particulier (B2C)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClientType('b2b')}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                    clientType === 'b2b'
+                      ? 'bg-[#003366] text-white shadow-xs'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>Entreprise / Société (B2B)</span>
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-500">
+                {clientType === 'b2b'
+                  ? 'Permet d\'émettre vos factures et proformas conformes avec NINEA, RCCM et TVA déductible / exonération.'
+                  : 'Facturation simplifiée au nom du particulier avec calcul automatique de la TVA locale ou 0% Export.'}
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block font-bold text-gray-700 uppercase mb-1">
-                  Nom & Prénom du Contact *
+                  {clientType === 'b2b' ? 'Nom du Représentant / Acheteur *' : 'Nom & Prénom du Contact *'}
                 </label>
                 <input
                   type="text"
                   required
                   value={displayName}
                   onChange={e => setDisplayName(e.target.value)}
-                  placeholder="Ex: Amadou Ndiaye"
+                  placeholder={clientType === 'b2b' ? 'Ex: Babacar Sarr (Direction Achats)' : 'Ex: Amadou Ndiaye'}
                   className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-gray-700 uppercase mb-1">
-                  Entreprise / Société / Chantier
-                </label>
-                <input
-                  type="text"
-                  value={companyName}
-                  onChange={e => setCompanyName(e.target.value)}
-                  placeholder="Ex: Sahel Industries BTP"
-                  className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
-                />
-              </div>
+              {clientType === 'b2b' ? (
+                <div>
+                  <label className="block font-bold text-[#003366] uppercase mb-1">
+                    Raison Sociale / Entreprise *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={companyName}
+                    onChange={e => setCompanyName(e.target.value)}
+                    placeholder="Ex: Sahel Industries BTP SA"
+                    className="w-full border border-blue-300 bg-blue-50/40 font-semibold rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block font-bold text-gray-700 uppercase mb-1">
+                    Activité / Profession (Optionnel)
+                  </label>
+                  <input
+                    type="text"
+                    value={companyName}
+                    onChange={e => setCompanyName(e.target.value)}
+                    placeholder="Ex: Artisan, Ingénieur, Consultant..."
+                    className="w-full border border-gray-300 rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
+                  />
+                </div>
+              )}
+
+              {clientType === 'b2b' && (
+                <>
+                  <div>
+                    <label className="block font-bold text-gray-700 uppercase mb-1">
+                      NINEA (Numéro d'Identification Fiscale Sénégal)
+                    </label>
+                    <input
+                      type="text"
+                      value={ninea}
+                      onChange={e => setNinea(e.target.value)}
+                      placeholder="Ex: 008921822"
+                      className="w-full border border-gray-300 font-mono rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-gray-700 uppercase mb-1">
+                      RCCM (Registre du Commerce)
+                    </label>
+                    <input
+                      type="text"
+                      value={rccm}
+                      onChange={e => setRccm(e.target.value)}
+                      placeholder="Ex: SN-DKR-2024-B-14892"
+                      className="w-full border border-gray-300 font-mono rounded-xl px-3.5 py-2.5 text-xs focus:outline-none focus:border-[#003366]"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2 p-3 bg-purple-50/70 border border-purple-200 rounded-xl">
+                    <label className="block font-bold text-purple-900 uppercase mb-1 text-[11px]">
+                      Attestation d'Exonération de TVA DGID (Si bénéficiaire Art. 358 CGI)
+                    </label>
+                    <input
+                      type="text"
+                      value={taxExemptionNumber}
+                      onChange={e => setTaxExemptionNumber(e.target.value)}
+                      placeholder="Ex: DGID-EXO-2025-8842"
+                      className="w-full border border-purple-300 bg-white font-mono rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-purple-600"
+                    />
+                    <span className="text-[10px] text-purple-700 mt-1 block">
+                      Permet d'appliquer automatiquement 0% TVA avec visa fiscal officiel sur vos commandes.
+                    </span>
+                  </div>
+                </>
+              )}
 
               <div>
                 <label className="block font-bold text-gray-700 uppercase mb-1">
