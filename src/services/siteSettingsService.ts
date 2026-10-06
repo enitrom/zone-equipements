@@ -150,6 +150,14 @@ export interface SiteSettings {
   vatEnabled?: boolean; // Si false ou vatRate <= 0, désactive automatiquement la TVA sur l'import de produit
   defaultVatRate?: number; // En décimal ex: 0.18 (synchronisé automatiquement avec vatRate)
   applyVatByDefault?: boolean;
+  taxRegime?: 'REEL' | 'CGU' | 'FRANCHISE'; // Régime fiscal principal (Régime Réel TVA 18%, CGU 5% forfaitaire, Franchise Art. 283)
+  cguActivityType?: 'COMMERCE' | 'SERVICES'; // Commerce (seuil 50M FCFA) ou Services (seuil 100M FCFA)
+  dgidNormalizedInvoicing?: boolean; // Factures normalisées DGID avec code validation / QR code
+  withholdingTaxRateBRS?: number; // Retenue BRS sur prestations (ex: 0.05 = 5%)
+  withholdingTaxRateRent?: number; // Retenue à la source sur loyers (ex: 0.05 = 5%)
+  withholdingTaxRateForeign?: number; // Retenue sur prestataires étrangers (ex: 0.20 = 20% Art. 201 CGI)
+  tafRateStandard?: number; // Taux standard TAF (ex: 0.17 = 17%)
+  tafRateReduced?: number; // Taux réduit TAF export (ex: 0.07 = 7%)
   defaultMarginPercentage: number;
   systemFreightEnabled?: boolean; // Si false, désactive les paramètres de fret système (et toujours ignorés lorsqu'un entrepôt est assigné)
   supportedDeliveryCountries?: string[]; // Pays pris en charge par défaut pour la livraison client
@@ -301,6 +309,14 @@ const DEFAULT_SETTINGS: SiteSettings = {
   vatEnabled: true,
   defaultVatRate: 0.18,
   applyVatByDefault: true,
+  taxRegime: 'REEL',
+  cguActivityType: 'COMMERCE',
+  dgidNormalizedInvoicing: true,
+  withholdingTaxRateBRS: 0.05,
+  withholdingTaxRateRent: 0.05,
+  withholdingTaxRateForeign: 0.20,
+  tafRateStandard: 0.17,
+  tafRateReduced: 0.07,
   defaultMarginPercentage: 35,
   systemFreightEnabled: true,
   supportedDeliveryCountries: [...DEFAULT_SUPPORTED_DELIVERY_COUNTRIES],
@@ -786,6 +802,7 @@ class SiteSettingsService {
           if (snap.exists()) {
             const remoteSettings = snap.data() as SiteSettings;
             const localCurrent = this.getSettings();
+
             // Remote deletedAdminEmails and adminEmails are authoritative when updated
             const mergedDeletedAdmins = Array.from(new Set([
               ...(remoteSettings.deletedAdminEmails || []),
@@ -800,8 +817,9 @@ class SiteSettingsService {
             this.notify();
             this.isSyncingFromRemote = false;
           } else {
+            // First time initialization: populate Firestore with default settings
             const current = this.getSettings();
-            setDoc(settingsDocRef, sanitizeForFirestore(current)).catch(() => {});
+            setDoc(settingsDocRef, sanitizeForFirestore({ ...current, updatedAt: new Date().toISOString() }), { merge: true }).catch(() => {});
           }
         },
         (error) => {
@@ -837,37 +855,37 @@ class SiteSettingsService {
             this.saveDeletedStructure(mergedDel);
 
             this.isSyncingStructureFromRemote = true;
-            if (Array.isArray(data.categories)) {
+            if (Array.isArray(data.categories) && data.categories.length > 0) {
               const filteredCats = data.categories.filter(
                 c => c && c.name && !mergedDel.categories.includes(c.name.toLowerCase())
               );
               localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(filteredCats));
             }
-            if (Array.isArray(data.sectors)) {
+            if (Array.isArray(data.sectors) && data.sectors.length > 0) {
               const filteredSecs = data.sectors.filter(
                 s => s && s.id && !mergedDel.sectors.includes(s.id)
               );
               localStorage.setItem(STORAGE_KEYS.SECTORS, JSON.stringify(filteredSecs));
             }
-            if (Array.isArray(data.brands)) {
+            if (Array.isArray(data.brands) && data.brands.length > 0) {
               const filteredBrands = data.brands.filter(
                 b => b && b.name && !mergedDel.brands.includes(b.name.toLowerCase())
               );
               localStorage.setItem(STORAGE_KEYS.BRANDS, JSON.stringify(filteredBrands));
             }
-            if (Array.isArray(data.testimonials)) {
+            if (Array.isArray(data.testimonials) && data.testimonials.length > 0) {
               const filteredTesti = data.testimonials.filter(
                 t => t && t.id && !(mergedDel.testimonials || []).includes(t.id)
               );
               localStorage.setItem(STORAGE_KEYS.TESTIMONIALS, JSON.stringify(filteredTesti));
             }
-            if (Array.isArray(data.articles)) {
+            if (Array.isArray(data.articles) && data.articles.length > 0) {
               const filteredArts = data.articles.filter(
                 a => a && a.id && !(mergedDel.articles || []).includes(a.id)
               );
               localStorage.setItem(STORAGE_KEYS.ARTICLES, JSON.stringify(filteredArts));
             }
-            if (Array.isArray(data.faqs)) {
+            if (Array.isArray(data.faqs) && data.faqs.length > 0) {
               const filteredFaqs = data.faqs.filter(
                 f => f && f.id && !(mergedDel.faqs || []).includes(f.id)
               );
@@ -902,7 +920,7 @@ class SiteSettingsService {
         deletedStructure: this.getDeletedStructure(),
         updatedAt: new Date().toISOString()
       });
-      setDoc(structureDocRef, payload).catch(e => {
+      setDoc(structureDocRef, payload, { merge: true }).catch(e => {
         console.warn('Failed to write catalog structure to Firestore:', e);
       });
     } catch (e) {
@@ -959,6 +977,7 @@ class SiteSettingsService {
       deletedAdminEmails: partial.deletedAdminEmails !== undefined ? partial.deletedAdminEmails : (current.deletedAdminEmails || [])
     };
     const updated = normalizeSiteSettings(mergedRaw);
+    updated.updatedAt = new Date().toISOString();
     Object.assign(DEFAULT_SETTINGS, updated);
 
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updated));
@@ -968,7 +987,7 @@ class SiteSettingsService {
     if (!this.isSyncingFromRemote) {
       try {
         const settingsDocRef = doc(db, 'settings', 'site_settings');
-        setDoc(settingsDocRef, sanitizeForFirestore(updated)).catch(err => {
+        setDoc(settingsDocRef, sanitizeForFirestore(updated), { merge: true }).catch(err => {
           console.warn('Failed to write settings to Firestore:', err);
         });
       } catch (e) {

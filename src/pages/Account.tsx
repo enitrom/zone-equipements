@@ -378,30 +378,43 @@ export default function Account() {
     .reduce((acc, o) => acc + (o.totalTTC || 0), 0);
 
   const printInvoice = (order: Order) => {
-    const isProforma = Boolean(order.isQuote || order.paymentStatus !== 'Payé intégralement');
-    const docTitle = isProforma ? `DEVIS PROFORMA - ${order.orderNumber}` : `FACTURE OFFICIELLE - ${order.orderNumber}`;
+    const isProforma = Boolean(order.isQuote || order.paymentStatus === 'Non payé' || order.paymentStatus === 'En attente' || (order.paymentStatus !== 'Payé intégralement' && order.paymentStatus !== 'Payé'));
+    const docTitle = isProforma ? `DEVIS PROFORMA - ${order.orderNumber}` : `FACTURE EN LIGNE - ${order.orderNumber}`;
+    const isUnpaid = order.paymentStatus === 'Non payé' || order.paymentStatus === 'En attente' || isProforma;
+    const paymentMethodDisplay = isUnpaid ? 'En attente de règlement' : (order.paymentMethod || 'Wave / PayDunya');
 
-    const itemsHtml = order.items.map(it => `
+    const vatAmount = Number(order.vatAmount || 0);
+    const subtotalHT = Number(order.subtotalHT || 0);
+    const effectiveVatPercent = vatAmount > 0 && subtotalHT > 0 ? Math.round((vatAmount / subtotalHT) * 100) : (vatAmount > 0 ? 18 : 0);
+    const vatLabel = vatAmount > 0 ? `TVA (${effectiveVatPercent}%) :` : 'TVA (0% / Exonéré) :';
+
+    const itemsHtml = (order.items || []).map(it => {
+      const rawPrice = Number(it.unitPriceHT ?? it.priceHT ?? it.price ?? 0);
+      const qty = Math.max(1, Number(it.quantity) || 1);
+      const uPriceHT = it.unitPriceHT ? Number(it.unitPriceHT) : (it.priceHT ? Number(it.priceHT) : Math.round(rawPrice / 1.18));
+      const lineTotalHT = Number(it.totalHT ?? (uPriceHT * qty));
+      return `
       <tr>
         <td>
           <div class="font-bold">${it.name}</div>
-          <div style="font-size:10px;color:#64748b;">Marque: ${it.brand || 'OEM'} | Réf: ${it.productId || 'MRO'}</div>
+          <div style="font-size:10px;color:#64748b;">Marque : ${it.brand || 'Constructeur'} | Réf : ${it.productId || 'EQUIP'}</div>
         </td>
-        <td class="text-center font-bold">${it.quantity}</td>
-        <td class="text-right font-mono">${(it.price || 0).toLocaleString('fr-FR')} FCFA</td>
-        <td class="text-right font-mono font-bold">${((it.price || 0) * (it.quantity || 1)).toLocaleString('fr-FR')} FCFA</td>
+        <td class="text-center font-bold">${qty}</td>
+        <td class="text-right font-mono">${uPriceHT.toLocaleString('fr-FR')} FCFA</td>
+        <td class="text-right font-mono font-bold">${lineTotalHT.toLocaleString('fr-FR')} FCFA</td>
       </tr>
-    `).join('');
+      `;
+    }).join('');
 
     const bodyHtml = `
       <div class="header">
         <div>
           <div class="brand"><span class="brand-blue">ZONE</span> <span class="brand-orange">ÉQUIPEMENTS</span></div>
-          <div style="font-size:10px;color:#64748b;">Centrale B2B d'Approvisionnement & Sourcing Industriel</div>
-          <div style="font-size:10px;color:#64748b;">Dakar, Sénégal • Email: contact@zone-equipements.sn</div>
+          <div style="font-size:10px;color:#64748b;">Fournitures Industrielles, Agricoles, Énergie & Électronique</div>
+          <div style="font-size:10px;color:#64748b;">Dakar, Sénégal • Email: zoneequipements@gmail.com</div>
         </div>
         <div style="text-align:right;">
-          <div class="badge">${isProforma ? 'PROFORMA B2B' : 'FACTURE ACQUITTÉE'}</div>
+          <div class="badge">${isProforma ? 'DEVIS PROFORMA' : 'FACTURE EN LIGNE'}</div>
           <div style="font-size:13px;font-weight:900;margin-top:4px;" class="font-mono">${order.orderNumber}</div>
           <div style="font-size:10px;color:#64748b;">Date: ${new Date(order.createdAt).toLocaleDateString('fr-FR')}</div>
         </div>
@@ -418,8 +431,8 @@ export default function Account() {
         </div>
         <div style="text-align:right;">
           <strong style="color:#003366;font-size:11px;text-transform:uppercase;">Modalités :</strong>
-          <div>Paiement : <strong>${order.paymentMethod || 'PayDunya'}</strong></div>
-          <div>Statut Règlement : <strong style="color:${order.paymentStatus === 'Payé intégralement' ? '#059669' : '#ea580c'}">${order.paymentStatus}</strong></div>
+          <div>Paiement : <strong>${paymentMethodDisplay}</strong></div>
+          <div>Statut Règlement : <strong style="color:${order.paymentStatus === 'Payé intégralement' || order.paymentStatus === 'Payé' ? '#059669' : '#ea580c'}">${order.paymentStatus}</strong></div>
           <div>Statut Logistique : <strong>${order.status}</strong></div>
         </div>
       </div>
@@ -427,7 +440,7 @@ export default function Account() {
       <table>
         <thead>
           <tr>
-            <th>Désignation de l'Équipement MRO</th>
+            <th>Désignation de l'Équipement</th>
             <th class="text-center">Qté</th>
             <th class="text-right">Prix Unitaire HT</th>
             <th class="text-right">Total HT</th>
@@ -438,11 +451,21 @@ export default function Account() {
         </tbody>
       </table>
 
-      <div style="text-align:right;margin-top:15px;font-size:12px;">
-        <div>Sous-total HT : <strong>${(order.subtotalHT || 0).toLocaleString('fr-FR')} FCFA</strong></div>
-        <div>Fret & Logistique : <strong>${((order as any).freightTotal || (order as any).shippingCost || 0).toLocaleString('fr-FR')} FCFA</strong></div>
-        <div>TVA (18%) : <strong>${(order.vatAmount || 0).toLocaleString('fr-FR')} FCFA</strong></div>
-        <div style="font-size:15px;font-weight:bold;color:#FF6600;margin-top:5px;">Total TTC : ${(order.totalTTC || 0).toLocaleString('fr-FR')} FCFA</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-top:16px;">
+        <div class="card" style="flex:1;background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:12px;font-size:11px;line-height:1.5;">
+          <strong style="color:#003366;font-size:11px;text-transform:uppercase;display:block;margin-bottom:6px;">Procédure & Instructions de Règlement :</strong>
+          <div style="margin-bottom:4px;"><strong>1. Mobile Wave / OM :</strong> Transfert direct au <strong>+221 76 653 83 84</strong></div>
+          <div style="margin-bottom:4px;"><strong>2. Virement Bancaire (RIB) :</strong> CBAO Attijariwafa Bank • Compte : <strong>SN012 01101 0361892001 45</strong> (SWIFT: CBAOSNDA)</div>
+          <div style="margin-bottom:4px;"><strong>3. Titulaire :</strong> ZONE ÉQUIPEMENTS SÉNÉGAL SUARL</div>
+          <div style="color:#ea580c;font-weight:bold;margin-top:6px;">* Mentionnez obligatoirement la référence N° ${order.orderNumber} lors de votre paiement.</div>
+        </div>
+
+        <div style="text-align:right;min-width:240px;font-size:12px;">
+          <div>Sous-total HT : <strong>${(order.subtotalHT || 0).toLocaleString('fr-FR')} FCFA</strong></div>
+          <div>Fret & Logistique : <strong>${((order as any).freightTotal || (order as any).shippingCost || 0).toLocaleString('fr-FR')} FCFA</strong></div>
+          <div>${vatLabel} <strong>${vatAmount.toLocaleString('fr-FR')} FCFA</strong></div>
+          <div style="font-size:15px;font-weight:bold;color:#FF6600;margin-top:6px;padding-top:6px;border-top:1px solid #cbd5e1;">${vatAmount > 0 ? 'Total TTC :' : 'Total Net à Payer :'} ${(order.totalTTC || 0).toLocaleString('fr-FR')} FCFA</div>
+        </div>
       </div>
     `;
 

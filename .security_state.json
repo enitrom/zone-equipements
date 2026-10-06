@@ -1,0 +1,13 @@
+{
+  "settings": {
+    "autoBlockEnabled": false,
+    "antiScrapingShield": false,
+    "strictRateLimit": false,
+    "blockDurationHours": 24,
+    "maxRequestsPerMinute": 300,
+    "blockHeadlessBots": false
+  },
+  "blockedIps": [],
+  "logs": [],
+  "savedAt": "2026-10-06T15:42:00.000Z"
+}

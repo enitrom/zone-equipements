@@ -512,6 +512,58 @@ export function downloadOrderPdf(
     const totalsX = pageWidth - margin - totalsBoxW;
     const totalsBoxH = discountAmt > 0 ? 36 : 31;
 
+    // Encadré de conformité fiscale DGID / SYSCOHADA & Multi-devises (à gauche des totaux)
+    const legalBoxW = contentWidth - totalsBoxW - 6;
+    const country = order.customerCountry || 'Sénégal';
+    const isExport = country.toLowerCase() !== 'sénégal' && country.toLowerCase() !== 'senegal';
+    const isVatCharged = vatAmount > 0;
+    const isCgu = !isExport && !isVatCharged;
+
+    const eurEquiv = (totalTTC / 655.957).toFixed(2);
+    const usdEquiv = (totalTTC / 610).toFixed(2);
+    const dgidSeries = `SN-DGID-${new Date().getFullYear()}-${(order.orderNumber || '0000').replace(/[^0-9A-Z]/gi, '').slice(-5).padStart(5, '0')}`;
+
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(margin, y, legalBoxW, totalsBoxH, 2, 2, 'FD');
+
+    let ly = y + 5;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(0, 51, 102);
+    doc.text('CONFORMITÉ FISCALE DGID & SYSCOHADA :', margin + 3, ly);
+    ly += 4.2;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(51, 65, 85);
+
+    if (isExport) {
+      doc.text(sanitizePdfText('• Régime : Exonération TVA 0% Exportation (Art. 358 bis du CGI)'), margin + 3, ly);
+      ly += 3.8;
+      doc.text(sanitizePdfText(`• Multi-devises : 1 EUR = 655.957 F | 1 USD = 610 F`), margin + 3, ly);
+      ly += 3.8;
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(0, 51, 102);
+      doc.text(sanitizePdfText(`• Équivalent : ${eurEquiv} EUR  /  ${usdEquiv} USD`), margin + 3, ly);
+      ly += 3.8;
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text(sanitizePdfText('• Imputation : SYSCOHADA 7012 (Export) & 4111 (Clients)'), margin + 3, ly);
+    } else if (isCgu) {
+      doc.text(sanitizePdfText('• Régime : TVA non applicable — régime CGU (Art. 283 du CGI)'), margin + 3, ly);
+      ly += 3.8;
+      doc.text(sanitizePdfText('• Imputation : Compte SYSCOHADA 701 / Franchise'), margin + 3, ly);
+      ly += 3.8;
+      doc.text(sanitizePdfText('• Seuil légal : CA < 50 000 000 FCFA (Impôt forfaitaire 5%)'), margin + 3, ly);
+    } else {
+      doc.text(sanitizePdfText(`• Facture Normalisée DGID : ${dgidSeries}`), margin + 3, ly);
+      ly += 3.8;
+      doc.text(sanitizePdfText('• TVA 18% de plein droit (Régime Réel Sénégal)'), margin + 3, ly);
+      ly += 3.8;
+      doc.text(sanitizePdfText('• Imputation : SYSCOHADA 7011, 706, 4431 (TVA) & 4111'), margin + 3, ly);
+    }
+
     doc.setFillColor(248, 250, 252);
     doc.setDrawColor(203, 213, 225);
     doc.roundedRect(totalsX, y, totalsBoxW, totalsBoxH, 2, 2, 'FD');

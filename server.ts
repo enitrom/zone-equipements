@@ -957,10 +957,10 @@ function parsePrice(rawPrice: any, fallback: number): number {
 function isLikelyIconOrTinyImage(url: string, widthAttr?: string | number, heightAttr?: string | number): boolean {
   if (!url || typeof url !== 'string') return true;
   const lower = url.toLowerCase().trim();
-  if (!lower.startsWith('http')) return true;
+  if (!lower.startsWith('http') && !lower.startsWith('data:image/')) return true;
 
   // Exclude explicit icon / badge / sprite / tracking patterns
-  if (/(?:favicon|sprite|icon[-_.]|[-_.]icon|logo|badge|avatar|spinner|loader|loading|placeholder|blank|pixel|spacer|1x1|rating|stars?|flag[-_.]|button|cert[-_.]|\.svg(?:\?|$)|\.ico(?:\?|$)|\.gif(?:\?|$))/i.test(lower)) {
+  if (/(?:favicon|sprite|icon[-_.]|[-_.]icon|badge|avatar|spinner|loader|loading|blank|pixel|spacer|1x1|rating|stars?|flag[-_.]|button|cert[-_.]|\.svg(?:\?|$)|\.ico(?:\?|$)|\.gif(?:\?|$))/i.test(lower)) {
     return true;
   }
 
@@ -969,21 +969,21 @@ function isLikelyIconOrTinyImage(url: string, widthAttr?: string | number, heigh
   if (dimFileMatch) {
     const w = parseInt(dimFileMatch[1], 10);
     const h = parseInt(dimFileMatch[2], 10);
-    if ((w > 0 && w < 100) || (h > 0 && h < 100)) return true;
+    if ((w > 0 && w < 80) || (h > 0 && h < 80)) return true;
   }
 
   const widParamMatch = lower.match(/[?&](?:w|wid|width)=(\d{1,4})(?:&|$)/);
   const heiParamMatch = lower.match(/[?&](?:h|hei|height)=(\d{1,4})(?:&|$)/);
-  if (widParamMatch && parseInt(widParamMatch[1], 10) < 100) return true;
-  if (heiParamMatch && parseInt(heiParamMatch[1], 10) < 100) return true;
+  if (widParamMatch && parseInt(widParamMatch[1], 10) < 80) return true;
+  if (heiParamMatch && parseInt(heiParamMatch[1], 10) < 80) return true;
 
   if (widthAttr !== undefined && widthAttr !== '') {
     const wNum = parseInt(String(widthAttr), 10);
-    if (!isNaN(wNum) && wNum > 0 && wNum < 95) return true;
+    if (!isNaN(wNum) && wNum > 0 && wNum < 80) return true;
   }
   if (heightAttr !== undefined && heightAttr !== '') {
     const hNum = parseInt(String(heightAttr), 10);
-    if (!isNaN(hNum) && hNum > 0 && hNum < 95) return true;
+    if (!isNaN(hNum) && hNum > 0 && hNum < 80) return true;
   }
 
   return false;
@@ -1002,25 +1002,19 @@ function fixImageUrl(imgUrl: string, baseUrl: string): string {
       // keep cleaned as is
     }
   }
-  if (!cleaned.startsWith('http')) return '';
+  if (!cleaned.startsWith('http') && !cleaned.startsWith('data:image/')) return '';
 
   // 1. Upgrade Alibaba, AliExpress & Made-in-China thumbnail resize suffixes FIRST so gallery thumbnails become HD photos
   cleaned = cleaned
     .replace(/_\.webp$/i, '')
-    .replace(/_[0-9]+x[0-9]+[a-z0-9]*\.(jpg|png|jpeg|webp)$/i, '')
     .replace(/\.(jpg|png|jpeg|webp)_[0-9]+x[0-9]+.*$/i, '.$1')
-    .replace(/_50x50\..*$/i, '')
-    .replace(/_80x80\..*$/i, '')
-    .replace(/_100x100\..*$/i, '')
-    .replace(/_120x120\..*$/i, '')
-    .replace(/_220x220\..*$/i, '')
-    .replace(/_350x350\..*$/i, '')
-    .replace(/_800x800\..*$/i, '');
+    .replace(/_[0-9]+x[0-9]+[a-z0-9]*\.(jpg|png|jpeg|webp)$/i, '.$1')
+    .replace(/_(?:50|80|100|120|220|350|800)x(?:50|80|100|120|220|350|800)\.(jpg|png|jpeg|webp)$/i, '.$1');
 
-  // 2. Upgrade Grainger Scene7 thumbnail params FIRST (e.g. wid=54&hei=54 -> wid=800&hei=800) so alternate angle thumbnails are preserved!
-  if (cleaned.includes('static.grainger.com/rp/s/is/image/')) {
+  // 2. Upgrade Grainger Scene7 thumbnail params FIRST (e.g. wid=54&hei=54 -> wid=1000&hei=1000) so alternate angle thumbnails are preserved!
+  if (cleaned.includes('static.grainger.com/rp/s/is/image/') || cleaned.includes('static.grainger.com')) {
     const baseScene7 = cleaned.split('?')[0];
-    cleaned = `${baseScene7}?$adapimg$&hei=800&wid=800`;
+    cleaned = `${baseScene7}?$adapimg$&hei=1000&wid=1000`;
   }
 
   // 3. Upgrade Amazon thumbnail modifiers (e.g. ._AC_US40_.jpg -> ._AC_SL1200_.jpg)
@@ -1189,6 +1183,50 @@ const securityLogs: ServerSecurityLog[] = [];
 const ipRateMap = new Map<string, { count: number; windowStart: number; violations: number }>();
 let totalInspectedRequests = 0;
 
+// Persistence sur disque pour le bouclier de sécurité & pare-feu
+const SECURITY_STATE_FILE = path.join(process.cwd(), '.security_state.json');
+
+function loadSecurityStateFromDisk() {
+  try {
+    if (fs.existsSync(SECURITY_STATE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SECURITY_STATE_FILE, 'utf-8'));
+      if (data.settings) {
+        Object.assign(securitySettings, data.settings);
+      }
+      if (Array.isArray(data.blockedIps)) {
+        const now = Date.now();
+        data.blockedIps.forEach((b: ServerBlockedIp) => {
+          if (!b.expiresAt || new Date(b.expiresAt).getTime() > now) {
+            blockedIpsMap.set(b.ip, b);
+          }
+        });
+      }
+      if (Array.isArray(data.logs)) {
+        securityLogs.push(...data.logs.slice(0, 300));
+      }
+    }
+  } catch (e) {
+    console.warn('[Security] Notice chargement persistance sécurité:', e);
+  }
+}
+
+function saveSecurityStateToDisk() {
+  try {
+    const payload = {
+      settings: securitySettings,
+      blockedIps: Array.from(blockedIpsMap.values()),
+      logs: securityLogs.slice(0, 200),
+      savedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(SECURITY_STATE_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('[Security] Notice sauvegarde persistance sécurité:', e);
+  }
+}
+
+// Initialiser l'état au démarrage
+loadSecurityStateFromDisk();
+
 function getClientIp(req: express.Request): string {
   const forwarded = req.headers['x-forwarded-for'];
   if (typeof forwarded === 'string') {
@@ -1199,6 +1237,29 @@ function getClientIp(req: express.Request): string {
     return realIp.trim();
   }
   return req.socket.remoteAddress || req.ip || '127.0.0.1';
+}
+
+// Détection d'un administrateur connecté pour l'épargner de tout blocage, rate-limit ou anti-scraping
+function isConnectedAdmin(req: express.Request): boolean {
+  const adminHeader = req.headers['x-admin-auth'];
+  const userRole = req.headers['x-user-role'];
+  const authHeader = req.headers['authorization'];
+  const cookie = String(req.headers['cookie'] || '');
+
+  if (adminHeader === 'true' || adminHeader === '1' || userRole === 'admin' || userRole === 'super_admin') {
+    return true;
+  }
+  if (cookie.includes('ze_admin=true') || cookie.includes('admin_auth=true') || cookie.includes('is_admin=1')) {
+    return true;
+  }
+  if (authHeader && authHeader.toLowerCase().includes('bearer')) {
+    // Si un token d'authentification valide est envoyé depuis le panneau d'administration
+    const pathLower = req.path.toLowerCase();
+    if (pathLower.startsWith('/api/admin') || pathLower.startsWith('/api/security') || pathLower.startsWith('/api/backup')) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function recordSecurityLog(params: {
@@ -1226,6 +1287,8 @@ function recordSecurityLog(params: {
   if (securityLogs.length > 600) {
     securityLogs.pop();
   }
+  // Sauvegarde persistante différée
+  saveSecurityStateToDisk();
 }
 
 function autoBlockIp(ip: string, reason: string, threatLevel: ServerThreatLevel = 'HIGH', durationHours = 24) {
@@ -1249,15 +1312,16 @@ function autoBlockIp(ip: string, reason: string, threatLevel: ServerThreatLevel 
     manual: false,
     attemptsCount: (existing?.attemptsCount || 0) + 1
   });
+
+  saveSecurityStateToDisk();
 }
 
-// 1. En-têtes HTTP de sécurité avancée (Protection Helmet & Isolation)
+// 1. En-têtes HTTP de sécurité (Compatible affichage iFrame AI Studio)
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
+  // Autoriser l'intégration en iFrame requise par AI Studio Preview
+  res.removeHeader('X-Frame-Options');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
 
@@ -1273,6 +1337,17 @@ app.use((req, res, next) => {
   const userAgent = String(req.headers['user-agent'] || '');
   const userAgentLower = userAgent.toLowerCase();
   const now = Date.now();
+  const isAdmin = isConnectedAdmin(req);
+
+  // Les requêtes de navigation web (HTML, scripts, styles, pages SPA) et requêtes standard ne doivent JAMAIS bloquer l'utilisateur
+  const isPageOrAssetRequest = !pathLower.startsWith('/api/');
+  if (isPageOrAssetRequest || isAdmin) {
+    if (blockedIpsMap.has(clientIp)) {
+      blockedIpsMap.delete(clientIp);
+      saveSecurityStateToDisk();
+    }
+    return next();
+  }
 
   // A. Vérification de la liste noire d'IPs
   const blockedEntry = blockedIpsMap.get(clientIp);
@@ -1280,6 +1355,7 @@ app.use((req, res, next) => {
     if (blockedEntry.expiresAt && new Date(blockedEntry.expiresAt).getTime() < now) {
       // Le bannissement temporaire est expiré
       blockedIpsMap.delete(clientIp);
+      saveSecurityStateToDisk();
     } else {
       blockedEntry.attemptsCount = (blockedEntry.attemptsCount || 0) + 1;
       recordSecurityLog({
@@ -1380,7 +1456,7 @@ app.use((req, res, next) => {
     } else {
       rateData.count++;
       
-      const maxLimit = pathLower.startsWith('/api/scrape') ? 25 : securitySettings.maxRequestsPerMinute;
+      const maxLimit = pathLower.startsWith('/api/scrape') ? 35 : securitySettings.maxRequestsPerMinute;
       if (rateData.count > maxLimit) {
         rateData.violations++;
         const threat: ServerThreatLevel = rateData.violations > 3 ? 'HIGH' : 'MEDIUM';
@@ -2049,15 +2125,65 @@ app.post("/api/paydunya/create-invoice", async (req, res) => {
     const taxAmountNum = Math.round(Number(vatAmount) || 0);
     const targetItemsTotal = Math.max(1, totalAmount - (taxAmountNum < totalAmount ? taxAmountNum : 0));
 
-    const invoiceItems: Record<string, any> = {
-      item_0: {
+    const rawItems: any[] = Array.isArray(items) && items.length > 0 ? items : [];
+    const invoiceItems: Record<string, any> = {};
+
+    if (rawItems.length > 0) {
+      let sumLines = 0;
+      rawItems.forEach((it, idx) => {
+        const uPrice = Math.max(1, Math.round(Number(it.unitPrice ?? it.price) || 0));
+        const q = Math.max(1, Math.round(Number(it.quantity) || 1));
+        const lTotal = Math.max(1, Math.round(Number(it.totalPrice ?? (uPrice * q)) || (uPrice * q)));
+        sumLines += lTotal;
+        invoiceItems[`item_${idx}`] = {
+          name: String(it.name || `Article #${idx + 1}`).substring(0, 90),
+          quantity: q,
+          unit_price: String(uPrice),
+          total_price: String(lTotal),
+          description: String(it.description || `${it.brand || 'Matériel'} — Zone Équipements`).substring(0, 150)
+        };
+      });
+
+      // Si le client verse un acompte (ex: 30%)
+      if (paymentChoice === 'deposit' && targetItemsTotal < sumLines) {
+        const ratio = targetItemsTotal / sumLines;
+        let adjustedSum = 0;
+        const keys = Object.keys(invoiceItems);
+        keys.forEach((k, kIdx) => {
+          if (kIdx === keys.length - 1) {
+            const lastVal = Math.max(1, targetItemsTotal - adjustedSum);
+            invoiceItems[k].total_price = String(lastVal);
+            invoiceItems[k].unit_price = String(Math.round(lastVal / invoiceItems[k].quantity));
+            invoiceItems[k].description = `${invoiceItems[k].description} (Acompte partiel)`;
+          } else {
+            const adj = Math.max(1, Math.round(Number(invoiceItems[k].total_price) * ratio));
+            adjustedSum += adj;
+            invoiceItems[k].total_price = String(adj);
+            invoiceItems[k].unit_price = String(Math.round(adj / invoiceItems[k].quantity));
+            invoiceItems[k].description = `${invoiceItems[k].description} (Acompte partiel)`;
+          }
+        });
+      } else if (sumLines !== targetItemsTotal) {
+        const diff = targetItemsTotal - sumLines;
+        if (diff > 0) {
+          invoiceItems[`item_${rawItems.length}`] = {
+            name: 'Fret, Transit & Logistique',
+            quantity: 1,
+            unit_price: String(diff),
+            total_price: String(diff),
+            description: 'Frais de transport et transit'
+          };
+        }
+      }
+    } else {
+      invoiceItems.item_0 = {
         name: description || `Règlement Commande ${orderNumber || orderId}`,
         quantity: 1,
         unit_price: String(targetItemsTotal),
         total_price: String(targetItemsTotal),
-        description: `Matériel MRO & Équipements Industriels — ${companyName || 'ZONE ÉQUIPEMENTS'}`
-      }
-    };
+        description: `Fournitures & Équipements Industriels — ${companyName || 'ZONE ÉQUIPEMENTS'}`
+      };
+    }
 
     const taxesObj: Record<string, any> = {};
     if (taxAmountNum > 0 && taxAmountNum < totalAmount) {
@@ -2781,6 +2907,19 @@ app.post("/api/scrape-product", async (req, res) => {
       if (!extractedTitle) {
         extractedTitle = cleanProductTitle($('title').text().replace(/[-_|].*$/, '').trim());
       }
+
+      // Extraction complète de TOUTES les galeries d'images enfouies dans les scripts JSON (Alibaba, AliExpress, 1688, Amazon, Made-in-China, Grainger)
+      const scriptTexts = $('script').map((_, el) => $(el).html() || '').get().join('\n');
+      const combinedForImgs = `${rawHtml}\n${scriptTexts}`;
+      const imgMatches = combinedForImgs.matchAll(/"(?:https?:)?(\/\/[^"'\s\\]+?\.(?:jpg|jpeg|png|webp)(?:[?&][^"'\s\\]*)?)"/gi);
+      for (const m of imgMatches) {
+        let u = m[1];
+        if (u.startsWith('//')) u = 'https:' + u;
+        if (!/logo|icon|avatar|favicon|sprite|blank|spacer|badge|1x1|button|star|feedback/i.test(u)) {
+          extractedImages.push(u);
+        }
+      }
+
       $('script, style, noscript, svg, iframe').remove();
       cleanedMainHtmlSnippet = $.text().replace(/\s+/g, ' ').trim().substring(0, 12000);
     } catch (cheerioErr) {
@@ -2953,50 +3092,10 @@ app.post("/api/scrape-product", async (req, res) => {
         }
       });
 
-      if (!hasRealPageData) {
-        // Appel IA léger ciblé sur l'identification du pays du fournisseur/produit et de l'entrepôt le plus proche
-        const geoPrompt = `Tu es l'IA logistique principale de Zone Équipements.
-Analyse ce lien/produit : "${inputVal}" (Titre: "${extractedTitle}", Marque: "${resolvedBrand}", Fournisseur: "${extractedSupplierName}", Pays détecté: "${extractedSupplierCountry || country}").
-Entrepôts disponibles : ${JSON.stringify(candidateWarehouses)}.
-
-Détermine :
-1. "fournisseur_pays" : Le pays réel du fournisseur ou d'origine du produit en français (ex: "États-Unis", "Chine", "France", "Allemagne"). Si tu es confus ou que l'information est introuvable, renvoie "".
-2. "entrepot_proche_id" : L'ID exact de l'entrepôt géographiquement le plus proche parmi la liste fournie (en analysant son adresse, son téléphone et son pays). Si aucun entrepôt ne correspond ou si tu es confus, renvoie "".
-3. "entrepot_proche_motif" : Explication courte en français du choix de l'entrepôt par l'IA.
-4. "ia_pays_confiant" : true si tu as pu identifier clairement le pays et/ou l'entrepôt, false si tu es confus ou que l'information est absente (auquel cas l'utilisateur utilisera la sélection manuelle de pays de secours).`;
-
-        const geoResp = await ai.models.generateContent({
-          model: "gemini-3.8-flash",
-          contents: [{ role: "user", parts: [{ text: geoPrompt }] }],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                fournisseur_pays: { type: Type.STRING },
-                entrepot_proche_id: { type: Type.STRING },
-                entrepot_proche_motif: { type: Type.STRING },
-                ia_pays_confiant: { type: Type.BOOLEAN }
-              },
-              required: ["fournisseur_pays", "ia_pays_confiant"]
-            }
-          }
-        });
-        const parsedGeo = JSON.parse((geoResp.text || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim());
-        if (parsedGeo.fournisseur_pays && parsedGeo.fournisseur_pays.trim()) {
-          extractedSupplierCountry = translateSpecValueToFrench(parsedGeo.fournisseur_pays.trim());
-          aiCountryConfident = Boolean(parsedGeo.ia_pays_confiant);
-        }
-        if (parsedGeo.entrepot_proche_id && candidateWarehouses.some((w: any) => w.id === parsedGeo.entrepot_proche_id)) {
-          aiClosestWarehouseId = parsedGeo.entrepot_proche_id;
-          aiClosestWarehouseReason = parsedGeo.entrepot_proche_motif || 'Assigné automatiquement par l\'IA';
-          aiCountryConfident = true;
-        }
-      } else {
       const promptContent = `Tu es un expert en matériel industriel, équipement MRO et sourcing B2B international.
 RÈGLE STRICTE ET ABSOLUE : ZÉRO DONNÉE FICTIVE OU INVENTÉE !
-IDENTIFICATION STRICTE DU PRODUIT PRINCIPAL : La page source peut contenir des produits similaires, sponsorisés ou recommandés. Tu dois identifier UNIQUEMENT le produit principal correspondant au Titre brut ("${extractedTitle}") et à l'URL ("${inputVal}"), et ignorer totalement les prix, poids ou modèles des produits secondaires/recommandés.
-Extrais et traduis UNIQUEMENT les données réellement présentes pour ce produit principal. Si une donnée (prix, poids, dimensions, marque, modèle, fournisseur, variante, caractéristique) n'est PAS explicitement disponible dans la source, renvoie une valeur vide ("" pour un texte, 0 pour un nombre, [] pour une liste). Ne complète JAMAIS avec des valeurs inventées ou estimées.
+IDENTIFICATION STRICTE DU PRODUIT PRINCIPAL : La page source peut contenir des produits similaires, sponsorisés ou recommandés. Tu dois identifier UNIQUEMENT le produit principal correspondant au Titre brut ("${extractedTitle}"), à la marque ("${cleanRepeatedText(resolvedBrand)}") et à l'URL ("${inputVal}"), et ignorer totalement les prix, poids ou modèles des produits secondaires/recommandés.
+Extrais et traduis les données réellement présentes pour ce produit principal. Si une donnée n'est pas explicitement disponible, renvoie une valeur vide ("" pour un texte, 0 pour un nombre, [] pour une liste). Ne complète JAMAIS avec des valeurs inventées.
 
 Champs attendus :
 1. "titre_francais" : Traduction fidèle et professionnelle en FRANÇAIS du titre réel du produit principal (sans mention "Buy on Alibaba.com", "Grainger", "Hot Sale", etc.).
@@ -3167,7 +3266,6 @@ ${cleanedMainHtmlSnippet ? `- Texte nettoyé de la fiche produit principale: ${c
             }
           }
         });
-      }
       }
     } catch (aiErr) {
       console.warn("Notice: Gemini 3.8 Flash synthesis warning:", aiErr);
@@ -3688,6 +3786,40 @@ app.get("/api/security/honeypot-trap", (req, res) => {
     actionTaken: 'BLOCKED'
   });
   return res.status(403).json({ error: "Bouclier de Sécurité Activé." });
+});
+
+// Route proxy d'image pour contourner les protections anti-hotlinking et CORS des fournisseurs externes
+app.get("/api/proxy-image", async (req, res) => {
+  try {
+    const rawUrl = String(req.query.url || '').trim();
+    if (!rawUrl || !rawUrl.startsWith('http')) {
+      return res.status(400).send('URL d\'image invalide');
+    }
+    let domainReferer = 'https://www.google.com/';
+    try {
+      const u = new URL(rawUrl);
+      domainReferer = `${u.protocol}//${u.hostname}/`;
+    } catch {}
+
+    const response = await fetch(rawUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Referer': domainReferer
+      }
+    });
+    if (!response.ok) {
+      return res.redirect('https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80');
+    }
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    const arrayBuffer = await response.arrayBuffer();
+    return res.send(Buffer.from(arrayBuffer));
+  } catch {
+    return res.redirect('https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80');
+  }
 });
 
 // Route officielle de téléchargement direct de Fiche Technique & Catalogue PDF (sans redirection ni mention Grainger)

@@ -104,9 +104,9 @@ export function filterOutSmallOrIconImages(urls?: (string | undefined | null)[])
     // 1. Normaliser d'abord les vignettes Grainger, Alibaba, AliExpress, Made-in-China & Amazon en Haute Définition AVANT le filtrage de taille !
     let hdUrl = trimmed
       .replace(/_\.webp$/i, '')
-      .replace(/_[0-9]+x[0-9]+[a-z0-9]*\.(jpg|png|jpeg|webp)$/i, '')
+      .replace(/_[0-9]+x[0-9]+[a-z0-9]*\.(jpg|png|jpeg|webp)$/i, '.$1')
       .replace(/\.(jpg|png|jpeg|webp)_[0-9]+x[0-9]+.*$/i, '.$1')
-      .replace(/_(50x50|80x80|100x100|120x120|220x220|350x350)\..*$/i, '');
+      .replace(/_(?:50x50|80x80|100x100|120x120|220x220|350x350)\.([a-z0-9]+).*$/i, '.$1');
 
     if (hdUrl.includes('static.grainger.com/rp/s/is/image/') || hdUrl.includes('static.grainger.com')) {
       const baseScene7 = hdUrl.split('?')[0];
@@ -2031,6 +2031,11 @@ export interface Order {
   agentCode?: string; // Code agent assigné sur chaque commande (ex: AGENT-DAKAR-01)
   agentWarehouseId?: string; // Entrepôt d'agent utilisé pour cette commande
   clientWarehouseId?: string; // Identifiant client anonyme pour réception entrepôt (ex: CLI-4829)
+  posSessionId?: string; // Identifiant de session caisse POS si vente en magasin
+  cashierName?: string; // Nom du caissier ou gestionnaire de vente
+  isDirectInvoice?: boolean; // Facture directe comptoir ou magasin
+  signature?: string; // Signature administrative ou agent
+  generatedByAdminEmail?: string; // Email de l'administrateur ayant généré le document
   // Suivi Dédouanement & GAINDE Sénégal
   customsDeclarationNumber?: string; // N° Déclaration GAINDE Sénégal
   customsDpiNumber?: string; // N° DPI (Déclaration Préalable d'Importation)
@@ -3126,6 +3131,11 @@ class CatalogService {
       this.updateSupplier(resolvedSupplier.id, { agentWarehouseId: assignedWarehouse.id }, 'Système (Auto-Entrepôt)');
     }
 
+    const resolvedImages = pData.images && pData.images.length > 0
+      ? filterOutSmallOrIconImages(pData.images.filter(Boolean))
+      : (pData.img ? [pData.img] : (pData.image ? [pData.image] : []));
+    const resolvedMainImg = resolvedImages[0] || pData.img || pData.image || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=600';
+
     const newProduct: ExtendedProduct = {
       id: newId,
       name: cleanNewName,
@@ -3133,8 +3143,8 @@ class CatalogService {
       price: resolvedPrice,
       category: cat,
       subcategory: subcat,
-      img: pData.img || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=600',
-      images: pData.images && pData.images.length > 0 ? pData.images : (pData.img ? [pData.img] : []),
+      img: resolvedMainImg,
+      images: resolvedImages.length > 0 ? resolvedImages : [resolvedMainImg],
       showDeposit: pData.showDeposit ?? false,
       depositPercentage: pData.depositPercentage || 30,
       rating: pData.rating || 5.0,
@@ -4154,11 +4164,50 @@ class CatalogService {
     const ordersCount = completedOrActiveOrders.length;
     const quotesCount = allOrders.filter(o => o.isQuote).length;
 
-    // Répartition par plateforme (uniquement sur commandes finalisées)
+    // Répartition détaillée par canal de sourcing et provenance géographique
     const platformBreakdown: Record<string, number> = {};
+    const platformStats: Record<string, { amount: number; count: number; icon: string }> = {};
+    const originBreakdown: Record<string, { amount: number; count: number; flag: string }> = {};
+
     completedOrActiveOrders.forEach(o => {
-      const p = o.sourcePlatform || 'Autre';
-      platformBreakdown[p] = (platformBreakdown[p] || 0) + (o.totalTTC || 0);
+      let platform = o.sourcePlatform;
+      if (!platform || platform === 'Autre') {
+        const firstItem = o.items?.[0];
+        const prod = firstItem ? this.getProductById(firstItem.productId) : null;
+        platform = prod?.sourcePlatform || (o.posSessionId ? 'Stock Magasin Dakar' : 'Sourcing Direct');
+      }
+      const pKey = platform || 'Stock Magasin Dakar';
+      platformBreakdown[pKey] = (platformBreakdown[pKey] || 0) + (o.totalTTC || 0);
+
+      const pIcon = pKey.toLowerCase().includes('alibaba') ? '🇨🇳' :
+                    pKey.toLowerCase().includes('grainger') ? '🇺🇸' :
+                    pKey.toLowerCase().includes('amazon') ? '📦' :
+                    pKey.toLowerCase().includes('stock') ? '🏬' : '🌐';
+
+      if (!platformStats[pKey]) {
+        platformStats[pKey] = { amount: 0, count: 0, icon: pIcon };
+      }
+      platformStats[pKey].amount += (o.totalTTC || 0);
+      platformStats[pKey].count += 1;
+
+      // Provenance géographique
+      let origin = 'Sénégal (Stock Local)';
+      const firstItem = o.items?.[0];
+      const prod = firstItem ? this.getProductById(firstItem.productId) : null;
+      const rawOrigin = prod?.origin || (firstItem as any)?.origin;
+      if (rawOrigin) {
+        if (/chine|china|asia|shenzhen|guangzhou/i.test(rawOrigin)) origin = 'Chine';
+        else if (/usa|états-unis|etats-unis|united states|amérique/i.test(rawOrigin)) origin = 'États-Unis';
+        else if (/europe|france|allemagne|germany|italie|italy|espagne/i.test(rawOrigin)) origin = 'Europe (France / Allemagne)';
+        else if (/sénégal|senegal|dakar|local/i.test(rawOrigin)) origin = 'Sénégal (Stock Local)';
+        else origin = rawOrigin;
+      }
+      const flag = origin.includes('Chine') ? '🇨🇳' : origin.includes('États-Unis') ? '🇺🇸' : origin.includes('Europe') ? '🇪🇺' : '🇸🇳';
+      if (!originBreakdown[origin]) {
+        originBreakdown[origin] = { amount: 0, count: 0, flag };
+      }
+      originBreakdown[origin].amount += (o.totalTTC || 0);
+      originBreakdown[origin].count += 1;
     });
 
     return {
@@ -4174,7 +4223,9 @@ class CatalogService {
       ordersCount,
       quotesCount,
       unfinalizedCount: unfinalizedOrders.length,
-      platformBreakdown
+      platformBreakdown,
+      platformStats,
+      originBreakdown
     };
   }
 

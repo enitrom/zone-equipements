@@ -445,7 +445,7 @@ function Header() {
                   {displayCompanyName}
                 </span>
                 <span className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold block mt-1">
-                  {displayCompanyBadge || 'MRO'} • Dakar, Sénégal
+                  {displayCompanyBadge || 'Équipements & Pièces Pro'} • Dakar, Sénégal
                 </span>
               </div>
             </Link>

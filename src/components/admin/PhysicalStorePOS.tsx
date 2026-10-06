@@ -56,13 +56,11 @@ const STORAGE_KEYS = {
 interface PhysicalStorePOSProps {
   onNotify?: (msg: string) => void;
   onRefreshParent?: () => void;
-  onOpenDirectInvoiceModal?: () => void;
 }
 
 export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
   onNotify,
-  onRefreshParent,
-  onOpenDirectInvoiceModal
+  onRefreshParent
 }) => {
   const settings = siteSettingsService.getSettings();
 
@@ -138,6 +136,7 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
   const [onlyInStock, setOnlyInStock] = useState<boolean>(false);
   const [cartLines, setCartLines] = useState<PosCartLine[]>([]);
   const [docType, setDocType] = useState<'invoice' | 'quote'>('invoice');
+  const [paymentStatus, setPaymentStatus] = useState<'Payé' | 'Non payé' | 'Acompte'>('Payé');
   const [applyVat, setApplyVat] = useState<boolean>(settings.applyVatByDefault ?? true);
   const [discountAmountFCFA, setDiscountAmountFCFA] = useState<number>(0);
 
@@ -146,18 +145,22 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
   const [customerName, setCustomerName] = useState('');
   const [customerCompany, setCustomerCompany] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [customerEmail, setCustomerEmail] = useState('');
   const [customerNinea, setCustomerNinea] = useState('');
   const [customerAddress, setCustomerAddress] = useState('Achat au Comptoir — Magasin Dakar');
+  const [notes, setNotes] = useState('');
 
   // Payment & Cash Drawer Calculator
-  const [paymentMethod, setPaymentMethod] = useState<'Espèces (Cash)' | 'Wave' | 'Orange Money' | 'Virement / Chèque' | 'Crédit / Acompte B2B'>('Espèces (Cash)');
+  const [paymentMethod, setPaymentMethod] = useState<'Espèces (Cash)' | 'Wave' | 'Orange Money' | 'Virement Bancaire B2B' | 'Chèque' | 'Crédit / Acompte B2B'>('Espèces (Cash)');
   const [amountReceivedInput, setAmountReceivedInput] = useState<string>('');
 
   // Quick Custom Line in POS
   const [showCustomLineRow, setShowCustomLineRow] = useState(false);
   const [customLineName, setCustomLineName] = useState('');
+  const [customLineBrand, setCustomLineBrand] = useState('Standard / Atelier');
   const [customLinePrice, setCustomLinePrice] = useState('');
   const [customLineQty, setCustomLineQty] = useState('1');
+  const [customLineVat, setCustomLineVat] = useState(true);
 
   // Stock Management Tab State
   const [stockSearch, setStockSearch] = useState('');
@@ -494,7 +497,7 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
     const price = parseFloat(customLinePrice) || 0;
     const qty = Math.max(1, parseInt(customLineQty, 10) || 1);
     if (!customLineName.trim() || price <= 0) {
-      notify('Veuillez saisir une désignation et un prix valide.');
+      notify('Veuillez saisir une désignation et un prix HT valide.');
       return;
     }
     setCartLines(prev => [
@@ -503,14 +506,15 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
         id: `custom-${Date.now()}`,
         productId: Date.now(),
         name: customLineName.trim(),
-        sku: 'SUR-MESURE',
-        brand: 'PRESTATION MAGASIN',
+        sku: `DIR-${Date.now().toString().slice(-4)}`,
+        brand: customLineBrand.trim() || 'Atelier Magasin',
         unitPriceHT: price,
         quantity: qty,
         isCustom: true
       }
     ]);
     setCustomLineName('');
+    setCustomLineBrand('Standard / Atelier');
     setCustomLinePrice('');
     setCustomLineQty('1');
     setShowCustomLineRow(false);
@@ -529,9 +533,11 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
   const numericAmountReceived = parseFloat(amountReceivedInput) || 0;
   const changeToReturn = numericAmountReceived > grandTotalTTC ? numericAmountReceived - grandTotalTTC : 0;
   const remainingCreditBalance =
-    paymentMethod === 'Crédit / Acompte B2B' && numericAmountReceived < grandTotalTTC
+    (paymentMethod === 'Crédit / Acompte B2B' || paymentStatus === 'Acompte') && numericAmountReceived < grandTotalTTC
       ? grandTotalTTC - numericAmountReceived
-      : 0;
+      : paymentStatus === 'Non payé'
+        ? grandTotalTTC
+        : 0;
 
   // Complete Sale / Issue Counter Invoice & Deduct Physical Stock
   const handleFinalizeSale = () => {
@@ -542,12 +548,12 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
 
     const finalClientName = isQuickCounterClient
       ? (customerName.trim() || 'Client Comptoir Magasin')
-      : (customerName.trim() || 'Client B2B Magasin');
+      : (customerName.trim() || customerCompany.trim() || 'Client B2B Magasin');
 
     const now = new Date();
     const dateStamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
     const randSuffix = Math.floor(1000 + Math.random() * 9000);
-    const orderNumber = docType === 'invoice' ? `ZE-MAG-${dateStamp}-${randSuffix}` : `DEV-MAG-${dateStamp}-${randSuffix}`;
+    const orderNumber = docType === 'invoice' ? `FAC-MAG-${dateStamp}-${randSuffix}` : `DEV-MAG-${dateStamp}-${randSuffix}`;
 
     const orderItems: OrderItem[] = cartLines.map(line => ({
       productId: line.productId,
@@ -565,20 +571,46 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
       imageUrl: line.imageUrl || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=400'
     }));
 
-    const isCredit = paymentMethod === 'Crédit / Acompte B2B' && remainingCreditBalance > 0;
-    const paidAmount = docType === 'quote'
-      ? 0
-      : isCredit
-        ? numericAmountReceived
-        : grandTotalTTC;
+    const isCredit = (paymentMethod === 'Crédit / Acompte B2B' || paymentStatus === 'Acompte') && remainingCreditBalance > 0;
+    const isUnpaid = paymentStatus === 'Non payé';
+
+    let resolvedPaymentStatus: Order['paymentStatus'] = 'Payé intégralement';
+    let resolvedOrderStatus: Order['status'] = 'Livrée';
+    let paidAmount = grandTotalTTC;
+    let dueAmount = 0;
+
+    if (docType === 'quote') {
+      resolvedPaymentStatus = 'Non payé';
+      resolvedOrderStatus = 'En attente';
+      paidAmount = 0;
+      dueAmount = grandTotalTTC;
+    } else if (isUnpaid) {
+      resolvedPaymentStatus = 'Non payé';
+      resolvedOrderStatus = 'En attente';
+      paidAmount = 0;
+      dueAmount = grandTotalTTC;
+    } else if (isCredit) {
+      resolvedPaymentStatus = 'Acompte 30% versé';
+      resolvedOrderStatus = 'En cours';
+      paidAmount = numericAmountReceived;
+      dueAmount = remainingCreditBalance;
+    } else {
+      resolvedPaymentStatus = 'Payé intégralement';
+      resolvedOrderStatus = 'Livrée';
+      paidAmount = grandTotalTTC;
+      dueAmount = 0;
+    }
+
+    const fallbackEmail = `${(customerPhone || 'comptoir').replace(/[^a-zA-Z0-9]/g, '')}@zoneequipements.sn`;
+    const finalEmail = customerEmail.trim() || fallbackEmail;
 
     const newOrderPayload: Partial<Order> = {
       orderNumber,
       customerName: finalClientName,
-      customerCompany: customerCompany.trim() || (isQuickCounterClient ? 'Vente Comptoir Directe' : 'Client Professionnel'),
-      customerEmail: 'comptoir@zone-equipements.sn',
+      customerCompany: customerCompany.trim() || (isQuickCounterClient ? undefined : 'Client Professionnel'),
+      customerEmail: finalEmail,
       customerPhone: customerPhone.trim() || '+221 76 653 83 84',
-      customerAddress: customerAddress.trim() || 'Magasin Physique Dakar',
+      customerAddress: customerAddress.trim() || 'Achat Comptoir — Magasin Dakar',
       customerCity: 'Dakar (Magasin Physique)',
       customerCountry: 'Sénégal',
       ninea: customerNinea.trim() || undefined,
@@ -589,19 +621,15 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
       totalTTC: grandTotalTTC,
       discountAmount: discountAmountFCFA > 0 ? discountAmountFCFA : undefined,
       paymentMethod: docType === 'quote' ? 'Devis Proforma Comptoir' : paymentMethod,
-      paymentStatus: docType === 'quote'
-        ? 'En attente'
-        : isCredit
-          ? 'Acompte 30% versé'
-          : 'Payé intégralement',
+      paymentStatus: resolvedPaymentStatus,
       paymentChoice: isCredit ? 'deposit_30' : 'full_100',
       amountPaid: paidAmount,
-      amountDue: docType === 'quote' ? grandTotalTTC : remainingCreditBalance,
-      status: docType === 'quote' ? 'En attente' : 'Livrée',
+      amountDue: dueAmount,
+      status: resolvedOrderStatus,
       shippingMethod: 'LOCAL_DELIVERY',
       isQuote: docType === 'quote',
       ethicalContractAccepted: true,
-      notes: `Émis au Magasin Physique (${isOnline ? 'En ligne' : 'Mode Hors-Ligne'}) • Mode: ${paymentMethod}${
+      notes: `${notes.trim() ? `${notes.trim()} • ` : ''}Émis au Magasin Physique (${isOnline ? 'En ligne' : 'Mode Hors-Ligne'}) • Mode: ${paymentMethod}${
         changeToReturn > 0 ? ` • Reçu: ${numericAmountReceived.toLocaleString('fr-FR')} F / Monnaie rendue: ${changeToReturn.toLocaleString('fr-FR')} F` : ''
       }`
     };
@@ -630,6 +658,17 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
     const createdOrder = catalogService.addOrder(newOrderPayload);
     setOrders(prev => [createdOrder, ...prev]);
 
+    // 3. Capture client email into newsletter / marketing list if provided
+    if (customerEmail.trim()) {
+      siteSettingsService.addNewsletterSubscriber(
+        customerEmail.trim(),
+        finalClientName,
+        customerPhone.trim(),
+        customerCompany.trim(),
+        'facturation_directe'
+      );
+    }
+
     if (!isOnline) {
       const op: OfflineSyncOperation = {
         id: `op-ord-${Date.now()}`,
@@ -640,14 +679,17 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
       saveSyncQueue([...syncQueue, op]);
     }
 
-    // 3. Reset POS cart & open Print/Receipt modal
+    // 4. Reset POS cart & open Print/Receipt modal
     setCartLines([]);
     setDiscountAmountFCFA(0);
     setAmountReceivedInput('');
     setCustomerName('');
     setCustomerCompany('');
     setCustomerPhone('');
+    setCustomerEmail('');
     setCustomerNinea('');
+    setCustomerAddress('Achat au Comptoir — Magasin Dakar');
+    setNotes('');
     setPrintedOrder(createdOrder);
 
     if (onRefreshParent) onRefreshParent();
@@ -1105,18 +1147,6 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
             <span>{isSyncing ? 'Synchro...' : 'Synchroniser Stock & Cloud'}</span>
           </button>
 
-          {onOpenDirectInvoiceModal && (
-            <button
-              type="button"
-              onClick={onOpenDirectInvoiceModal}
-              className="px-3.5 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md cursor-pointer transition-colors"
-              title="Ouvrir le générateur complet de Facture / Devis Comptoir (avec options de fret et acomptes B2B)"
-            >
-              <FileText className="w-4 h-4 shrink-0" />
-              <span>+ Facture Comptoir (B2B / Devis)</span>
-            </button>
-          )}
-
           <button
             type="button"
             onClick={() => setShowQuickNewProductModal(true)}
@@ -1260,43 +1290,62 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
 
             {/* Custom Item Quick Adder */}
             {showCustomLineRow && (
-              <div className="p-3.5 bg-slate-900 border border-orange-500/40 rounded-xl grid grid-cols-1 sm:grid-cols-12 gap-2 items-center animate-fadeIn">
-                <div className="sm:col-span-5">
-                  <input
-                    type="text"
-                    placeholder="Désignation article hors-catalogue ou main d'œuvre..."
-                    value={customLineName}
-                    onChange={e => setCustomLineName(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
-                  />
-                </div>
-                <div className="sm:col-span-3">
-                  <input
-                    type="number"
-                    placeholder="Prix HT (FCFA)"
-                    value={customLinePrice}
-                    onChange={e => setCustomLinePrice(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white font-mono"
-                  />
-                </div>
-                <div className="sm:col-span-2">
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Qté"
-                    value={customLineQty}
-                    onChange={e => setCustomLineQty(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white text-center font-mono"
-                  />
-                </div>
-                <div className="sm:col-span-2">
+              <div className="p-3.5 bg-slate-900 border border-orange-500/40 rounded-xl space-y-2 animate-fadeIn">
+                <div className="flex items-center justify-between text-[11px] text-orange-300 font-bold uppercase">
+                  <span>+ Ajouter un article hors-catalogue / Prestation d'Atelier</span>
                   <button
                     type="button"
-                    onClick={handleAddCustomLineToCart}
-                    className="w-full py-2 bg-[#FF6600] hover:bg-orange-600 text-white rounded-lg text-xs font-bold cursor-pointer"
+                    onClick={() => setShowCustomLineRow(false)}
+                    className="text-slate-400 hover:text-white"
                   >
-                    Ajouter
+                    ✕
                   </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+                  <div className="sm:col-span-4">
+                    <input
+                      type="text"
+                      placeholder="Désignation article ou prestation..."
+                      value={customLineName}
+                      onChange={e => setCustomLineName(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white"
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <input
+                      type="text"
+                      placeholder="Marque / Origine (ex: Atelier)"
+                      value={customLineBrand}
+                      onChange={e => setCustomLineBrand(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-300"
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <input
+                      type="number"
+                      placeholder="Prix unitaire HT (FCFA)"
+                      value={customLinePrice}
+                      onChange={e => setCustomLinePrice(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
+                    />
+                  </div>
+                  <div className="sm:col-span-2 flex gap-1.5">
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="Qté"
+                      value={customLineQty}
+                      onChange={e => setCustomLineQty(e.target.value)}
+                      className="w-14 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white text-center font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddCustomLineToCart}
+                      className="flex-1 py-1.5 bg-[#FF6600] hover:bg-orange-600 text-white rounded-lg text-xs font-bold cursor-pointer"
+                    >
+                      Ajouter
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1415,78 +1464,115 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
               <div className="grid grid-cols-2 gap-1.5 bg-slate-900 p-1 rounded-xl border border-slate-800 w-full">
                 <button
                   type="button"
-                  onClick={() => setDocType('invoice')}
+                  onClick={() => { setDocType('invoice'); setPaymentStatus('Payé'); }}
                   className={`py-2 px-3 rounded-lg text-xs font-black uppercase transition-all cursor-pointer ${
                     docType === 'invoice'
                       ? 'bg-[#FF6600] text-white shadow'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  🧾 Facture Vente
+                  🧾 Facture Vente Directe
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDocType('quote')}
+                  onClick={() => { setDocType('quote'); setPaymentStatus('Non payé'); }}
                   className={`py-2 px-3 rounded-lg text-xs font-black uppercase transition-all cursor-pointer ${
                     docType === 'quote'
                       ? 'bg-blue-600 text-white shadow'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  📋 Devis Comptoir
+                  📋 Devis Proforma
                 </button>
               </div>
             </div>
 
-            {/* Customer Mode: Quick Counter vs Full B2B */}
+            {/* Customer Mode: Quick Counter vs Full B2B & Proforma */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold uppercase text-slate-300 flex items-center gap-1.5">
                   <User className="w-3.5 h-3.5 text-orange-400" />
-                  Identification Client
+                  Identification Client {isQuickCounterClient ? '(Comptoir)' : '(B2B & Devis)'}
                 </span>
                 <button
                   type="button"
                   onClick={() => setIsQuickCounterClient(!isQuickCounterClient)}
                   className="text-[11px] font-bold text-orange-400 hover:underline cursor-pointer"
                 >
-                  {isQuickCounterClient ? '+ Renseigner Société / NINEA B2B' : 'Revenir en Vente Comptoir Rapide'}
+                  {isQuickCounterClient ? '+ Facturation Société / NINEA / Email' : 'Passer en Vente Comptoir Rapide'}
                 </button>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <input
-                  type="text"
-                  placeholder="Nom du client (ou laisser vide = Client Comptoir)"
-                  value={customerName}
-                  onChange={e => setCustomerName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white"
-                />
-                <input
-                  type="text"
-                  placeholder="Téléphone (Wave / Contact)"
-                  value={customerPhone}
-                  onChange={e => setCustomerPhone(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
-                />
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-0.5">Nom / Interlocuteur</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Ibrahima Diallo (ou Comptoir)"
+                    value={customerName}
+                    onChange={e => setCustomerName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-400 mb-0.5">Téléphone (Wave / WhatsApp)</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: +221 77 000 00 00"
+                    value={customerPhone}
+                    onChange={e => setCustomerPhone(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
+                  />
+                </div>
               </div>
 
               {!isQuickCounterClient && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 animate-fadeIn">
-                  <input
-                    type="text"
-                    placeholder="Société / Entreprise B2B"
-                    value={customerCompany}
-                    onChange={e => setCustomerCompany(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white"
-                  />
-                  <input
-                    type="text"
-                    placeholder="NINEA / RCCM"
-                    value={customerNinea}
-                    onChange={e => setCustomerNinea(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
-                  />
+                <div className="space-y-2 pt-1 border-t border-slate-800/80 animate-fadeIn">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-0.5">Société / Raison Sociale</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Sahel Industries SARL"
+                        value={customerCompany}
+                        onChange={e => setCustomerCompany(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-0.5">Email Client (Reçu / Devis)</label>
+                      <input
+                        type="email"
+                        placeholder="contact@entreprise.sn"
+                        value={customerEmail}
+                        onChange={e => setCustomerEmail(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-0.5">NINEA / RCCM (Optionnel)</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 009876543 2G3"
+                        value={customerNinea}
+                        onChange={e => setCustomerNinea(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-0.5">Adresse Livraison / Chantier</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Km 12 Route de Rufisque, Dakar"
+                        value={customerAddress}
+                        onChange={e => setCustomerAddress(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white"
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -1495,7 +1581,7 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
               {cartLines.length === 0 ? (
                 <div className="py-10 text-center border-2 border-dashed border-slate-800 rounded-xl text-xs text-slate-500">
-                  Cliquez sur un équipement à gauche pour l'ajouter au ticket de caisse.
+                  Cliquez sur un équipement à gauche ou ajoutez une ligne libre pour constituer la facture.
                 </div>
               ) : (
                 cartLines.map(line => (
@@ -1607,16 +1693,62 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
 
               {docType === 'invoice' && (
                 <>
+                  {/* Payment Status (Payé / Acompte / Non payé) */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                      Statut Règlement Facture
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setPaymentStatus('Payé')}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                          paymentStatus === 'Payé'
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        🟢 Payé (Comptant)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentStatus('Acompte')}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                          paymentStatus === 'Acompte'
+                            ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        🟡 Acompte Versé
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentStatus('Non payé')}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                          paymentStatus === 'Non payé'
+                            ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'
+                        }`}
+                      >
+                        🔴 Non payé (À terme)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Payment Method */}
                   <div>
                     <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">
-                      Mode d'Encaissement au Comptoir
+                      Mode de Règlement
                     </label>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                      {(['Espèces (Cash)', 'Wave', 'Orange Money', 'Virement / Chèque', 'Crédit / Acompte B2B'] as const).map(method => (
+                      {(['Espèces (Cash)', 'Wave', 'Orange Money', 'Virement Bancaire B2B', 'Chèque', 'Crédit / Acompte B2B'] as const).map(method => (
                         <button
                           key={method}
                           type="button"
-                          onClick={() => setPaymentMethod(method)}
+                          onClick={() => {
+                            setPaymentMethod(method);
+                            if (method === 'Crédit / Acompte B2B') setPaymentStatus('Acompte');
+                          }}
                           className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border truncate cursor-pointer transition-all ${
                             paymentMethod === method
                               ? 'bg-[#FF6600] text-white border-[#FF6600]'
@@ -1630,11 +1762,11 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
                   </div>
 
                   {/* Cash / Deposit Calculator */}
-                  {(paymentMethod === 'Espèces (Cash)' || paymentMethod === 'Crédit / Acompte B2B') && grandTotalTTC > 0 && (
+                  {(paymentMethod === 'Espèces (Cash)' || paymentMethod === 'Crédit / Acompte B2B' || paymentStatus === 'Acompte') && grandTotalTTC > 0 && (
                     <div className="p-2.5 bg-slate-950 border border-slate-800 rounded-lg grid grid-cols-2 gap-2 items-center">
                       <div>
                         <label className="block text-[10px] text-slate-400 mb-0.5">
-                          {paymentMethod === 'Espèces (Cash)' ? 'Montant remis par le client' : 'Acompte versé maintenant'}
+                          {paymentMethod === 'Espèces (Cash)' && paymentStatus === 'Payé' ? 'Montant remis par le client' : 'Montant acompte encaissé'}
                         </label>
                         <input
                           type="number"
@@ -1645,7 +1777,7 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
                         />
                       </div>
                       <div className="text-right">
-                        {paymentMethod === 'Espèces (Cash)' ? (
+                        {paymentMethod === 'Espèces (Cash)' && paymentStatus === 'Payé' ? (
                           <>
                             <span className="block text-[10px] text-slate-400">Monnaie à rendre :</span>
                             <span className="font-mono font-black text-sm text-emerald-400">
@@ -1663,6 +1795,17 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {/* Optional Notes */}
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Notes / Instructions spécifiques (optionnel)..."
+                      value={notes}
+                      onChange={e => setNotes(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 placeholder-slate-500"
+                    />
+                  </div>
                 </>
               )}
 
@@ -1694,8 +1837,8 @@ export const PhysicalStorePOS: React.FC<PhysicalStorePOSProps> = ({
               <Printer className="w-4 h-4" />
               <span>
                 {docType === 'invoice'
-                  ? 'Encaisser, Déduire du Stock & Imprimer'
-                  : 'Générer & Imprimer le Devis Comptoir'}
+                  ? 'Encaisser, Déduire du Stock & Imprimer Facture'
+                  : 'Générer & Imprimer le Devis Proforma'}
               </span>
             </button>
           </div>

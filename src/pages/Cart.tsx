@@ -443,10 +443,17 @@ export default function Cart() {
             (it.variantName && v.name && v.name.toLowerCase() === it.variantName.toLowerCase()))
       ) as any;
 
+      const isTaxExemptLine = !isVatSystemActive || isExport || hasTaxExemptionVisa;
+      const unitPriceHT = Math.round(it.price / (isTaxExemptLine ? 1.0 : 1.18));
+      const lineTotalHT = unitPriceHT * it.quantity;
+
       return {
         productId: it.productId,
         name: it.name,
         price: it.price,
+        unitPriceHT: unitPriceHT,
+        priceHT: unitPriceHT,
+        totalHT: lineTotalHT,
         costPrice: resolvedCostPrice,
         supplierPrice: it.supplierPrice ?? prod?.supplierPrice,
         supplierCurrency: it.supplierCurrency ?? prod?.supplierCurrency ?? 'USD',
@@ -1341,7 +1348,7 @@ export default function Cart() {
               )}
 
               <div className="flex justify-between text-gray-600">
-                <span>TVA ({isVatSystemActive && !isExport && !hasTaxExemptionVisa ? `${Math.round((siteSettings.defaultVatRate ?? 0.18) * 100)}%` : '0%'}) :</span>
+                <span>TVA ({vatAmount > 0 ? `${(discountedSubtotalHT > 0 ? Math.round((vatAmount / discountedSubtotalHT) * 100) : 18)}%` : (isExport ? '0% Export' : hasTaxExemptionVisa ? '0% Exonéré DGID' : '0%')}) :</span>
                 <span className="font-mono font-semibold text-gray-600">
                   {vatAmount > 0 ? (
                     `+${vatAmount.toLocaleString('fr-FR')} FCFA`

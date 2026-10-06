@@ -36,7 +36,6 @@ import { printHtmlDocument } from '../utils/printDocument';
 import AnalyticsTrafficManager from '../components/admin/AnalyticsTrafficManager';
 import AdminNotificationsBell from '../components/admin/AdminNotificationsBell';
 import { EmailMarketingManager } from '../components/admin/EmailMarketingManager';
-import { DirectInvoiceModal } from '../components/admin/DirectInvoiceModal';
 import { PhysicalStorePOS } from '../components/admin/PhysicalStorePOS';
 import { TvaFiscaliteManager } from '../components/admin/TvaFiscaliteManager';
 import { WORLD_COUNTRIES, resolveCanonicalCountryName } from '../utils/countries';
@@ -75,7 +74,6 @@ export default function Admin() {
     return getFirstAllowedTab();
   });
   const [catalogSubTab, setCatalogSubTab] = useState<'products' | 'structure'>('products');
-  const [showDirectInvoiceModal, setShowDirectInvoiceModal] = useState(false);
   
   // Data states
   const [products, setProducts] = useState<ExtendedProduct[]>([]);
@@ -1849,7 +1847,6 @@ export default function Admin() {
           <PhysicalStorePOS
             onNotify={(msg) => triggerToast(msg)}
             onRefreshParent={refreshData}
-            onOpenDirectInvoiceModal={() => setShowDirectInvoiceModal(true)}
           />
         )}
 
@@ -6571,16 +6568,6 @@ export default function Admin() {
         message={confirmModal.message}
         onConfirm={confirmModal.onConfirm}
         onCancel={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
-      />
-
-      {/* ================= MODAL: FACTURATION DIRECTE / COMPTOIR ================= */}
-      <DirectInvoiceModal
-        isOpen={showDirectInvoiceModal}
-        onClose={() => setShowDirectInvoiceModal(false)}
-        onSuccess={(order) => {
-          refreshData();
-          triggerToast(`Facture / Devis comptoir ${order.orderNumber || order.id} créé et synchronisé avec succès !`);
-        }}
       />
     </div>
   );

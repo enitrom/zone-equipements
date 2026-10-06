@@ -540,6 +540,7 @@ export interface Product {
 export const DEFAULT_PRODUCT_IMAGE = 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80';
 export const DEFAULT_HERO_IMAGE = 'https://images.unsplash.com/photo-1504917599217-d4dc5ebe6122?w=1920&auto=format&fit=crop&q=80';
 export const DEFAULT_SECTOR_IMAGE = 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=800&auto=format&fit=crop&q=80';
+export const FALLBACK_SVG_PRODUCT = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 24 24" fill="%230f172a" stroke="%23ea580c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>';
 
 const FALLBACK_IMAGE_MAP: Record<string, string> = {
   power_drill: 'https://images.unsplash.com/photo-1504148455328-c376907d081c?w=800&auto=format&fit=crop&q=80',
@@ -614,8 +615,26 @@ export function getProductImageUrl(img?: string): string {
 
 export function handleImageError(e: React.SyntheticEvent<HTMLImageElement, Event>, fallbackUrl = DEFAULT_PRODUCT_IMAGE) {
   const target = e.currentTarget;
-  if (target.src !== fallbackUrl) {
+  const currentSrc = target.src || '';
+
+  // 1. If direct remote image failed and hasn't been proxied yet, retry via proxy-image
+  if (
+    currentSrc.startsWith('http') &&
+    !currentSrc.includes('/api/proxy-image') &&
+    !currentSrc.includes('photo-1581092160607') &&
+    !currentSrc.includes('localhost') &&
+    !currentSrc.includes('127.0.0.1')
+  ) {
+    target.src = `/api/proxy-image?url=${encodeURIComponent(currentSrc)}`;
+    return;
+  }
+
+  // 2. If proxy or first attempt was remote image, try fallbackUrl
+  if (currentSrc !== fallbackUrl && !currentSrc.includes('photo-1581092160607')) {
     target.src = fallbackUrl;
+  } else {
+    // 3. If fallbackUrl also fails (e.g. offline mode or network restriction), use local SVG vector
+    target.src = FALLBACK_SVG_PRODUCT;
   }
 }
 
